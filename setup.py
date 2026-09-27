@@ -15,6 +15,7 @@ setup(
     package_data={
         'zycoin': [
             'wordlist/*.txt'
+            'clients'
         ]
     },
     python_requires=">=3.10",
