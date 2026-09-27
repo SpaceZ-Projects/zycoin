@@ -23,7 +23,7 @@ pip install zycoin
 
 ```python
 import asyncio
-from src.manager import ClientManager
+from zycoin.manager import ClientManager
 
 async def on_status(status):
     print("status:", status)
@@ -51,8 +51,8 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from src.constants import BitcoinZ
-from src.clients import ElectrumClient
+from zycoin.constants import BitcoinZ
+from zycoin.clients import ElectrumClient
 
 async def main():
     client = ElectrumClient(BitcoinZ, protocol="ssl")
@@ -70,8 +70,8 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from src.constants import BitcoinZ
-from src.clients import BitcoreClient
+from zycoin.constants import BitcoinZ
+from zycoin.clients import BitcoreClient
 
 async def main():
     client = BitcoreClient(BitcoinZ)
@@ -88,7 +88,7 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from src.manager import ClientManager
+from zycoin.manager import ClientManager
 
 async def main():
     manager = ClientManager()
