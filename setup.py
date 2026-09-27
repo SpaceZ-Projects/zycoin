@@ -14,8 +14,8 @@ setup(
     package_dir={"zycoin": "src"},
     package_data={
         'zycoin': [
-            'wordlist/*.txt'
-            'clients'
+            'wordlist/*.txt',
+            'clients/*.py'
         ]
     },
     python_requires=">=3.10",
