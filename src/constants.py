@@ -124,11 +124,37 @@ class Flux(Coin):
 
 
 
+class ZeroClassic(Coin):
+
+    NAME = "ZeroClassic"
+    SYMBOL = "ZERC"
+
+    WIF_PREFIX = 0x80
+    ADDRTYPE_P2PKH = bytes.fromhex('1CB8')
+    ADDRTYPE_P2SH = bytes.fromhex('1CBD')
+    DEFAULT_PORTS = {'t': '50001', 's': '50002', 'w': '50004'}
+    
+    SERVERS = []
+
+    BITCORE_API = "https://insight.zeroclassic.org/"
+
+    XPRV_HEADERS = {
+        'standard':    0x0488ade4,
+    }
+    XPUB_HEADERS = {
+        'standard':    0x0488b21e,
+    }
+
+    BRANCH_ID = 0xffffffff
+
+
+
 COINS = {
     BitcoinZ.SYMBOL.lower(): BitcoinZ,
-    ZeroCurrency.SYMBOL.lower(): ZeroCurrency,
+    Flux.SYMBOL.lower(): Flux,
     Zclassic.SYMBOL.lower(): Zclassic,
-    Flux.SYMBOL.lower(): Flux
+    ZeroClassic.SYMBOL.lower(): ZeroClassic,
+    ZeroCurrency.SYMBOL.lower(): ZeroCurrency,
 }
 
 net = BitcoinZ
