@@ -14,14 +14,19 @@ except ModuleNotFoundError:
 
 class BitcoreClient:
     def __init__(self, coin, timeout=10):
+
         self.coin = coin
         self.url = coin.BITCORE_API.rstrip("/") if coin.BITCORE_API else None
         self.timeout = timeout
         self.session = None
         self.ws = None
-        self.on_notification = None
+
+        self.on_block_events = None
+        self.on_address_events = None
         self.on_status = None
+
         self._subscribed_addresses = set()
+        self._packet_id = 0
 
         self._loop = asyncio.get_running_loop()
         self._connected = asyncio.Event()
@@ -132,16 +137,6 @@ class BitcoreClient:
                     pass
                 return
 
-            if message == "40":
-                try:
-                    self.ws.send('420["subscribe","sync"]')
-                    self.ws.send('421["subscribe","inv"]')
-                    self.ws.send('424["subscribe","sync"]')
-                    self.ws.send('425["subscribe","inv"]')
-                except Exception:
-                    pass
-                return
-
             if message.startswith("42"):
                 self._loop.create_task(self._handle_message(message))
 
@@ -193,13 +188,6 @@ class BitcoreClient:
 
                 if message.startswith("0"):
                     await self.ws.send("40")
-                    continue
-
-                if message == "40":
-                    await self.ws.send('420["subscribe","sync"]')
-                    await self.ws.send('421["subscribe","inv"]')
-                    await self.ws.send('424["subscribe","sync"]')
-                    await self.ws.send('425["subscribe","inv"]')
                     continue
 
                 if message.startswith("42"):
@@ -356,20 +344,6 @@ class BitcoreClient:
             await self.ping()
 
 
-    def _tx_matches_address(self, tx, address):
-        if not isinstance(tx, dict):
-            return False
-
-        for vout in tx.get("vout", []):
-            if not isinstance(vout, dict):
-                continue
-
-            for vout_address,_ in vout.items():
-                if isinstance(vout_address, str) and vout_address == address:
-                    return True
-
-        return False
-
     async def _handle_message(self, message):
         try:
             event = json.loads(message[2:])
@@ -377,41 +351,67 @@ class BitcoreClient:
 
             if event_name == "block":
                 blockhash = event[1] if len(event) > 1 else {}
-                if self.on_notification:
+                if self.on_block_events:
                     data = {"block":{"hash":blockhash}}
                     try:
-                        await self.on_notification(data)
+                        await self.on_block_events(data)
                     except Exception as exc:
                         print(f"Bitcore block callback error: {exc}")
 
-            elif event_name == "tx":
-                tx = event[1] if len(event) > 1 else {}
-                for address in self._subscribed_addresses:
-                    if self._tx_matches_address(tx, address):
-                        data = {"tx": {"address":address,"txid":tx["txid"]}}
-                        if self.on_notification:
-                            try:
-                                await self.on_notification(data)
-                            except Exception as exc:
-                                print(f"Bitcore tx callback error: {exc}")
-                        return
+            elif event_name == "bitcoind/addresstxid":
+                address = event[1] if len(event) > 1 else {}
+                if self.on_address_events:
+                    data = {"tx": address}
+                    try:
+                        await self.on_address_events(data)
+                    except Exception as exc:
+                        print(f"Bitcore tx callback error: {exc}")
 
         except (TypeError, IndexError, json.JSONDecodeError) as e:
             print("EVENT PARSE ERROR:", e)
 
+
+    def _socketio_packet(self, event, *args):
+        packet_id = self._packet_id
+        self._packet_id += 1
+
+        return f"42{packet_id}" + json.dumps([event, *args], separators=(",", ":"))
+    
+
     async def subscribe_headers(self):
         await self.ensure_connected()
-        await self.ws.send('422["subscribe","sync"]')
-        await self.ws.send('423["subscribe","inv"]')
-
+        for event in ("sync", "inv"):
+            message = self._socketio_packet("subscribe", event)
+            if is_web:
+                self.ws.send(message)
+            else:
+                await self.ws.send(message)
+            
     async def unsubscribe_headers(self):
-        raise NotImplementedError("Bitcore does not support subscriptions")
+        for event in ("sync", "inv"):
+            message = self._socketio_packet("unsubscribe", event)
+            if is_web:
+                self.ws.send(message)
+            else:
+                await self.ws.send(message)
 
     async def subscribe_address(self, address):
         self._subscribed_addresses.add(address)
+        event = "bitcoind/addresstxid"
+        message = self._socketio_packet("subscribe", event, [address])
+        if is_web:
+            self.ws.send(message)
+        else:
+            await self.ws.send(message)
 
     async def unsubscribe_address(self, address):
-        self._subscribed_addresses.discard(address)        
+        self._subscribed_addresses.discard(address)
+        event = "bitcoind/addresstxid"
+        message = self._socketio_packet("unsubscribe", event, [address])
+        if is_web:
+            self.ws.send(message)
+        else:
+            await self.ws.send(message)        
             
     async def get_balance(self, address):
         addr = await self.get(f"api/addr/{address}")
