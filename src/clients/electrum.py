@@ -30,7 +30,8 @@ class ElectrumClient:
         self._id = 0
         self._pending = {}
 
-        self.on_notification = None
+        self.on_block_events = None
+        self.on_address_events = None
         self.on_status = None
         self._subscribed_addresses = {}
 
@@ -257,11 +258,13 @@ class ElectrumClient:
                     else:
                         fut.set_result(msg.get("result"))
             else:
-                if self.on_notification:
-                    if msg.get("method") == "blockchain.headers.subscribe":
+                if msg.get("method") == "blockchain.headers.subscribe":
+                    if self.on_block_events:
                         header_hex = msg["params"][0]["hex"]
                         self._loop.create_task(self._fetch_block(header_hex))
-                    elif msg.get("method") == "blockchain.scripthash.subscribe":
+
+                elif msg.get("method") == "blockchain.scripthash.subscribe":
+                    if self.on_address_events:
                         scripthash = msg["params"][0]
                         address = self._subscribed_addresses.get(scripthash)
                         if address:
@@ -275,7 +278,7 @@ class ElectrumClient:
         header = bytes.fromhex(header_hex)
         blockhash = hashlib.sha256(hashlib.sha256(header).digest()).digest()[::-1].hex()
         data = {"block":{"hash":blockhash}}
-        await self.on_notification(data)
+        await self.on_block_events(data)
 
 
     async def _fetch_txs(self, address):
@@ -283,7 +286,7 @@ class ElectrumClient:
         txids = {tx["tx_hash"]: tx for tx in mempool}
         for txid in txids:
             data = {"tx":{"address":address,"txid":txid}}
-            await self.on_notification(data)
+            await self.on_address_events(data)
 
 
     async def send(self, method, params=None):

@@ -9,8 +9,9 @@ class ClientManager:
     def __init__(self):
         self.clients = {}
 
+        self.on_block_events = None
+        self.on_address_events = None
         self.on_status = None
-        self.on_notification = None
 
         self.ks = None
 
@@ -39,7 +40,11 @@ class ClientManager:
             self._on_status(coin, status)
         )
 
-        client.on_notification = lambda data, coin=key: (
+        client.on_block_events = lambda data, coin=key: (
+            self._on_notification(coin, data)
+        )
+
+        client.on_address_events = lambda data, coin=key: (
             self._on_notification(coin, data)
         )
 
@@ -53,12 +58,15 @@ class ClientManager:
             await self.on_status(data)
 
     async def _on_notification(self, coin, data):
-        if self.on_notification:
-            if "block" in data:
-                data["block"]["coin"] = coin
-            elif "tx" in data:
-                data["tx"]["coin"] = coin
-            await self.on_notification(data)
+        if "block" in data:
+            data["block"]["coin"] = coin
+            if self.on_block_events:
+                await self.on_block_events(data)
+
+        elif "tx" in data:
+            data["tx"]["coin"] = coin
+            if self.on_address_events:
+                await self.on_address_events(data)
 
     def get(self, coin):
         key = coin.strip().lower()
