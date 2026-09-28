@@ -34,7 +34,8 @@ async def on_notification(message):
 async def main():
     manager = ClientManager()
     manager.on_status = on_status
-    manager.on_notification = on_notification
+    manager.on_block_events = on_notification
+    
 
     client = manager.add("btcz", "bitcore")
     await manager.connect("btcz")
@@ -110,9 +111,10 @@ asyncio.run(main())
 The following coin definitions are included:
 
 - `btcz` — BitcoinZ
-- `zer` — Zero
-- `zcl` — Zclassic
 - `flux` — Flux
+- `zcl` — Zclassic
+- `zer` — Zero
+- `zerc` — ZeroClassic
 
 ## Notes
 
