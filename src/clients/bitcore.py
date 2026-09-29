@@ -16,6 +16,7 @@ class BitcoreClient:
     def __init__(self, coin, timeout=10):
 
         self.coin = coin
+        self.height = 0
         self.url = coin.BITCORE_API.rstrip("/") if coin.BITCORE_API else None
         self.timeout = timeout
         self.session = None
@@ -367,6 +368,12 @@ class BitcoreClient:
                     except Exception as exc:
                         print(f"Bitcore tx callback error: {exc}")
 
+            elif event_name == "info":
+                data = event[1] if len(event) > 1 else {}
+                info = data.get("info", {})
+                blocks = info.get("blocks", 0)
+                self.height = blocks
+
         except (TypeError, IndexError, json.JSONDecodeError) as e:
             print("EVENT PARSE ERROR:", e)
 
@@ -386,6 +393,11 @@ class BitcoreClient:
                 self.ws.send(message)
             else:
                 await self.ws.send(message)
+
+            data = await self.get(f"api/status")
+            info = data.get("info", {})
+            blocks = info.get("blocks", 0)
+            self.height = blocks
             
     async def unsubscribe_headers(self):
         for event in ("sync", "inv"):

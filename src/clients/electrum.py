@@ -19,6 +19,7 @@ class ElectrumClient:
     def __init__(self, coin, protocol=None):
 
         self.coin = coin
+        self.height = 0
         self.protocol = protocol
         self.url = None
 
@@ -260,6 +261,7 @@ class ElectrumClient:
             else:
                 if msg.get("method") == "blockchain.headers.subscribe":
                     if self.on_block_events:
+                        self.height = msg["params"][0]["height"]
                         header_hex = msg["params"][0]["hex"]
                         self._loop.create_task(self._fetch_block(header_hex))
 
@@ -333,7 +335,9 @@ class ElectrumClient:
 
 
     async def subscribe_headers(self):
-        return await self.send("blockchain.headers.subscribe")
+        subscribe = await self.send("blockchain.headers.subscribe")
+        self.height = subscribe["height"]
+        return subscribe
 
     async def unsubscribe_headers(self):
         return await self.send("blockchain.headers.unsubscribe")
