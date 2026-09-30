@@ -4,7 +4,7 @@ README = Path(__file__).resolve().parent / "README.md"
 
 setup(
     name="zycoin",
-    version="1.0.4",
+    version="1.0.5",
     description="Python client library for BitcoinZ and related Zcoin-family blockchain networks using Electrum and Bitcore APIs.",
     long_description=README.read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
@@ -32,7 +32,9 @@ setup(
         "electrum",
         "blockchain",
         "zcash",
-        "zycoin"
+        "zycoin",
+        "bitcore",
+        "zclassic"
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
