@@ -71,7 +71,7 @@ class ZeroCurrency(Coin):
         'standard':    0x0488b21e,
     }
 
-    BRANCH_ID = 0x7361707a
+    BRANCH_ID = 0x2bb40e60
 
 
 
