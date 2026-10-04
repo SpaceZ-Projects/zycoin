@@ -524,21 +524,6 @@ class BitcoreClient:
         """Backward-compatible wrapper for UTXO normalization."""
         return self._normalize_utxos(utxos)
 
-    @staticmethod
-    def _transaction_involves_address(transaction: Dict[str, Any], address: str) -> bool:
-        """Check whether an address appears in a transaction input or output."""
-        for input_data in transaction.get("vin", []):
-            if address in input_data.get("addresses", []):
-                return True
-    
-        for output_data in transaction.get("vout", []):
-            script_pub_key = output_data.get("scriptPubKey", {})
-    
-            if address in script_pub_key.get("addresses", []):
-                return True
-    
-        return False
-
     async def get_balance(self, address: str) -> Dict[str, int]:
         """Return confirmed and unconfirmed balance for an address."""
         data = await self.get(f"api/addr/{address}")
@@ -583,6 +568,20 @@ class BitcoreClient:
         except Exception:
             return []
 
+    @staticmethod
+    def _transaction_involves_address(transaction: Dict[str, Any], address: str) -> bool:
+        """Check whether an address appears in a transaction input or output."""
+        for input_data in transaction.get("vin", []):
+            if address in input_data.get("addresses", []):
+                return True
+
+        for output_data in transaction.get("vout", []):
+            script_pub_key = output_data.get("scriptPubKey", {})
+
+            if address in script_pub_key.get("addresses", []):
+                return True
+
+        return False
 
     async def get_transaction(self, txid: str, verbose: bool = True) -> Dict[str, Any]:
         """Return a transaction by transaction ID."""
@@ -590,10 +589,14 @@ class BitcoreClient:
 
     async def broadcast(self, tx_hex: str) -> Any:
         """Broadcast a signed raw transaction through the Bitcore API."""
-        return await self.post(
-            "api/tx/send",
-            {"rawtx": tx_hex},
-        )
+        try:
+            result = await self.post(
+                "api/tx/send",
+                {"rawtx": tx_hex}
+            )
+            return result.get("txid")
+        except Exception:
+            return None
 
     # Unsupported Electrum-style methods
 
