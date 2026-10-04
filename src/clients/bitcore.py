@@ -524,6 +524,21 @@ class BitcoreClient:
         """Backward-compatible wrapper for UTXO normalization."""
         return self._normalize_utxos(utxos)
 
+    @staticmethod
+    def _transaction_involves_address(transaction: Dict[str, Any], address: str) -> bool:
+        """Check whether an address appears in a transaction input or output."""
+        for input_data in transaction.get("vin", []):
+            if address in input_data.get("addresses", []):
+                return True
+    
+        for output_data in transaction.get("vout", []):
+            script_pub_key = output_data.get("scriptPubKey", {})
+    
+            if address in script_pub_key.get("addresses", []):
+                return True
+    
+        return False
+
     async def get_balance(self, address: str) -> Dict[str, int]:
         """Return confirmed and unconfirmed balance for an address."""
         data = await self.get(f"api/addr/{address}")
@@ -534,13 +549,20 @@ class BitcoreClient:
         }
 
     async def get_history(self, address: str, limit: Optional[int] = 10) -> List[Dict[str, Any]]:
-        """Return transaction history for an address."""
-        endpoint = f"api/addr/{address}/txs"
+        try:
+            """Return transaction history for an address."""
+            endpoint = f"api/txs?address={address}"
+            if limit is not None:
+                endpoint += f"&limit={limit}"
 
-        if limit is not None:
-            endpoint += f"?limit={limit}"
-
-        return await self.get(endpoint)
+            result = await self.get(endpoint)
+            txs = result.get("txs", {})
+            return [
+                {"tx_hash": tx.get("txid"), "height": tx.get("blockheight")}
+                for tx in txs
+            ]
+        except Exception:
+            return []
 
     async def get_listunspent(self, address: str) -> List[Dict[str, Any]]:
         """Return normalized unspent transaction outputs for an address."""
@@ -548,30 +570,19 @@ class BitcoreClient:
         return self._normalize_utxos(utxos)
 
     async def get_mempool(self, address: str) -> List[Dict[str, Any]]:
-        """Return mempool transactions that involve the given address."""
-        mempool = await self.get("api/mempool")
-        related_transactions: List[Dict[str, Any]] = []
+        try:
+            """Return mempool transactions that involve the given address."""
+            mempool = await self.get("api/mempool")
+            related_transactions: List[Dict[str, Any]] = []
 
-        for transaction in mempool or []:
-            if self._transaction_involves_address(transaction, address):
-                related_transactions.append(transaction)
+            for transaction in mempool or []:
+                if self._transaction_involves_address(transaction, address):
+                    related_transactions.append(transaction)
 
-        return related_transactions
+            return related_transactions
+        except Exception:
+            return []
 
-    @staticmethod
-    def _transaction_involves_address(transaction: Dict[str, Any], address: str) -> bool:
-        """Check whether an address appears in a transaction input or output."""
-        for input_data in transaction.get("vin", []):
-            if address in input_data.get("addresses", []):
-                return True
-
-        for output_data in transaction.get("vout", []):
-            script_pub_key = output_data.get("scriptPubKey", {})
-
-            if address in script_pub_key.get("addresses", []):
-                return True
-
-        return False
 
     async def get_transaction(self, txid: str, verbose: bool = True) -> Dict[str, Any]:
         """Return a transaction by transaction ID."""
