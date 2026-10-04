@@ -28,7 +28,8 @@ class ElectrumClient:
         self.coin = coin
         self.height: int = 0
         self.protocol: str = protocol or ("wss" if IS_WEB else "ssl")
-        self.url: Optional[Union[str, Tuple[str, int]]] = None
+        self.base_url: Optional[Union[str, Tuple[str, int]]] = None
+        self.url: Optional[str] = coin.BITCORE_API.rstrip("/") if coin.BITCORE_API else None
 
         # Transport handles
         self.ws: Optional[Any] = None
@@ -124,7 +125,7 @@ class ElectrumClient:
         self._connected.clear()
         
         try:
-            self.url = await self._select_fastest_server()
+            self.base_url = await self._select_fastest_server()
             if self.on_status:
                 await self.on_status("connecting")
 
@@ -149,7 +150,7 @@ class ElectrumClient:
 
     async def _connect_websocket(self) -> None:
         """Establishes and configures a WebSocket connection for browser-based environments."""
-        self.ws = WebSocket.new(self.url)
+        self.ws = WebSocket.new(self.base_url)
         future: asyncio.Future = self._loop.create_future()
 
         async def on_open(_: Any) -> None:
@@ -182,7 +183,7 @@ class ElectrumClient:
     async def _connect_tcp(self) -> None:
         """Establishes a TCP or SSL connection socket."""
         try:
-            host, port = self.url  # type: ignore
+            host, port = self.base_url  # type: ignore
             ssl_ctx = ssl.create_default_context() if self.protocol == "ssl" else None
             self.reader, self.writer = await asyncio.open_connection(host, port, ssl=ssl_ctx)
             
