@@ -411,8 +411,11 @@ class BitcoreClient:
             elif event_name == "bitcoind/addresstxid":
                 await self._handle_address_event(event_data)
 
-            elif event_name == "info":
-                self._update_height_from_info(event_data)
+            #Not all Bitcore API implementations send info events, so avoid relying
+            #on them exclusively for chain height updates.
+
+            #elif event_name == "info":
+                #self._update_height_from_info(event_data)    
 
         except (TypeError, IndexError, json.JSONDecodeError) as exc:
             print(f"Bitcore Socket.IO event parse error: {exc}")
@@ -422,6 +425,8 @@ class BitcoreClient:
         if self.on_block_events is None:
             return
 
+        status = await self.get("api/status")
+        self._update_height_from_info(status)
         try:
             await self.on_block_events({
                 "block": {
