@@ -109,7 +109,10 @@ class Flux(Coin):
     ADDRTYPE_P2SH = bytes.fromhex('1CBD')
     DEFAULT_PORTS = {'t': '50001', 's': '50002', 'w': '50004'}
     
-    SERVERS = []
+    SERVERS = [
+        "electrumx.runonflux.io",
+        "electrumx2.runonflux.io"
+    ]
 
     BITCORE_API = "https://explorer.runonflux.io/"
 
