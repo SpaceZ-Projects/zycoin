@@ -2,11 +2,12 @@
 import asyncio
 import json
 from typing import Any, Callable, Dict, List, Optional, Set
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 IS_WEB = False
 
 try:
-    from js import JSON, Object, WebSocket, fetch
+    from js import JSON, Object, Uint8Array, WebSocket, fetch
 
     IS_WEB = True
 except ModuleNotFoundError:
@@ -20,6 +21,7 @@ class BitcoreClient:
     The client supports both:
     - Pyodide/browser environments through the JavaScript Fetch/WebSocket APIs.
     - Native Python through aiohttp and websockets.
+    - Engine.IO polling as a fallback, or as an explicitly selected transport.
 
     Socket.IO here intentionally uses the Engine.IO v3 / Socket.IO packet format
     expected by the Bitcore-compatible explorer endpoint.
@@ -32,15 +34,29 @@ class BitcoreClient:
     ENGINEIO_PONG = "3"
     SOCKETIO_CONNECT = "40"
 
-    def __init__(self, coin: Any, timeout: int = 10) -> None:
+    def __init__(
+        self,
+        coin: Any,
+        timeout: int = 10,
+        transport: str = "auto",
+    ) -> None:
+        if transport not in ("auto", "websocket", "polling"):
+            raise ValueError(
+                "transport must be 'auto', 'websocket', or 'polling'"
+            )
+
         self.coin: Any = coin
         self.height: int = 0
         self.base_url: Optional[str] = coin.BITCORE_API.rstrip("/") if coin.BITCORE_API else None
         self.url: Optional[str] = self.base_url  # Backward-compatible public attribute.
         self.timeout: int = timeout
+        self.transport: str = transport
+        self._active_transport: Optional[str] = None
+        self._polling_sid: Optional[str] = None
 
         # HTTP/WebSocket resources.
         self.session: Any = fetch if IS_WEB else None
+        self._polling_session: Any = None
         self.ws: Any = None
 
         # Event callbacks.
@@ -50,11 +66,13 @@ class BitcoreClient:
 
         # Socket.IO state.
         self._subscribed_addresses: Set[str] = set()
+        self._headers_subscribed: bool = False
         self._packet_id: int = 0
 
         # Connection lifecycle state.
         self._loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
         self._connected: asyncio.Event = asyncio.Event()
+        self._connect_lock: asyncio.Lock = asyncio.Lock()
         self._connecting: bool = False
         self._reader_task: Optional[asyncio.Task[Any]] = None
         self._keepalive_task: Optional[asyncio.Task[Any]] = None
@@ -83,8 +101,7 @@ class BitcoreClient:
         if not self.base_url:
             raise RuntimeError("Bitcore API URL is not configured")
 
-        endpoint = endpoint.lstrip("/")
-        url = f"{self.base_url}/{endpoint}"
+        url = self._build_api_url(endpoint)
         session = self._get_http_session()
 
         if IS_WEB:
@@ -140,39 +157,104 @@ class BitcoreClient:
         """Perform a POST request."""
         return await self._request("POST", endpoint, data)
 
-    # WebSocket / Socket.IO connection
+    def _build_api_url(self, endpoint: str) -> str:
+        """Join an API route to its configured mount without duplicating segments."""
+        if not self.base_url:
+            raise RuntimeError("Bitcore API URL is not configured")
 
-    def _build_websocket_url(self) -> Optional[str]:
-        """Convert the Bitcore HTTP API URL into its Socket.IO WebSocket URL."""
+        base = urlsplit(self.base_url)
+        route = urlsplit(endpoint.lstrip("/"))
+        base_segments = [part for part in base.path.split("/") if part]
+        route_segments = [part for part in route.path.split("/") if part]
+
+        if (
+            route_segments
+            and route_segments[0] == "api"
+            and base_segments
+            and "api" in base_segments[-1].lower()
+        ):
+            route_segments = route_segments[1:]
+
+        overlap = 0
+        for length in range(
+            min(len(base_segments), len(route_segments)),
+            0,
+            -1,
+        ):
+            if base_segments[-length:] == route_segments[:length]:
+                overlap = length
+                break
+
+        path = "/" + "/".join(
+            base_segments + route_segments[overlap:]
+        )
+        return urlunsplit((
+            base.scheme,
+            base.netloc,
+            path,
+            route.query,
+            "",
+        ))
+
+    def _build_socketio_url(self, transport: str, sid: Optional[str] = None) -> Optional[str]:
+        """Build a Socket.IO URL independently of the REST API mount path."""
         if not self.base_url:
             return None
 
-        if self.base_url.startswith("https://"):
-            return "wss://" + self.base_url[8:] + self.SOCKETIO_PATH
+        base = urlsplit(self.base_url)
+        if base.scheme not in ("http", "https"):
+            return None
 
-        if self.base_url.startswith("http://"):
-            return "ws://" + self.base_url[7:] + self.SOCKETIO_PATH
+        socket_path = getattr(
+            self.coin,
+            "BITCORE_SOCKET_PATH",
+            urlsplit(self.SOCKETIO_PATH).path,
+        )
+        socket_path = "/" + socket_path.lstrip("/")
+        params = {
+            "EIO": "3",
+            "transport": transport,
+        }
+        if sid:
+            params["sid"] = sid
 
-        return None
+        scheme = "wss" if base.scheme == "https" else "ws"
+        return urlunsplit((
+            scheme,
+            base.netloc,
+            socket_path,
+            urlencode(params),
+            "",
+        ))
+
+    # WebSocket / Socket.IO connection
+
+    def _build_websocket_url(self) -> Optional[str]:
+        """Convert the configured API origin into its Socket.IO WebSocket URL."""
+        return self._build_socketio_url("websocket")
+
+    def _build_polling_url(self, sid: Optional[str] = None) -> Optional[str]:
+        """Build an Engine.IO v3 polling URL independently of the API mount."""
+        return self._build_socketio_url("polling", sid)
 
     async def ensure_connected(self) -> None:
         """Ensure that the Socket.IO connection is established."""
         if self._connected.is_set():
             return
 
-        if not self._connecting:
-            self._loop.create_task(self.connect())
-
-        await self._connected.wait()
+        await self.connect()
 
     async def connect(self) -> None:
-        """Open the Socket.IO WebSocket connection if it is not already open."""
-        if self._connecting or self._connected.is_set():
-            return
+        """Serialize connection attempts and establish the configured transport."""
+        async with self._connect_lock:
+            if self._connected.is_set():
+                return
+            await self._connect()
 
-        websocket_url = self._build_websocket_url()
-        if not websocket_url:
-            raise RuntimeError("Bitcore WebSocket URL is not configured")
+    async def _connect(self) -> None:
+        """Connect using WebSocket, falling back to Engine.IO polling if needed."""
+        if self._connecting:
+            return
 
         self._connecting = True
         self._connected.clear()
@@ -180,18 +262,280 @@ class BitcoreClient:
         try:
             await self._notify_status("connecting")
 
-            if IS_WEB:
-                await self._connect_browser(websocket_url)
-            else:
-                await self._connect_native(websocket_url)
+            if self.transport != "polling":
+                websocket_url = self._build_websocket_url()
+                if not websocket_url:
+                    raise RuntimeError("Bitcore WebSocket URL is not configured")
 
-        except Exception as exc:
+                try:
+                    if IS_WEB:
+                        await self._connect_browser(websocket_url)
+                    else:
+                        await self._connect_native(websocket_url)
+                    self._active_transport = "websocket"
+                    return
+                except Exception as exc:
+                    await self._close_websocket()
+                    if self.transport == "websocket":
+                        raise
+                    print(
+                        "Bitcore WebSocket connection failed; "
+                        f"trying polling: {exc}"
+                    )
+
+            await self._connect_polling()
+
+        except Exception:
             self._connected.clear()
             await self._notify_status("disconnected")
-            print(f"Bitcore WebSocket connection error: {exc}")
+            raise
 
         finally:
             self._connecting = False
+
+    async def _close_websocket(self) -> None:
+        """Close a partially established WebSocket before trying polling."""
+        if self.ws is None:
+            return
+
+        try:
+            if IS_WEB:
+                self.ws.close()
+            else:
+                await self.ws.close()
+        except Exception:
+            pass
+        finally:
+            self.ws = None
+
+    def _get_polling_session(self) -> Any:
+        """Return an HTTP session that permits Engine.IO long-poll requests."""
+        if IS_WEB:
+            return self.session
+
+        if self._polling_session is None or self._polling_session.closed:
+            self._polling_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=None),
+                headers={
+                    "User-Agent": "BitcoreClient/1.0",
+                },
+            )
+
+        return self._polling_session
+
+    async def _polling_request(
+        self,
+        method: str,
+        sid: Optional[str] = None,
+        packet: Optional[str] = None,
+    ) -> bytes:
+        """Perform one Engine.IO polling GET or POST request."""
+        url = self._build_polling_url(sid)
+        if not url:
+            raise RuntimeError("Bitcore polling URL is not configured")
+
+        session = self._get_polling_session()
+        if IS_WEB:
+            entries = [
+                ["method", method],
+                ["headers", Object.fromEntries([
+                    ["Content-Type", "text/plain; charset=UTF-8"],
+                ])],
+            ]
+            if method == "POST":
+                if packet is None:
+                    raise ValueError("Polling POST requires a packet")
+                body = packet.encode("utf-8")
+                entries.append(["body", f"{len(body)}:{packet}"])
+
+            response = await session(url, Object.fromEntries(entries))
+            if not response.ok:
+                body = await response.text()
+                raise RuntimeError(
+                    f"Polling {method} failed: HTTP {response.status}: {body}"
+                )
+
+            array_buffer = await response.arrayBuffer()
+            return bytes(Uint8Array.new(array_buffer).to_py())
+
+        headers = None
+        request_data = None
+        if method == "POST":
+            if packet is None:
+                raise ValueError("Polling POST requires a packet")
+            encoded_packet = packet.encode("utf-8")
+            request_data = (
+                f"{len(encoded_packet)}:{packet}".encode("utf-8")
+            )
+            headers = {
+                "Content-Type": "text/plain; charset=UTF-8",
+            }
+
+        async with session.request(
+            method,
+            url,
+            data=request_data,
+            headers=headers,
+        ) as response:
+            body = await response.read()
+            if response.status != 200:
+                raise RuntimeError(
+                    f"Polling {method} failed: HTTP "
+                    f"{response.status}: {body!r}"
+                )
+            return body
+
+    @staticmethod
+    def _decode_polling_payload(body: bytes) -> List[str]:
+        """Decode Engine.IO v3 text or binary polling payloads."""
+        packets: List[str] = []
+        offset = 0
+
+        if not body:
+            return packets
+
+        if body[0] == 0:
+            while offset < len(body):
+                if body[offset] != 0:
+                    raise ValueError(
+                        f"Invalid binary payload marker: {body[offset]:02x}"
+                    )
+
+                offset += 1
+                digits = bytearray()
+                while offset < len(body) and body[offset] != 0xFF:
+                    digit = body[offset]
+                    if digit > 9:
+                        raise ValueError(
+                            f"Invalid binary payload length digit: {digit}"
+                        )
+                    digits.append(ord("0") + digit)
+                    offset += 1
+
+                if offset >= len(body):
+                    raise ValueError("Incomplete binary polling payload")
+                if not digits:
+                    raise ValueError("Missing binary packet length")
+
+                offset += 1
+                length = int(digits.decode("ascii"))
+                end = offset + length
+                if end > len(body):
+                    raise ValueError("Incomplete binary polling packet")
+
+                packets.append(body[offset:end].decode("utf-8"))
+                offset = end
+
+            return packets
+
+        while offset < len(body):
+            colon = body.find(b":", offset)
+            if colon == -1:
+                raise ValueError("Invalid text polling payload")
+
+            length_text = body[offset:colon]
+            if not length_text or not length_text.isdigit():
+                raise ValueError("Invalid text polling packet length")
+
+            length = int(length_text)
+            offset = colon + 1
+            end = offset + length
+            if end > len(body):
+                raise ValueError("Incomplete text polling packet")
+
+            packets.append(body[offset:end].decode("utf-8"))
+            offset = end
+
+        return packets
+
+    async def _connect_polling(self) -> None:
+        """Establish Engine.IO and Socket.IO over HTTP long polling."""
+        await self._establish_polling_session()
+        self._connected.set()
+        await self._notify_status("connected")
+        self._reader_task = self._loop.create_task(self._read_polling())
+
+    async def _establish_polling_session(self) -> None:
+        """Create a fresh polling SID and restore Socket.IO subscriptions."""
+        self._polling_sid = None
+        packets = self._decode_polling_payload(
+            await self._polling_request("GET")
+        )
+        if not packets or not packets[0].startswith(self.ENGINEIO_OPEN_PREFIX):
+            raise RuntimeError(
+                f"Expected Engine.IO open packet, got: {packets!r}"
+            )
+
+        handshake = json.loads(packets[0][1:])
+        sid = handshake.get("sid")
+        if not sid:
+            raise RuntimeError("Engine.IO polling handshake did not include a sid")
+
+        self._polling_sid = str(sid)
+        self._active_transport = "polling"
+        await self._polling_request(
+            "POST",
+            self._polling_sid,
+            self.SOCKETIO_CONNECT,
+        )
+
+        if self._headers_subscribed:
+            await self._send_header_subscriptions()
+
+        for address in self._subscribed_addresses:
+            packet = self._create_socketio_packet(
+                "subscribe",
+                "bitcoind/addresstxid",
+                [address],
+            )
+            await self._send_socket_message(packet)
+
+    async def _read_polling(self) -> None:
+        """Read and dispatch packets from the Engine.IO polling transport."""
+        try:
+            while self._connected.is_set():
+                if self._polling_sid is None:
+                    try:
+                        await self._establish_polling_session()
+                        await self._notify_status("connected")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        print(
+                            "Bitcore polling reconnect error: "
+                            f"{exc}"
+                        )
+                        await asyncio.sleep(2)
+                    continue
+
+                try:
+                    body = await self._polling_request(
+                        "GET",
+                        self._polling_sid,
+                    )
+                    for message in self._decode_polling_payload(body):
+                        if message == self.ENGINEIO_PING:
+                            await self._send_socket_message(self.ENGINEIO_PONG)
+                        elif message.startswith(self.SOCKETIO_EVENT_PREFIX):
+                            await self._handle_socketio_event(message)
+                        elif message == "1":
+                            raise ConnectionError(
+                                "Engine.IO polling session was closed"
+                            )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    await self._notify_status("reconnecting")
+                    self._polling_sid = None
+                    await asyncio.sleep(2)
+
+        except asyncio.CancelledError:
+            raise
+
+        finally:
+            self._connected.clear()
+            self._polling_sid = None
+            await self._notify_status("disconnected")
 
     async def _connect_browser(self, websocket_url: str) -> None:
         """Connect using the browser WebSocket API exposed by Pyodide."""
@@ -228,7 +572,7 @@ class BitcoreClient:
         websocket.onclose = handle_close
         websocket.onerror = handle_error
 
-        await connection_future
+        await asyncio.wait_for(connection_future, timeout=self.timeout)
 
     async def _connect_native(self, websocket_url: str) -> None:
         """Connect using the native Python websockets package."""
@@ -304,20 +648,13 @@ class BitcoreClient:
         """Stop background tasks and close all client resources."""
         self._connected.clear()
         self._subscribed_addresses.clear()
+        self._headers_subscribed = False
+        self._polling_sid = None
 
         await self._cancel_task("_reader_task")
         await self._cancel_task("_keepalive_task")
 
-        if self.ws is not None:
-            try:
-                if IS_WEB:
-                    self.ws.close()
-                else:
-                    await self.ws.close()
-            except Exception:
-                pass
-
-        self.ws = None
+        await self._close_websocket()
 
         if not IS_WEB and self.session is not None and not self.session.closed:
             try:
@@ -325,7 +662,19 @@ class BitcoreClient:
             except Exception:
                 pass
 
+        if (
+            not IS_WEB
+            and self._polling_session is not None
+            and not self._polling_session.closed
+        ):
+            try:
+                await self._polling_session.close()
+            except Exception:
+                pass
+
         self.session = fetch if IS_WEB else None
+        self._polling_session = None
+        self._active_transport = None
 
     async def _cancel_task(self, attribute_name: str) -> None:
         """Cancel and await a background task stored on the client."""
@@ -379,7 +728,17 @@ class BitcoreClient:
         return f"{self.SOCKETIO_EVENT_PREFIX}{packet_id}{payload}"
 
     async def _send_socket_message(self, message: str) -> None:
-        """Send a raw WebSocket message in either supported environment."""
+        """Send a Socket.IO packet using the active transport."""
+        if self._active_transport == "polling":
+            if self._polling_sid is None:
+                raise ConnectionError("Bitcore polling transport is not connected")
+            await self._polling_request(
+                "POST",
+                self._polling_sid,
+                message,
+            )
+            return
+
         if self.ws is None:
             raise ConnectionError("Bitcore WebSocket is not connected")
 
@@ -425,7 +784,7 @@ class BitcoreClient:
         if self.on_block_events is None:
             return
 
-        status = await self.get("api/status")
+        status = await self.get("status")
         self._update_height_from_info(status)
         try:
             await self.on_block_events({
@@ -459,7 +818,17 @@ class BitcoreClient:
     async def subscribe_headers(self) -> None:
         """Subscribe to block synchronization and inventory events."""
         await self.ensure_connected()
+        self._headers_subscribed = True
 
+        await self._send_header_subscriptions()
+
+        # HTTP status gives us the current height immediately instead of
+        # waiting for the next Socket.IO info event.
+        status = await self.get("status")
+        self._update_height_from_info(status)
+
+    async def _send_header_subscriptions(self) -> None:
+        """Subscribe to the block events on the active transport."""
         for event_name in ("sync", "inv"):
             packet = self._create_socketio_packet(
                 "subscribe",
@@ -467,13 +836,9 @@ class BitcoreClient:
             )
             await self._send_socket_message(packet)
 
-        # HTTP status gives us the current height immediately instead of
-        # waiting for the next Socket.IO info event.
-        status = await self.get("api/status")
-        self._update_height_from_info(status)
-
     async def unsubscribe_headers(self) -> None:
         """Unsubscribe from block synchronization and inventory events."""
+        self._headers_subscribed = False
         if not self._connected.is_set():
             return
 
@@ -531,7 +896,7 @@ class BitcoreClient:
 
     async def get_balance(self, address: str) -> Dict[str, int]:
         """Return confirmed and unconfirmed balance for an address."""
-        data = await self.get(f"api/addr/{address}")
+        data = await self.get(f"addr/{address}")
 
         return {
             "confirmed": data.get("balanceSat", 0),
@@ -541,7 +906,7 @@ class BitcoreClient:
     async def get_history(self, address: str, limit: Optional[int] = 10) -> List[Dict[str, Any]]:
         try:
             """Return transaction history for an address."""
-            endpoint = f"api/txs?address={address}"
+            endpoint = f"txs?address={address}"
             if limit is not None:
                 endpoint += f"&limit={limit}"
 
@@ -556,13 +921,13 @@ class BitcoreClient:
 
     async def get_listunspent(self, address: str) -> List[Dict[str, Any]]:
         """Return normalized unspent transaction outputs for an address."""
-        utxos = await self.get(f"api/addr/{address}/utxo")
+        utxos = await self.get(f"addr/{address}/utxo")
         return self._normalize_utxos(utxos)
 
     async def get_mempool(self, address: str) -> List[Dict[str, Any]]:
         try:
             """Return mempool transactions that involve the given address."""
-            mempool = await self.get("api/mempool")
+            mempool = await self.get("mempool")
             related_transactions: List[Dict[str, Any]] = []
 
             for transaction in mempool or []:
@@ -590,13 +955,13 @@ class BitcoreClient:
 
     async def get_transaction(self, txid: str, verbose: bool = True) -> Dict[str, Any]:
         """Return a transaction by transaction ID."""
-        return await self.get(f"api/tx/{txid}")
+        return await self.get(f"tx/{txid}")
 
     async def broadcast(self, tx_hex: str) -> Any:
         """Broadcast a signed raw transaction through the Bitcore API."""
         try:
             result = await self.post(
-                "api/tx/send",
+                "tx/send",
                 {"rawtx": tx_hex}
             )
             return result.get("txid")

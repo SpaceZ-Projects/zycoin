@@ -10,6 +10,7 @@ class Coin:
     DEFAULT_PORTS = {}
     SERVERS = []
     BITCORE_API = None
+    BITCORE_SOCKET_PATH = "/socket.io/"
 
     XPUB_HEADERS = {}
     XPRV_HEADERS = {}
@@ -38,7 +39,7 @@ class BitcoinZ(Coin):
         "electrum4.btcz.rocks"
     ]
 
-    BITCORE_API = "https://explorer.btcz.rocks/"
+    BITCORE_API = "https://explorer.btcz.rocks/api/"
 
     XPRV_HEADERS = {
         'standard':    0x0488ade4,
@@ -62,7 +63,7 @@ class ZeroCurrency(Coin):
 
     SERVERS = []
 
-    BITCORE_API = "https://explorer.zer.zelcore.io/"
+    BITCORE_API = "https://insight.zerocurrency.io/insight-api-zero/"
     
     XPRV_HEADERS = {
         'standard':    0x0488ade4,
@@ -87,7 +88,7 @@ class Zclassic(Coin):
     
     SERVERS = []
 
-    BITCORE_API = "https://explorer.zcl.zelcore.io/"
+    BITCORE_API = "https://explorer.zcl.zelcore.io/api/"
 
     XPRV_HEADERS = {
         'standard':    0x0488ade4,
@@ -114,7 +115,7 @@ class Flux(Coin):
         "electrumx2.runonflux.io"
     ]
 
-    BITCORE_API = "https://explorer.runonflux.io/"
+    BITCORE_API = "https://explorer.runonflux.io/api/"
 
     XPRV_HEADERS = {
         'standard':    0x0488ade4,
@@ -139,7 +140,7 @@ class ZeroClassic(Coin):
     
     SERVERS = []
 
-    BITCORE_API = "https://insight.zeroclassic.org/"
+    BITCORE_API = "https://insight.zeroclassic.org/api/"
 
     XPRV_HEADERS = {
         'standard':    0x0488ade4,
