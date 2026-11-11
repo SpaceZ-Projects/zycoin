@@ -35,7 +35,7 @@ and tested misuse cases only, not ceremony validity, general
 parameter-to-circuit binding, Spend circuit/key compatibility, or full production
 readiness.
 
-**Spend parameter and QAP status (Phases 9.21.33–35, 38):** Bellman 0.15 and
+**Spend parameter and QAP status (Phases 9.21.33–35, 38–39):** Bellman 0.15 and
 ZyCoin's Python parser match all 437,707 canonical IC/query point encodings
 from the pinned official Spend file in exact section order. A deterministic
 satisfying assignment was then independently synthesized by pinned Bellman
@@ -116,6 +116,23 @@ disabled and parameter-to-circuit binding and ceremony validity remain
 The complete Sapling regression suite passed **206 tests** with **1
 skipped** in **2,844.775 seconds**, including Output interoperability,
 Spend, parser, and compatibility-manifest regressions.
+
+Phase 9.21.39 isolates the H difference. Bellman 0.15 independently
+recomputed ZyCoin's quotient from ZyCoin's exact A/B/C evaluation vectors,
+reproducing the local coefficient and H-evaluation fingerprints and verifying
+divisibility. The local and upstream A/B/C evaluation hashes differ, while
+cross-accumulating both coefficient vectors against both Bellman-loaded and
+ZyCoin-decoded official H vectors produces equal results for each vector.
+Bellman's pinned prover and generator sources confirm ascending coefficient
+and `tau^i * Z(tau) / delta` H-query order. This isolates the cause to
+different QAP evaluation vectors (row ordering/formulation), not quotient
+arithmetic, coefficient normalization, or H-query indexing. The official H
+points still do not identify their generating circuit or prove ceremony
+validity. The targeted comparison passed in 1,273.363 seconds. The complete
+Sapling suite passed 206 tests with 1 skipped in 3,005.919 seconds, including
+Output interoperability and compatibility-manifest regressions. The suite
+included the existing test-only synthetic setup regression; no synthetic
+setup or proof was added for this task.
 
 ## Phase 9.21.37 — Memory-bounded full-size synthetic Spend setup
 

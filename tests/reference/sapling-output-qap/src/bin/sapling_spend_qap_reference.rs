@@ -62,6 +62,7 @@ struct ReferenceOutput {
     assignment_sha256: String,
     assignment_hex: Vec<String>,
     quotient_coefficients_h_hex: Vec<String>,
+    quotient_evaluations_h_hex: Vec<String>,
     upstream_test_constraint_system_hash: String,
     constraint_count: usize,
     input_count_including_one: usize,
@@ -390,11 +391,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         sapling_revision: SAPLING_REVISION,
         assignment_sha256,
         assignment_hex: assignments.iter().copied().map(scalar_hex).collect(),
-        quotient_coefficients_h_hex: h_coefficients
-            .iter()
-            .copied()
-            .map(scalar_hex)
-            .collect(),
+        quotient_coefficients_h_hex: h_coefficients.iter().copied().map(scalar_hex).collect(),
+        quotient_evaluations_h_hex: h_evaluations.iter().copied().map(scalar_hex).collect(),
         upstream_test_constraint_system_hash: export.observed_test_constraint_system_hash,
         constraint_count: CONSTRAINT_COUNT,
         input_count_including_one: INPUT_COUNT,

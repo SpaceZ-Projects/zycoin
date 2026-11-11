@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "phase": "9.21.36",
+  "phase": "9.21.39",
   "purpose": "Evidence-bounded comparison of ZyCoin's local Sapling Spend and Output R1CS assemblies, Groth16 setup requirements, and pinned sapling-crypto/Bellman references.",
   "provenance": {
     "sapling_crypto_revision": "88a7946b4a3066787776e11f0a502654167e022d",
@@ -1041,6 +1041,93 @@
         "tests_skipped": 1,
         "elapsed_seconds": 2844.775,
         "coverage_summary": "Complete Sapling suite, including official Spend query accumulation, Output interoperability, Spend, parser, and compatibility-manifest regressions."
+      }
+    },
+    "authentic_spend_h_query_isolation": {
+      "phase": "9.21.39",
+      "reference": "Pinned Bellman 0.15, bellman revision b726862a4ece8a627e7fea486d77b502a6edbb0b; groth16 0.2.0.",
+      "fixture": {
+        "official_parameter_sha256": "8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13",
+        "bellman_assignment_sha256": "429887b2897ce1ee6f4bf9707c7e28158ce66dc9ba9789dff708ce02a0fc3e57",
+        "local_matrix_fingerprint_sha256": "f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9"
+      },
+      "qap_vectors": {
+        "domain_size": 131072,
+        "a_b_c_evaluation_count_each": 131072,
+        "h_coefficient_count_each": 131071,
+        "h_evaluation_count_each": 131072,
+        "maximum_h_degree": 131070,
+        "omitted_degree_131071_coefficient": "Verified zero by Bellman and ZyCoin quotient paths.",
+        "field_and_scalar_encoding": "BLS12-381 scalar field; canonical 32-byte little-endian repr. Bellman Scalar::from_repr rejects noncanonical encodings.",
+        "coefficient_order": "Ascending degree. Bellman prover ifft/coset_fft/divide_by_z/icoset_fft followed by truncation; Groth16 generator and prover index H as tau^i * Z(tau) / delta for i=0..131070.",
+        "bellman_sha256": {
+          "a_evaluations": "22c6662cbe967cb57bc36d05ebf3e81a32d3baa20bf222c0cf5581afd52993b6",
+          "b_evaluations": "3169179e3f69d5755671e0f634789dbb3faaa2f7a6025779a6f2ac2240729e71",
+          "c_evaluations": "df2e6de104f3acc367abee83ead55f275670a0e13720044e0d166465948dd872",
+          "h_coefficients": "27d57fc5eae604c210feda073ee1befcb73a776ef6bf4b08ba25d00314037a55",
+          "h_evaluations": "b7ee1b2f7f49704446fb4acdc4dcf8e9a859ebeddcd9994d1aa2ec5a3023bb7d"
+        },
+        "zycoin_sha256": {
+          "a_evaluations": "daca49ab7a9dd2819f40d4b48e94509d78d24ad2fb4846062865cd5f9491fe1a",
+          "b_evaluations": "2430c5198e3c39c85dfda8256feb6fa822c40cca983c37dd510cbd1f89cdf198",
+          "c_evaluations": "f8efb2f3246022e9cbd1cbbdd551167f9d3d5ab8570d9b8fd273afae2c5d50a9",
+          "h_coefficients": "a98ecf083b7660a04fd59fc887e7799cf96c1e0cf5e4cd898690340125850862",
+          "h_evaluations": "04d75e396d3c01478d7de835da712c7a10eecdec070fd79a0781d60ee30f65c7"
+        }
+      },
+      "independent_local_quotient_check": {
+        "method": "Bellman 0.15 recomputed H from ZyCoin's exported complete A/B/C evaluation vectors with its own domain FFT, coset FFT, vanishing-polynomial division, and inverse coset FFT; independently checked (A*B-C)=H*(X^n-1).",
+        "bellman_h_coefficients_equal_zycoin_h_coefficients": true,
+        "bellman_h_evaluations_equal_zycoin_h_evaluations": true,
+        "quotient_divisibility_verified": true
+      },
+      "official_h_query_cross_accumulation": {
+        "full_query_points": 131071,
+        "bellman_and_zycoin_decoded_h_point_vectors_byte_equal": true,
+        "bellman_coefficients": {
+          "bellman_points_sha256": "a95259f4792a7727f33efa3eb466b5a1481f06c494182ffd091e46ef39bfd7fe",
+          "zycoin_points_sha256": "a95259f4792a7727f33efa3eb466b5a1481f06c494182ffd091e46ef39bfd7fe",
+          "accumulations_equal": true
+        },
+        "zycoin_coefficients": {
+          "bellman_points_sha256": "1336802122c751934174ee3689fc8b140240b85e1ab4142a019ed611461742c7",
+          "zycoin_points_sha256": "1336802122c751934174ee3689fc8b140240b85e1ab4142a019ed611461742c7",
+          "accumulations_equal": true
+        }
+      },
+      "cause": {
+        "identified": "The QAP quotient coefficients differ because the upstream and local A/B/C evaluation vectors differ. Bellman independently reproduces ZyCoin's H coefficients from ZyCoin's local evaluation vectors.",
+        "quotient_calculation_bug": false,
+        "h_coefficient_order_or_normalization_bug": false,
+        "official_h_query_interpretation_or_indexing_bug": false,
+        "row_ordering_and_formulation_differences": "Evidence-supported by the existing correspondence: 48,546 moved row pairs, 251 A/B swaps, 28,351 nonuniform factor normalizations, 333 expanded-relation-only pairs, and two unmatched rows per side.",
+        "parameter_to_circuit_binding": "Unverified",
+        "ceremony_validity": "Unverified"
+      },
+      "preservation": {
+        "other_official_accumulations": {
+          "IC": "Matched",
+          "L": "Matched",
+          "A": "Matched",
+          "B_G1": "Matched",
+          "B_G2": "Matched"
+        },
+        "output_proof_interoperability_changed": false,
+        "spend_proof_generated": false,
+        "production_circuit_pins_or_proving_gates_changed": false
+      },
+      "test": {
+        "command": "python -m unittest tests.test_sapling_spend_authentic_query_accumulation -v",
+        "result": "Passed",
+        "elapsed_seconds": 1273.363
+      },
+      "combined_sapling_regression": {
+        "command": "python -m unittest discover -s tests -p 'test_sapling*.py'",
+        "result": "Passed",
+        "tests_passed": 206,
+        "tests_skipped": 1,
+        "elapsed_seconds": 3005.919,
+        "coverage_summary": "Complete Sapling suite, including official Spend H-query isolation, Output interoperability, Spend, parser, and compatibility-manifest regressions; the existing test-only synthetic setup regression also ran."
       }
     },
     "spend_qap_compatibility": {

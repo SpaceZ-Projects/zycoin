@@ -58,6 +58,7 @@ ACCUMULATION_POINT_BYTES = {
     "a": 96,
     "b_g1": 96,
     "b_g2": 192,
+    "h_zycoin": 96,
 }
 
 
@@ -67,7 +68,13 @@ def _linux_path(path: Path) -> str:
 
 
 def _run_bellman_accumulation(
-    parameters: Path, summary: Path, mapping: Path, output: Path
+    parameters: Path,
+    summary: Path,
+    mapping: Path,
+    zycoin_h: Path,
+    zycoin_evaluations: Path,
+    output: Path,
+    qap_report: Path,
 ) -> None:
     wsl = shutil.which("wsl")
     if wsl:
@@ -79,7 +86,10 @@ def _run_bellman_accumulation(
             f"{shlex.quote(_linux_path(parameters))} "
             f"{shlex.quote(_linux_path(summary))} "
             f"{shlex.quote(_linux_path(mapping))} "
-            f"{shlex.quote(_linux_path(output))}"
+            f"{shlex.quote(_linux_path(zycoin_h))} "
+            f"{shlex.quote(_linux_path(zycoin_evaluations))} "
+            f"{shlex.quote(_linux_path(output))} "
+            f"{shlex.quote(_linux_path(qap_report))}"
         )
         subprocess.run([wsl, "--", "bash", "-lc", command], cwd=ROOT, check=True)
         return
@@ -97,7 +107,10 @@ def _run_bellman_accumulation(
             str(parameters),
             str(summary),
             str(mapping),
+            str(zycoin_h),
+            str(zycoin_evaluations),
             str(output),
+            str(qap_report),
         ],
         cwd=ROOT,
         check=True,
@@ -110,6 +123,15 @@ def _identity_index(identity: str) -> int:
     if identity.startswith("Aux(") and identity.endswith(")"):
         return 8 + int(identity[4:-1])
     raise AssertionError(f"unknown upstream variable identity {identity!r}")
+
+
+def _scalar_vector_sha256(values: tuple[int, ...]) -> str:
+    digest = hashlib.sha256()
+    for value in values:
+        if type(value) is not int or not 0 <= value < SCALAR_MODULUS:
+            raise AssertionError("scalar vector contains a noncanonical field value")
+        digest.update(value.to_bytes(32, "little"))
+    return digest.hexdigest()
 
 
 def _read_bellman_accumulations(path: Path) -> dict[str, bytes]:
@@ -147,6 +169,9 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
         cls.summary_path = directory / "bellman-spend-qap.json"
         cls.point_export_path = directory / "bellman-query-points.bin"
         cls.bellman_accumulation_path = directory / "bellman-accumulations.bin"
+        cls.local_h_path = directory / "zycoin-h-coefficients.bin"
+        cls.local_evaluations_path = directory / "zycoin-qap-evaluations.bin"
+        cls.local_qap_report_path = directory / "bellman-local-qap-crosscheck.json"
 
         _run_bellman_synthesis(cls.trace_path)
         _run_bellman_qap(cls.trace_path, cls.summary_path)
@@ -159,11 +184,17 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
             int.from_bytes(bytes.fromhex(value), "little")
             for value in cls.summary["quotient_coefficients_h_hex"]
         )
+        cls.upstream_h_evaluations = tuple(
+            int.from_bytes(bytes.fromhex(value), "little")
+            for value in cls.summary["quotient_evaluations_h_hex"]
+        )
         if (
             cls.summary["format"] != "bellman-sapling-spend-qap-reference-v1"
             or not cls.summary["quotient_divisibility_verified"]
+            or cls.summary["domain_size"] != 131_072
             or len(cls.upstream_values) != 98_646
             or len(cls.upstream_h) != 131_071
+            or len(cls.upstream_h_evaluations) != 131_072
         ):
             raise AssertionError("Bellman QAP reference is incomplete")
 
@@ -179,12 +210,32 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
         cls.assignment = QAPAssignment(cls.system.public_inputs(), auxiliary)
         cls.local_values = cls.qap.validate_assignment(cls.assignment)
         cls.local_h = cls.qap.quotient(cls.assignment)
+        cls.local_evaluations = cls.qap.evaluations(cls.assignment)
+        cls.local_h_evaluations = tuple(
+            cls.qap.domain.fft_domain.fft(cls.local_h + (0,))
+        )
         if (
             cls.system.matrix_fingerprint() != LOCAL_MATRIX_FINGERPRINT
             or len(cls.local_values) != 98_646
             or len(cls.local_h) != 131_071
+            or len(cls.local_h_evaluations) != 131_072
         ):
             raise AssertionError("local Spend matrix or QAP dimensions changed")
+
+        cls.local_h_path.write_bytes(
+            b"".join(value.to_bytes(32, "little") for value in cls.local_h)
+        )
+        cls.local_evaluations_path.write_bytes(
+            b"".join(
+                value.to_bytes(32, "little")
+                for vector in (
+                    cls.local_evaluations.a,
+                    cls.local_evaluations.b,
+                    cls.local_evaluations.c,
+                )
+                for value in vector
+            )
+        )
 
         mapping = json.loads(MAPPING_PATH.read_text(encoding="ascii"))
         if mapping["mapping_fingerprint_sha256"] != QUERY_MAPPING_FINGERPRINT:
@@ -209,8 +260,27 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
             PARAMETER_PATH,
             cls.summary_path,
             MAPPING_PATH,
+            cls.local_h_path,
+            cls.local_evaluations_path,
             cls.bellman_accumulation_path,
+            cls.local_qap_report_path,
         )
+        cls.local_qap_report = json.loads(
+            cls.local_qap_report_path.read_text(encoding="utf-8")
+        )
+        cls.bellman_vector_hashes = {
+            entry["name"]: entry["sha256_little_endian_scalars"]
+            for entry in cls.summary["vectors"]
+        }
+        cls.local_vector_hashes = {
+            "a_evaluations": _scalar_vector_sha256(cls.local_evaluations.a),
+            "b_evaluations": _scalar_vector_sha256(cls.local_evaluations.b),
+            "c_evaluations": _scalar_vector_sha256(cls.local_evaluations.c),
+            "quotient_coefficients_h": _scalar_vector_sha256(cls.local_h),
+            "quotient_evaluations_h": _scalar_vector_sha256(
+                cls.local_h_evaluations
+            ),
+        }
         cls.bellman_accumulations = _read_bellman_accumulations(
             cls.bellman_accumulation_path
         )
@@ -231,6 +301,7 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
         parser = read_parameter_stream(parser_stream, allow_trailing_data=True)
         sections = iter(parser.sections())
         local_accumulations: dict[str, bytes] = {}
+        zycoin_h_with_bellman_coefficients: bytes | None = None
         point_total = 0
 
         with self.point_export_path.open("rb") as reference:
@@ -320,6 +391,13 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
                 else:
                     result = multi_scalar_multiply_g1(points, scalars)
                     local_accumulations[name] = encode_g1_uncompressed(result)
+                    if name == "h":
+                        upstream_result = multi_scalar_multiply_g1(
+                            points, self.upstream_h
+                        )
+                        zycoin_h_with_bellman_coefficients = encode_g1_uncompressed(
+                            upstream_result
+                        )
 
             self.assertEqual(reference.read(1), b"")
         self.assertEqual(point_total, 437_707)
@@ -332,6 +410,115 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
         self.assertEqual(
             self.summary["assignment_sha256"],
             ("429887b2897ce1ee6f4bf9707c7e28158ce66dc9ba9789dff708ce02a0fc3e57"),
+        )
+        self.assertEqual(self.summary["domain_size"], 131_072)
+        self.assertTrue(self.summary["satisfied"])
+        self.assertEqual(len(self.upstream_h), 131_071)
+        self.assertEqual(len(self.local_h), 131_071)
+        self.assertEqual(len(self.upstream_h_evaluations), 131_072)
+        self.assertEqual(len(self.local_h_evaluations), 131_072)
+        self.assertEqual(
+            _scalar_vector_sha256(self.upstream_h),
+            "27d57fc5eae604c210feda073ee1befcb73a776ef6bf4b08ba25d00314037a55",
+        )
+        self.assertEqual(
+            _scalar_vector_sha256(self.local_h),
+            "a98ecf083b7660a04fd59fc887e7799cf96c1e0cf5e4cd898690340125850862",
+        )
+        self.assertNotEqual(self.upstream_h, self.local_h)
+        self.assertEqual(
+            self.bellman_vector_hashes["a_evaluations"],
+            "22c6662cbe967cb57bc36d05ebf3e81a32d3baa20bf222c0cf5581afd52993b6",
+        )
+        self.assertEqual(
+            self.bellman_vector_hashes["b_evaluations"],
+            "3169179e3f69d5755671e0f634789dbb3faaa2f7a6025779a6f2ac2240729e71",
+        )
+        self.assertEqual(
+            self.bellman_vector_hashes["c_evaluations"],
+            "df2e6de104f3acc367abee83ead55f275670a0e13720044e0d166465948dd872",
+        )
+        self.assertEqual(
+            self.local_vector_hashes["a_evaluations"],
+            "daca49ab7a9dd2819f40d4b48e94509d78d24ad2fb4846062865cd5f9491fe1a",
+        )
+        self.assertEqual(
+            self.local_vector_hashes["b_evaluations"],
+            "2430c5198e3c39c85dfda8256feb6fa822c40cca983c37dd510cbd1f89cdf198",
+        )
+        self.assertEqual(
+            self.local_vector_hashes["c_evaluations"],
+            "f8efb2f3246022e9cbd1cbbdd551167f9d3d5ab8570d9b8fd273afae2c5d50a9",
+        )
+        self.assertTrue(
+            all(
+                self.bellman_vector_hashes[name] != self.local_vector_hashes[name]
+                for name in ("a_evaluations", "b_evaluations", "c_evaluations")
+            ),
+            "the two synthesized QAP inputs unexpectedly became identical",
+        )
+        self.assertEqual(
+            self.bellman_vector_hashes["quotient_evaluations_h"],
+            "b7ee1b2f7f49704446fb4acdc4dcf8e9a859ebeddcd9994d1aa2ec5a3023bb7d",
+        )
+        self.assertEqual(
+            _scalar_vector_sha256(self.upstream_h_evaluations),
+            self.bellman_vector_hashes["quotient_evaluations_h"],
+        )
+        self.assertEqual(
+            tuple(
+                self.qap.domain.fft_domain.fft(self.upstream_h + (0,))
+            ),
+            self.upstream_h_evaluations,
+            "Bellman H evaluations are not the forward FFT of ascending coefficients",
+        )
+        self.assertEqual(
+            self.bellman_vector_hashes["quotient_coefficients_h"],
+            _scalar_vector_sha256(self.upstream_h),
+        )
+        self.assertTrue(
+            self.local_qap_report["local_quotient_matches_zycoin_coefficients"]
+        )
+        self.assertTrue(self.local_qap_report["quotient_divisibility_verified"])
+        self.assertEqual(self.local_qap_report["domain_size"], 131_072)
+        self.assertEqual(
+            self.local_qap_report["quotient_coefficient_count"], 131_071
+        )
+        self.assertEqual(
+            self.local_qap_report[
+                "independently_computed_local_h_coefficients_sha256"
+            ],
+            _scalar_vector_sha256(self.local_h),
+        )
+        self.assertEqual(
+            self.local_qap_report[
+                "independently_computed_local_h_evaluations_sha256"
+            ],
+            _scalar_vector_sha256(self.local_h_evaluations),
+        )
+        self.assertEqual(
+            [item["sha256_little_endian_scalars"] for item in
+             self.local_qap_report["input_evaluation_hashes"]],
+            [
+                _scalar_vector_sha256(self.local_evaluations.a),
+                _scalar_vector_sha256(self.local_evaluations.b),
+                _scalar_vector_sha256(self.local_evaluations.c),
+            ],
+        )
+        self.assertEqual(
+            [item["count"] for item in self.local_qap_report["input_evaluation_hashes"]],
+            [131_072, 131_072, 131_072],
+        )
+        self.assertIsNotNone(zycoin_h_with_bellman_coefficients)
+        self.assertEqual(
+            zycoin_h_with_bellman_coefficients,
+            self.bellman_accumulations["h"],
+            "Bellman and ZyCoin official H points disagree for Bellman coefficients",
+        )
+        self.assertEqual(
+            local_accumulations["h"],
+            self.bellman_accumulations["h_zycoin"],
+            "Bellman and ZyCoin official H points disagree for ZyCoin coefficients",
         )
 
         matches = {
@@ -363,6 +550,18 @@ class AuthenticSpendQueryAccumulationTests(unittest.TestCase):
                     "bellman_h_sha256": hashlib.sha256(
                         self.bellman_accumulations["h"]
                     ).hexdigest(),
+                    "zycoin_h_with_bellman_coefficients_sha256": hashlib.sha256(
+                        zycoin_h_with_bellman_coefficients
+                    ).hexdigest(),
+                    "bellman_h_with_zycoin_coefficients_sha256": hashlib.sha256(
+                        self.bellman_accumulations["h_zycoin"]
+                    ).hexdigest(),
+                    "bellman_h_coefficients_sha256": _scalar_vector_sha256(
+                        self.upstream_h
+                    ),
+                    "zycoin_h_coefficients_sha256": _scalar_vector_sha256(
+                        self.local_h
+                    ),
                     "local_matrix_fingerprint": self.system.matrix_fingerprint(),
                     "bellman_assignment_sha256": self.summary["assignment_sha256"],
                 },

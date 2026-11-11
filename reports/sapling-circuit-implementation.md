@@ -404,6 +404,75 @@ The complete Sapling regression command
 tests** with **1 skipped** in **2,844.775 seconds**, including Output
 interoperability, Spend, parser, and compatibility-manifest regressions.
 
+### Phase 9.21.39 — Isolating the official Spend H-query mismatch
+
+The official file, deterministic witness, and local matrix pins from
+Phase 9.21.38 were retained. This follow-up independently separated the
+quotient input from H-query interpretation. Bellman 0.15 recomputed a
+quotient from ZyCoin's exact three 131,072-element A/B/C evaluation vectors,
+using Bellman's `EvaluationDomain` FFT/coset-FFT/divide-by-Z/icoset-FFT
+path. It verified the quotient identity and exact coefficient equality with
+ZyCoin's quotient; both coefficient vectors have 131,071 canonical
+BLS12-381 scalar entries.
+
+| Vector | Bellman SHA-256 | ZyCoin SHA-256 |
+|---|---|---|
+| A evaluations | `22c6662cbe967cb57bc36d05ebf3e81a32d3baa20bf222c0cf5581afd52993b6` | `daca49ab7a9dd2819f40d4b48e94509d78d24ad2fb4846062865cd5f9491fe1a` |
+| B evaluations | `3169179e3f69d5755671e0f634789dbb3faaa2f7a6025779a6f2ac2240729e71` | `2430c5198e3c39c85dfda8256feb6fa822c40cca983c37dd510cbd1f89cdf198` |
+| C evaluations | `df2e6de104f3acc367abee83ead55f275670a0e13720044e0d166465948dd872` | `f8efb2f3246022e9cbd1cbbdd551167f9d3d5ab8570d9b8fd273afae2c5d50a9` |
+| H quotient coefficients | `27d57fc5eae604c210feda073ee1befcb73a776ef6bf4b08ba25d00314037a55` | `a98ecf083b7660a04fd59fc887e7799cf96c1e0cf5e4cd898690340125850862` |
+| H evaluations | `b7ee1b2f7f49704446fb4acdc4dcf8e9a859ebeddcd9994d1aa2ec5a3023bb7d` | `04d75e396d3c01478d7de835da712c7a10eecdec070fd79a0781d60ee30f65c7` |
+
+This rules out a quotient-arithmetic defect in ZyCoin for the local A/B/C
+vectors: Bellman independently reproduces ZyCoin's H coefficients and
+H evaluations. The upstream and local A/B/C evaluation vectors differ,
+consistent with the existing Spend row/variable correspondence findings:
+48,546 mapped rows are moved, 251 A/B factor swaps and 28,351
+nonuniform factor normalizations are present, 333 pairs match only as
+expanded `A*B-C`, and two rows on each side are unmatched. Thus the
+witness-specific H coefficient mismatch is caused upstream of quotient
+arithmetic by the distinct QAP encodings/row order, not by normalizing or
+reordering the H vector.
+
+The H scalar vector consumed by each prover is the ascending-degree
+quotient coefficient vector, with length `131,071` (degrees 0 through
+131,070); each side independently checked its omitted degree-131,071
+coefficient is zero. Both use a 131,072-point domain and the same canonical
+little-endian 32-byte scalar representation. Bellman's pinned
+`groth16 0.2.0` prover applies `ifft`, `coset_fft`, division by `Z`, and
+`icoset_fft`, truncates the verified final zero coefficient, then passes
+the remaining coefficients directly to `get_h`. Its pinned generator
+constructs H entries in the same index order as
+`tau^i * Z(tau) / delta` for `i = 0..131070`. The independent Python parser
+and Bellman loader matched the complete official H point sequence and its
+index order.
+
+All four full-vector pairings were evaluated without changing or
+normalizing data:
+
+| H points | Scalar vector | Accumulated point SHA-256 | Cross-implementation result |
+|---|---|---|---|
+| Bellman official H | Bellman coefficients | `a95259f4792a7727f33efa3eb466b5a1481f06c494182ffd091e46ef39bfd7fe` | Matches ZyCoin official H with Bellman coefficients |
+| ZyCoin-decoded official H | Bellman coefficients | `a95259f4792a7727f33efa3eb466b5a1481f06c494182ffd091e46ef39bfd7fe` | Matches Bellman official H with Bellman coefficients |
+| Bellman official H | ZyCoin coefficients | `1336802122c751934174ee3689fc8b140240b85e1ab4142a019ed611461742c7` | Matches ZyCoin official H with ZyCoin coefficients |
+| ZyCoin-decoded official H | ZyCoin coefficients | `1336802122c751934174ee3689fc8b140240b85e1ab4142a019ed611461742c7` | Matches Bellman official H with ZyCoin coefficients |
+
+**Cause isolated:** the official H points have the same serialization,
+indexing, and MSM interpretation in both implementations. The two
+quotient coefficient vectors differ because the upstream and local QAP
+evaluation vectors differ; Bellman independently reproduced ZyCoin's local
+quotient from ZyCoin's local A/B/C evaluations. Therefore the H aggregate
+difference is due to the input coefficient vector, not H-query decoding,
+indexing, normalization, or quotient arithmetic. The previously matching
+IC, L, A, B_G1, and B_G2 results are unchanged. This establishes no
+parameter-to-circuit binding or ceremony validity; no Spend proof was
+generated and no production circuit, parameter pin, or proving gate changed.
+The targeted comparison passed in **1,273.363 seconds**. The complete
+Sapling suite, including Output interoperability and compatibility-manifest
+regressions, passed **206 tests** with **1 skipped** in **3,005.919 seconds**.
+The suite also ran the repository's existing test-only synthetic setup
+regression; this H-isolation work added no synthetic setup or proof.
+
 ### Phase 9.21.36 — Sapling Spend circuit-specific setup requirements
 
 The local Spend setup identity is the canonical ordered

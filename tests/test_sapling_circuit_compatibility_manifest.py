@@ -41,7 +41,7 @@ class SaplingCircuitCompatibilityManifestTests(unittest.TestCase):
     def test_manifest_has_complete_local_and_upstream_evidence_sections(self):
         manifest = self.manifest
         self.assertEqual(manifest["schema_version"], "1.0")
-        self.assertEqual(manifest["phase"], "9.21.36")
+        self.assertEqual(manifest["phase"], "9.21.39")
         self.assertEqual(
             set(manifest["circuits"]),
             {"sapling-spend", "sapling-output"},
@@ -50,6 +50,19 @@ class SaplingCircuitCompatibilityManifestTests(unittest.TestCase):
         self.assertIn("evidence_model", manifest)
         self.assertIn("reconstruction_assessment", manifest)
         self.assertIn("authentic_parameter_audit", manifest)
+        isolation = manifest["authentic_parameter_audit"][
+            "authentic_spend_h_query_isolation"
+        ]
+        self.assertTrue(
+            isolation["independent_local_quotient_check"][
+                "bellman_h_coefficients_equal_zycoin_h_coefficients"
+            ]
+        )
+        self.assertTrue(
+            isolation["official_h_query_cross_accumulation"][
+                "bellman_and_zycoin_decoded_h_point_vectors_byte_equal"
+            ]
+        )
 
         for circuit_id, circuit in manifest["circuits"].items():
             with self.subTest(circuit=circuit_id):

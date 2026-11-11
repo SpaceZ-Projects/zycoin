@@ -62,6 +62,15 @@ and provenance; it is the source record for the focused reports below.
   the local Spend QAP; no proof was generated and the Spend gate remains
   closed. The complete Sapling regression run passed 206 tests with 1
   skipped in 2,844.775 seconds.
+  [Phase 9.21.39](sapling-circuit-implementation.md#phase-92139--isolating-the-official-spend-h-query-mismatch)
+  independently recomputed ZyCoin's quotient from its A/B/C evaluation
+  vectors with Bellman 0.15 and cross-accumulated both coefficient vectors
+  against both official H-query decodings. It isolates the mismatch to the
+  different upstream/local QAP evaluation vectors; H point indexing and
+  scalar conventions agree. The full Sapling regression rerun passed 206
+  tests with 1 skipped in 3,005.919 seconds, including Output interoperability.
+  The existing test-only synthetic setup regression ran as part of the full
+  suite; this follow-up added no synthetic setup or proof.
 - [Sapling Output authentic query-to-circuit audit](sapling-circuit-implementation.md#phase-92121--authentic-output-query-to-circuit-compatibility) —
   verified parameter-file identity, query-index layout, and local/pinned-matrix
   QAP comparison; see also
