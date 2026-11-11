@@ -17,6 +17,7 @@ from sapling_spend_reference_port import (
     constrain_spend_edwards_point_repr,
     constrain_spend_edwards_point_witness,
     constrain_spend_fixed_base_mul,
+    constrain_spend_merkle_authentication_path,
     constrain_spend_montgomery_add,
     constrain_spend_montgomery_into_edwards,
     constrain_spend_note_commitment,
@@ -172,7 +173,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v9":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v10":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -212,6 +213,11 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.note_commitment = cls.reference["note_commitment"]
         cls.note_commitment_cases = {
             case["name"]: case for case in cls.note_commitment["cases"]
+        }
+        cls.merkle_authentication = cls.reference["merkle_authentication"]
+        cls.merkle_authentication_cases = {
+            case["name"]: case
+            for case in cls.merkle_authentication["cases"]
         }
 
     def assert_case_matches(
@@ -1531,6 +1537,166 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                     call()
                 self.assertEqual(len(system.variables), before_variables)
                 self.assertEqual(system.constraint_count, before_rows)
+
+    def test_merkle_authentication_matches_bellman_ordered_traces(self) -> None:
+        for name, reference in self.merkle_authentication_cases.items():
+            path = list(
+                zip(reference["siblings"], reference["directions"], strict=True)
+            )
+            path = [(int(sibling), direction) for sibling, direction in path]
+            with self.subTest(case=name, depth=len(path)):
+                system = R1CS()
+                leaf_value = int(reference["leaf"])
+                leaf_variable = system.alloc_private("leaf/num", leaf_value)
+                result = constrain_spend_merkle_authentication_path(
+                    system, leaf_variable, leaf_value, path
+                )
+                self.assert_system_matches_reference(name, system, reference)
+                self.assertEqual(len(result.position_bits), len(path))
+                self.assertEqual(len(result.path_nodes), len(path))
+                self.assertEqual(
+                    [system.witness_value(bit) for bit in result.position_bits],
+                    [int(direction) for direction in reference["directions"]],
+                )
+                self.assertEqual(
+                    [system.witness_value(node) for node in result.path_nodes],
+                    [int(sibling) for sibling in reference["siblings"]],
+                )
+                self.assertEqual(result.root_value, int(reference["root"]))
+                self.assertEqual(
+                    system.witness_value(result.root_variable),
+                    int(reference["root"]),
+                )
+
+    def test_merkle_direction_sibling_intermediate_and_root_mutations_match(
+        self,
+    ) -> None:
+        reference = self.merkle_authentication_cases["mixed_directions"]
+        path = [
+            (int(sibling), direction)
+            for sibling, direction in zip(
+                reference["siblings"], reference["directions"], strict=True
+            )
+        ]
+        system = R1CS()
+        leaf_value = int(reference["leaf"])
+        leaf_variable = system.alloc_private("leaf/num", leaf_value)
+        result = constrain_spend_merkle_authentication_path(
+            system, leaf_variable, leaf_value, path
+        )
+        self.assert_system_matches_reference("mixed_directions", system, reference)
+
+        mutation_annotations = (
+            "merkle tree hash 0/position bit/boolean",
+            "merkle tree hash 0/path element/num",
+            (
+                "merkle tree hash 0/conditional reversal of preimage/"
+                "conditional reversal result 1/num"
+            ),
+            (
+                "merkle tree hash 0/computation of pedersen hash/"
+                "segment 0, window 0/y/num"
+            ),
+        )
+        for annotation in mutation_annotations:
+            variable = next(
+                item for item in system.variables if item.name == annotation
+            )
+            assigned = system.witness_value(variable)
+            self.assertIsNotNone(assigned)
+            replacement = (
+                1 - assigned
+                if assigned in (0, 1)
+                else (assigned + 1) % SCALAR_MODULUS
+            )
+            with self.subTest(variable=annotation):
+                self.assertEqual(
+                    _local_failed_rows(system, variable.index, replacement),
+                    _reference_failed_rows(
+                        reference, variable.index, replacement
+                    ),
+                )
+
+        root_value = system.witness_value(result.root_variable)
+        self.assertIsNotNone(root_value)
+        self.assertEqual(
+            _local_failed_rows(
+                system, result.root_variable.index, root_value + 1
+            ),
+            _reference_failed_rows(
+                reference, result.root_variable.index, root_value + 1
+            ),
+        )
+
+    def test_merkle_invalid_inputs_reject_before_mutation(self) -> None:
+        system = R1CS()
+        system.alloc_private("existing", 0)
+        leaf_variable = system.alloc_private("leaf/num", 1)
+        unassigned_leaf = system.alloc_private("unassigned leaf", None)
+        foreign_system = R1CS()
+        foreign = foreign_system.alloc_private("foreign sibling", 1)
+        invalid_calls = (
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, -1, []
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, SCALAR_MODULUS, []
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, True, []  # type: ignore[arg-type]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, None  # type: ignore[arg-type]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, None, 1, []  # type: ignore[arg-type]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, foreign, 1, []  # type: ignore[arg-type]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, unassigned_leaf, 1, []
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 2, []
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, [(None, False)]  # type: ignore[list-item]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, [(SCALAR_MODULUS, False)]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, [(foreign, False)]  # type: ignore[list-item]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, [(1, 0)]  # type: ignore[list-item]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, [(1, None)]  # type: ignore[list-item]
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, [(1, False)] * 33
+            ),
+            lambda: constrain_spend_merkle_authentication_path(
+                system, leaf_variable, 1, [(1, False, 2)]  # type: ignore[list-item]
+            ),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call):
+                before_variables = len(system.variables)
+                before_rows = system.constraint_count
+                with self.assertRaises((R1CSError, TypeError)):
+                    call()
+                self.assertEqual(len(system.variables), before_variables)
+                self.assertEqual(system.constraint_count, before_rows)
+
+        empty_leaf = system.alloc_private("empty leaf/num", 5)
+        empty_path = constrain_spend_merkle_authentication_path(
+            system, empty_leaf, 5, []
+        )
+        self.assertEqual(empty_path.root_value, 5)
+        self.assertEqual(system.witness_value(empty_path.root_variable), 5)
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,

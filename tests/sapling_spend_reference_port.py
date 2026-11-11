@@ -77,6 +77,15 @@ class NoteCommitmentResult:
     commitment_witness: Point
 
 
+@dataclass(frozen=True)
+class MerkleAuthenticationResult:
+    leaf_variable: Variable
+    position_bits: tuple[Variable, ...]
+    path_nodes: tuple[Variable, ...]
+    root_variable: Variable
+    root_value: int
+
+
 def spend_edwards_to_montgomery_coordinates(
     point: Point,
 ) -> tuple[int, int] | None:
@@ -514,6 +523,147 @@ def constrain_spend_pedersen_hash(
     return PedersenHashResult(
         edwards_accumulator_variables, edwards_accumulator_witness
     )
+
+
+def constrain_spend_merkle_authentication_path(
+    system: R1CS,
+    leaf_variable: Variable,
+    leaf_value: int,
+    authentication_path: tuple[tuple[int, bool], ...]
+    | list[tuple[int, bool]],
+    label: str = "merkle tree hash",
+) -> MerkleAuthenticationResult:
+    """Port Spend's per-level direction, ordering, and Merkle-root logic."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(leaf_variable, Variable):
+        raise TypeError("Merkle leaf must be an allocated field variable")
+    if type(leaf_value) is not int or not 0 <= leaf_value < SCALAR_MODULUS:
+        raise R1CSError("Merkle leaf must be a canonical assigned field element")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if not isinstance(authentication_path, (tuple, list)):
+        raise TypeError("authentication path must be a tuple or list")
+    if len(authentication_path) > 32:
+        raise R1CSError("Sapling authentication path exceeds 32 levels")
+    system.require_owned(leaf_variable)
+    if system.witness_value(leaf_variable) != leaf_value:
+        raise R1CSError("Merkle leaf witness does not match its assigned variable")
+    for level, entry in enumerate(authentication_path):
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            raise TypeError("authentication path entries must be (sibling, direction)")
+        sibling, direction = entry
+        if type(sibling) is not int or not 0 <= sibling < SCALAR_MODULUS:
+            raise R1CSError(f"authentication path sibling {level} is out of range")
+        if type(direction) is not bool:
+            raise TypeError(f"authentication path direction {level} must be boolean")
+
+    current_value = leaf_value
+    current_variable = leaf_variable
+    position_bits: list[Variable] = []
+    path_nodes: list[Variable] = []
+
+    for level, (sibling_value, direction) in enumerate(authentication_path):
+        level_label = f"{label} {level}"
+        position = system.alloc_private(
+            f"{level_label}/position bit/boolean", int(direction)
+        )
+        system.enforce(
+            1 - position.lc(),
+            position,
+            0,
+            f"{level_label}/position bit/boolean constraint",
+        )
+        position_bits.append(position)
+
+        sibling = system.alloc_private(
+            f"{level_label}/path element/num", sibling_value
+        )
+        path_nodes.append(sibling)
+
+        left_value, right_value = (
+            (sibling_value, current_value)
+            if direction
+            else (current_value, sibling_value)
+        )
+        left = system.alloc_private(
+            f"{level_label}/conditional reversal of preimage/"
+            "conditional reversal result 1/num",
+            left_value,
+        )
+        system.enforce(
+            current_variable.lc() - sibling.lc(),
+            position,
+            current_variable.lc() - left.lc(),
+            f"{level_label}/conditional reversal of preimage/"
+            "first conditional reversal",
+        )
+        right = system.alloc_private(
+            f"{level_label}/conditional reversal of preimage/"
+            "conditional reversal result 2/num",
+            right_value,
+        )
+        system.enforce(
+            sibling.lc() - current_variable.lc(),
+            position,
+            sibling.lc() - right.lc(),
+            f"{level_label}/conditional reversal of preimage/"
+            "second conditional reversal",
+        )
+
+        current_bits = _constrain_spend_unchecked_field_bits(
+            system, left, left_value, f"{level_label}/ul into bits"
+        )
+        sibling_bits = _constrain_spend_unchecked_field_bits(
+            system, right, right_value, f"{level_label}/ur into bits"
+        )
+        personalization = tuple(
+            bool((level >> bit) & 1) for bit in range(6)
+        )
+        preimage = current_bits + sibling_bits
+        hash_result = constrain_spend_pedersen_hash(
+            system,
+            preimage,
+            f"{level_label}/computation of pedersen hash",
+            personalization,
+        )
+        current_variable = hash_result.variables.u
+        current_value = hash_result.witness.u
+
+    return MerkleAuthenticationResult(
+        leaf_variable,
+        tuple(position_bits),
+        tuple(path_nodes),
+        current_variable,
+        current_value,
+    )
+
+
+def _constrain_spend_unchecked_field_bits(
+    system: R1CS, variable: Variable, value: int, label: str
+) -> tuple[Variable, ...]:
+    bits: list[Variable] = []
+    for index in range(SCALAR_MODULUS.bit_length()):
+        bit = system.alloc_private(
+            f"{label}/bit {index}/boolean", (value >> index) & 1
+        )
+        system.enforce(
+            1 - bit.lc(),
+            bit,
+            0,
+            f"{label}/bit {index}/boolean constraint",
+        )
+        bits.append(bit)
+    reconstruction = system.linear_combination(
+        tuple((bit, 1 << index) for index, bit in enumerate(bits))
+    )
+    system.enforce(
+        0,
+        0,
+        reconstruction - variable.lc(),
+        f"{label}/unpacking constraint",
+    )
+    return tuple(bits)
 
 
 def constrain_spend_note_commitment(

@@ -108,7 +108,7 @@ or matrix.
 | `g_d`, non-small-order check, `pk_d = [ivk]g_d` | `constrain_jubjub_point`; `constrain_jubjub_not_small_order`; `constrain_jubjub_scalar_mul` | **Different implementation order.** Local serializes `pk_d` before value commitment; the reference does so after `cv` inputization. Relation semantics are covered. |
 | `expose_value_commitment` | `constrain_sapling_value_commitment` and allocations in `constrain_sapling_spend` | **Different implementation order.** Local allocates both bit decompositions before the relation; the reference interleaves value multiplication and `rcv` decomposition/multiplication. Relation semantics are covered. |
 | Note contents, Pedersen note hash, `rcm` randomization | `constrain_note_commitment`; `constrain_pedersen_hash`; fixed-base and point-addition helpers | **Requires further investigation.** Exact Bellman lookup, conversion, allocation, and row factorization parity is not established by relation matching. |
-| Merkle level direction, sibling selection and Pedersen hash | `make_merkle_path_witness`; `constrain_merkle_authentication_path` | **Different implementation.** Local allocates a packed 32-bit position and reconstructs it; Bellman passes direction bits directly. The path relation is represented. |
+| Merkle level direction, sibling selection and Pedersen hash | Isolated test-only `constrain_spend_merkle_authentication_path` in `tests/sapling_spend_reference_port.py`; production `make_merkle_path_witness` and `constrain_merkle_authentication_path` remain unchanged | **Isolated path trace matches Bellman for tested depths and witnesses.** The production packed-position implementation remains different and is not changed by this port. |
 | Conditional anchor | `constrain_sapling_conditional_anchor` | **Different implementation.** Bellman allocates `rt`, enforces the root/value row, and binds `rt` to public anchor with another row; ZyCoin directly relates root and public anchor in one row. The projected relation is the same. |
 | `g^position`, `rho`, `rho.repr`, nullifier BLAKE2s | `constrain_sapling_nullifier_rho`; `constrain_jubjub_repr`; `constrain_sapling_nullifier_hash` | **Already equivalent at relation level; requires further investigation for exact layout.** The local-only packed-position representation helper remains. |
 | Nullifier multipacking | `make_sapling_nullifier_multipacking_witness`; `constrain_sapling_nullifier_multipacking` | **Already equivalent at relation level.** 256 digest bits become a 254-bit chunk and a 2-bit chunk; ordered-row parity remains part of the full-matrix gate. |
@@ -632,3 +632,57 @@ It does not establish full Spend matrix alignment, upstream Bellman
 full-circuit matrix equivalence, or official parameter compatibility.
 Parameter-to-circuit binding and ceremony validity remain separately
 unverified.
+
+### Source-faithful Merkle authentication path
+
+The pinned `Spend::synthesize` in `sapling-crypto/src/circuit.rs` walks the
+authentication path in ascending level order. At each level it allocates the
+position bit and sibling, calls Bellman's `AllocatedNum::conditionally_reverse`
+on the current node and sibling, decomposes the selected left and right field
+elements with non-strict `to_bits_le`, and passes their concatenated bits to
+`pedersen_hash` with `Personalization::MerkleTree(level)`. The next level's
+current node is the resulting hash's `u` coordinate. The personalization is
+six little-endian bits of the level (`(level >> bit) & 1`); the path direction
+bits are likewise consumed in least-significant-level-first order. The
+conditional anchor check is a subsequent Spend stage and is outside this
+isolated path helper.
+
+`constrain_spend_merkle_authentication_path` in
+`tests/sapling_spend_reference_port.py` ports this path sequence using the
+verified Bellman-trace Pedersen helper. Its current leaf is supplied as an
+already allocated variable, matching the source's use of the note commitment
+coordinate; the fixture's initial leaf allocation is setup input, not a path
+allocation. Each level preserves the source annotations and enforcement order:
+direction Boolean, sibling, two conditional reversals, each side's 255
+Boolean bits and reconstruction row, then the level-personalized Pedersen
+hash. The helper validates leaf ownership/assignment and all path entries
+before adding variables or constraints. Empty paths return the supplied leaf.
+The source `Spend::synthesize` uses 32 levels; the isolated helper additionally
+permits shallower paths for boundary testing and rejects depths above 32.
+
+The test-only Bellman exporter traces all allocations, assignments, labels,
+ordered A/B/C rows, satisfaction, and root values for six path cases: depth 32
+all-left, all-right, alternating and mixed directions; depth 1 right; and a
+depth 31 mixed path. Exact trace parity held in every case. Including the fixture's initial leaf input,
+the four depth-32 traces each contain 44,193 auxiliary allocations and 44,224
+ordered constraints; the depth-1 trace contains 1,382 auxiliary allocations
+and 1,382 constraints; the depth-31 trace contains 42,812 auxiliary
+allocations and 42,842 constraints. Mutation tests for a direction bit,
+sibling, reversal result, Pedersen lookup witness, and final root produced the
+same failed row indices as Bellman. Invalid, foreign, unassigned, and
+inconsistent leaf inputs, plus malformed/out-of-range siblings, invalid
+direction types, and excessive path depths, were rejected before the target
+system changed.
+
+The focused reference-port regression passed **31 tests / 322,301
+subtests**, including all six complete ordered path traces and mutation /
+pre-mutation rejection checks. The related Sapling gadget, Spend circuit, and
+compatibility-manifest regression modules passed **77 tests / 354 subtests**;
+together these selected suites passed **108 tests / 322,655 subtests**. Ruff,
+Python syntax, Rust formatting/build, and `git diff --check` all passed. The
+full Sapling suite was not run because it includes the prohibited
+synthetic-setup regression. These results establish an isolated
+authentication-path comparison only. The production packed-position path
+was not changed; the conditional anchor stage and full Spend synthesis are not
+included. Full Spend matrix alignment, upstream Bellman full-circuit matrix
+equivalence, and official parameter compatibility remain **Unverified**.

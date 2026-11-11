@@ -45,6 +45,7 @@ struct Export {
     signed_lookup: SignedLookupExport,
     pedersen: PedersenExport,
     note_commitment: NoteCommitmentExport,
+    merkle_authentication: MerkleAuthenticationExport,
 }
 
 #[derive(Serialize)]
@@ -209,6 +210,23 @@ struct NoteCommitmentCase {
     commitment_v: String,
     hash_u: String,
     hash_v: String,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct MerkleAuthenticationExport {
+    cases: Vec<MerkleAuthenticationCase>,
+}
+
+#[derive(Serialize)]
+struct MerkleAuthenticationCase {
+    name: String,
+    leaf: String,
+    directions: Vec<bool>,
+    siblings: Vec<String>,
+    root: String,
     satisfied: bool,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
@@ -560,9 +578,15 @@ fn source_pedersen_tables() -> Vec<Vec<Vec<(Scalar, Scalar)>>> {
 fn source_pedersen_hash<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     message_bits: &[Boolean],
+    personalization_bits: &[bool],
     tables: &[Vec<Vec<(Scalar, Scalar)>>],
 ) -> Result<SourcePoint, SynthesisError> {
-    let mut bits = vec![Boolean::constant(true); 6];
+    let mut bits: Vec<Boolean> = personalization_bits
+        .iter()
+        .copied()
+        .map(Boolean::constant)
+        .collect();
+    assert_eq!(bits.len(), 6);
     bits.extend(message_bits.iter().cloned());
     let boolean_false = Boolean::constant(false);
     let mut bit_offset = 0;
@@ -652,6 +676,7 @@ fn source_note_commitment<CS: ConstraintSystem<Scalar>>(
     let hash = source_pedersen_hash(
         cs.namespace(|| "note content hash"),
         &note_contents,
+        &[true; 6],
         pedersen_tables,
     )?;
 
@@ -804,6 +829,99 @@ fn build_note_commitment_export() -> Result<NoteCommitmentExport, SynthesisError
     })
 }
 
+fn source_merkle_authentication_path<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    leaf: &AllocatedNum<Scalar>,
+    directions: &[bool],
+    siblings: &[Scalar],
+    pedersen_tables: &[Vec<Vec<(Scalar, Scalar)>>],
+) -> Result<AllocatedNum<Scalar>, SynthesisError> {
+    if directions.len() != siblings.len() {
+        return Err(SynthesisError::Unsatisfiable);
+    }
+    let mut current = leaf.clone();
+    for (level, (direction, sibling_value)) in directions.iter().zip(siblings.iter()).enumerate() {
+        let mut level_cs = cs.namespace(|| format!("merkle tree hash {level}"));
+        let cur_is_right = Boolean::from(AllocatedBit::alloc(
+            level_cs.namespace(|| "position bit"),
+            Some(*direction),
+        )?);
+
+        let path_element =
+            AllocatedNum::alloc(level_cs.namespace(|| "path element"), || Ok(*sibling_value))?;
+        let (left, right) = AllocatedNum::conditionally_reverse(
+            level_cs.namespace(|| "conditional reversal of preimage"),
+            &current,
+            &path_element,
+            &cur_is_right,
+        )?;
+        let mut preimage = left.to_bits_le(level_cs.namespace(|| "ul into bits"))?;
+        preimage.extend(right.to_bits_le(level_cs.namespace(|| "ur into bits"))?);
+        let personalization: Vec<bool> = (0..6).map(|bit| (level >> bit) & 1 == 1).collect();
+        current = source_pedersen_hash(
+            level_cs.namespace(|| "computation of pedersen hash"),
+            &preimage,
+            &personalization,
+            pedersen_tables,
+        )?
+        .u;
+    }
+    Ok(current)
+}
+
+fn build_merkle_authentication_export() -> Result<MerkleAuthenticationExport, SynthesisError> {
+    let pedersen_tables = source_pedersen_tables();
+    let cases: Vec<(String, Vec<bool>)> = vec![
+        ("all_left_position_zero".to_owned(), vec![false; 32]),
+        ("all_right_position_maximum".to_owned(), vec![true; 32]),
+        (
+            "alternating_directions".to_owned(),
+            (0..32).map(|level| level % 2 == 1).collect(),
+        ),
+        (
+            "mixed_directions".to_owned(),
+            (0..32).map(|level| (level * 7 + 3) % 11 < 5).collect(),
+        ),
+        ("depth_one_right".to_owned(), vec![true]),
+        (
+            "depth_thirty_one_mixed".to_owned(),
+            (0..31).map(|level| (level * 5 + 1) % 9 < 4).collect(),
+        ),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(name, directions)| {
+            let leaf_value = Scalar::from(0x0123_4567_89ab_cdef_u64);
+            let siblings: Vec<Scalar> = (0..directions.len())
+                .map(|level| Scalar::from(1000 + level as u64))
+                .collect();
+            let mut system = TraceConstraintSystem::default();
+            let leaf = AllocatedNum::alloc(system.namespace(|| "leaf"), || Ok(leaf_value))?;
+            let root = source_merkle_authentication_path(
+                &mut system,
+                &leaf,
+                &directions,
+                &siblings,
+                &pedersen_tables,
+            )?;
+            Ok(MerkleAuthenticationCase {
+                name,
+                leaf: scalar_decimal(leaf_value),
+                directions,
+                siblings: siblings
+                    .iter()
+                    .map(|value| scalar_decimal(*value))
+                    .collect(),
+                root: scalar_decimal(root.get_value().ok_or(SynthesisError::AssignmentMissing)?),
+                satisfied: system.is_satisfied(),
+                variables: system.variables,
+                constraints: system.constraints,
+            })
+        })
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+    Ok(MerkleAuthenticationExport { cases })
+}
+
 fn source_montgomery_into_edwards<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     point: &SourceMontgomeryPoint,
@@ -950,6 +1068,7 @@ fn build_pedersen_export() -> Result<PedersenExport, SynthesisError> {
             let output = source_pedersen_hash(
                 system.namespace(|| "pedersen hash"),
                 &allocated_bits,
+                &[true; 6],
                 &tables,
             )?;
             Ok(PedersenCase {
@@ -2049,7 +2168,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v9",
+        format: "bellman-sapling-edwards-point-reference-v10",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -2064,6 +2183,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         signed_lookup: build_signed_lookup_export()?,
         pedersen: build_pedersen_export()?,
         note_commitment: build_note_commitment_export()?,
+        merkle_authentication: build_merkle_authentication_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
