@@ -43,6 +43,7 @@ struct Export {
     montgomery_mappings: Vec<MontgomeryMapping>,
     montgomery_cases: Vec<MontgomeryCase>,
     signed_lookup: SignedLookupExport,
+    pedersen: PedersenExport,
 }
 
 #[derive(Serialize)]
@@ -164,6 +165,23 @@ struct SignedLookupCase {
     negative: bool,
     output_x: String,
     output_y: String,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct PedersenExport {
+    tables: Vec<Vec<Vec<PointRecord>>>,
+    cases: Vec<PedersenCase>,
+}
+
+#[derive(Serialize)]
+struct PedersenCase {
+    name: String,
+    message_bits: Vec<bool>,
+    output_u: String,
+    output_v: String,
     satisfied: bool,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
@@ -486,6 +504,104 @@ fn source_montgomery_add<CS: ConstraintSystem<Scalar>>(
     })
 }
 
+fn source_pedersen_tables() -> Vec<Vec<Vec<(Scalar, Scalar)>>> {
+    sapling_crypto::constants::PEDERSEN_HASH_GENERATORS
+        .iter()
+        .cloned()
+        .map(|mut generator| {
+            let mut segment = Vec::with_capacity(63);
+            for _ in 0..63 {
+                let mut multiple = generator;
+                let mut window = Vec::with_capacity(4);
+                for _ in 0..4 {
+                    window.push(
+                        source_edwards_to_montgomery(ExtendedPoint::from(multiple))
+                            .expect("pinned Pedersen window points are finite"),
+                    );
+                    multiple += generator;
+                }
+                segment.push(window);
+                for _ in 0..4 {
+                    generator = generator.double();
+                }
+            }
+            segment
+        })
+        .collect()
+}
+
+fn source_pedersen_hash<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    message_bits: &[Boolean],
+    tables: &[Vec<Vec<(Scalar, Scalar)>>],
+) -> Result<SourcePoint, SynthesisError> {
+    let mut bits = vec![Boolean::constant(true); 6];
+    bits.extend(message_bits.iter().cloned());
+    let boolean_false = Boolean::constant(false);
+    let mut bit_offset = 0;
+    let mut edwards_result: Option<SourcePoint> = None;
+    let mut segment_index = 0;
+
+    while bit_offset < bits.len() {
+        let segment_tables = tables
+            .get(segment_index)
+            .ok_or(SynthesisError::Unsatisfiable)?;
+        let mut segment_result: Option<SourceMontgomeryPoint> = None;
+        let mut window_index = 0;
+        while bit_offset < bits.len() && window_index < segment_tables.len() {
+            let a = bits[bit_offset].clone();
+            let b = bits
+                .get(bit_offset + 1)
+                .cloned()
+                .unwrap_or_else(|| boolean_false.clone());
+            let c = bits
+                .get(bit_offset + 2)
+                .cloned()
+                .unwrap_or_else(|| boolean_false.clone());
+            bit_offset += 3;
+
+            let coordinates = &segment_tables[window_index];
+            let selected = lookup3_xy_with_conditional_negation(
+                cs.namespace(|| format!("segment {segment_index}, window {window_index}")),
+                &[a, b, c],
+                coordinates,
+            )?;
+            let selected = SourceMontgomeryPoint {
+                x: selected.0,
+                y: selected.1,
+            };
+            segment_result = Some(match segment_result {
+                None => selected,
+                Some(accumulator) => source_montgomery_add(
+                    cs.namespace(|| {
+                        format!("addition of segment {segment_index}, window {window_index}")
+                    }),
+                    &selected,
+                    &accumulator,
+                )?,
+            });
+            window_index += 1;
+        }
+
+        let montgomery = segment_result.ok_or(SynthesisError::Unsatisfiable)?;
+        let converted = source_montgomery_into_edwards(
+            cs.namespace(|| format!("conversion of segment {segment_index} into edwards")),
+            &montgomery,
+        )?;
+        edwards_result = Some(match edwards_result {
+            None => converted,
+            Some(accumulator) => source_add(
+                cs.namespace(|| format!("addition of segment {segment_index} to accumulator")),
+                &converted,
+                &accumulator,
+            )?,
+        });
+        segment_index += 1;
+    }
+
+    edwards_result.ok_or(SynthesisError::Unsatisfiable)
+}
+
 fn source_montgomery_into_edwards<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     point: &SourceMontgomeryPoint,
@@ -604,6 +720,73 @@ fn build_signed_lookup_export() -> Result<SignedLookupExport, SynthesisError> {
             .map(|(x, y)| PointRecord {
                 u: scalar_decimal(*x),
                 v: scalar_decimal(*y),
+            })
+            .collect(),
+        cases,
+    })
+}
+
+fn build_pedersen_export() -> Result<PedersenExport, SynthesisError> {
+    let tables = source_pedersen_tables();
+    let cases: Vec<(String, Vec<bool>)> = vec![
+        ("empty_message".to_owned(), Vec::new()),
+        ("zero_window_boundary".to_owned(), vec![false; 183]),
+        ("next_segment_boundary".to_owned(), vec![false; 184]),
+        (
+            "alternating_multi_segment".to_owned(),
+            (0..184).map(|index| index % 2 == 0).collect(),
+        ),
+        ("all_zero_all_generators".to_owned(), vec![false; 1128]),
+        ("all_one_all_generators".to_owned(), vec![true; 1128]),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(name, message_bits)| {
+            let mut system = TraceConstraintSystem::default();
+            let allocated_bits =
+                allocate_source_bits(system.namespace(|| "input bits"), &message_bits)?;
+            let output = source_pedersen_hash(
+                system.namespace(|| "pedersen hash"),
+                &allocated_bits,
+                &tables,
+            )?;
+            Ok(PedersenCase {
+                name,
+                message_bits,
+                output_u: scalar_decimal(
+                    output
+                        .u
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                output_v: scalar_decimal(
+                    output
+                        .v
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                satisfied: system.is_satisfied(),
+                variables: system.variables,
+                constraints: system.constraints,
+            })
+        })
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+    Ok(PedersenExport {
+        tables: tables
+            .iter()
+            .map(|segment| {
+                segment
+                    .iter()
+                    .map(|window| {
+                        window
+                            .iter()
+                            .map(|(x, y)| PointRecord {
+                                u: scalar_decimal(*x),
+                                v: scalar_decimal(*y),
+                            })
+                            .collect()
+                    })
+                    .collect()
             })
             .collect(),
         cases,
@@ -1664,7 +1847,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v7",
+        format: "bellman-sapling-edwards-point-reference-v8",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -1677,6 +1860,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         montgomery_mappings: build_montgomery_mappings(),
         montgomery_cases: build_montgomery_cases()?,
         signed_lookup: build_signed_lookup_export()?,
+        pedersen: build_pedersen_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

@@ -509,3 +509,64 @@ It does not establish all Pedersen generator-window values, complete
 Pedersen-hash parity, full Spend matrix alignment, or official parameter
 compatibility. Complete multi-window Pedersen integration and
 note-commitment verification remain unverified.
+
+### Complete Pedersen hash path
+
+The pinned `circuit::pedersen_hash::pedersen_hash` prepends the six constant
+true bits returned by `Personalization::get_bits` for
+`Personalization::NoteCommitment`, then consumes the message in three-bit
+windows, padding the final window with constant-false bits. The first two
+bits select one of `[g, 2g, 3g, 4g]`; the third conditionally negates its
+Montgomery y coordinate. In `circuit::constants`,
+`generate_pedersen_circuit_generators` maps each of the six
+`PEDERSEN_HASH_GENERATORS` to 63 windows using `to_montgomery_coords`.
+Within each segment, the window base advances by four doublings (`16 *
+previous_base`). The complete table therefore contains **6 generators x 63
+windows x 4 points = 1,512 Montgomery points**.
+
+Each selected Montgomery point is accumulated in source order as
+`selected.add(previous_segment_result)`. The segment result is converted with
+`MontgomeryPoint::into_edwards`; subsequent segments are accumulated as
+`converted_segment.add(previous_edwards_result)`. The isolated port in
+`tests/sapling_spend_reference_port.py` composes only the previously verified
+signed lookup, Montgomery addition/conversion, and Edwards addition helpers.
+It remains test-only and does not change production Spend or Output.
+
+The Rust/Bellman harness exports every generated table coordinate and traces
+the complete lookup, Montgomery, conversion, and segment-addition sequence.
+It uses Bellman's actual `lookup3_xy_with_conditional_negation`; the pinned
+Sapling Montgomery and Edwards operations are mirrored in the test harness
+because those circuit methods are private. The Python and reference tables
+match coordinate-for-coordinate across all 1,512 points. Full ordered traces
+also match for all cases:
+
+| Input case | Auxiliary variables | Ordered constraints |
+|---|---:|---:|
+| Empty message | 7 | 7 |
+| 183 zero bits (one-segment boundary) | 495 | 495 |
+| 184 zero bits (next-segment boundary) | 505 | 505 |
+| 184 alternating bits (multi-segment) | 505 | 505 |
+| 1,128 zero bits (all generators) | 3,040 | 3,040 |
+| 1,128 one bits (all generators) | 3,040 | 3,040 |
+
+For each trace, every allocation index and annotation, witness assignment,
+row label, ordered A/B/C expression, output coordinate, and satisfaction
+result matched. Mutating a message bit/sign selector, lookup-y assignment,
+Montgomery-addition intermediate, or final output coordinate yielded the
+same failed row indices as the reference. Unassigned, foreign, malformed,
+non-Boolean, out-of-range, and over-capacity inputs reject before the hash
+helper allocates variables or constraints.
+
+Focused Pedersen differential coverage passed **4 tests / 8,487 subtests**.
+The combined isolated reference-port, Sapling gadget, Spend circuit, and
+compatibility-manifest regressions passed **102 tests / 39,194 subtests**.
+The Rust exporter was built and run by these differential tests; Rust
+formatting, Ruff, Python syntax checks, and `git diff --check` passed. The
+full Sapling suite was not run because it includes the prohibited
+synthetic-setup regression.
+
+This establishes parity for the complete Pedersen hash path and tested input
+cases only. It does not establish note-commitment parity, full Spend matrix
+alignment, upstream Bellman full-circuit matrix equivalence, or official
+parameter compatibility. Parameter-to-circuit binding and ceremony validity
+remain separately unverified.

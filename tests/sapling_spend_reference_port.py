@@ -12,6 +12,7 @@ from src.jubjub import (
     CURVE_D,
     IDENTITY,
     Point,
+    find_group_hash,
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, LinearCombination, R1CSError, Variable
@@ -57,6 +58,12 @@ class SignedLookupWitness:
     y: MontgomeryNumberWitness
     selected_index: int
     negative: bool
+
+
+@dataclass(frozen=True)
+class PedersenHashResult:
+    variables: EdwardsPointWitnessVariables
+    witness: Point
 
 
 def spend_edwards_to_montgomery_coordinates(
@@ -356,6 +363,146 @@ def _signed_lookup_expression(
     ):
         expression += _spend_boolean_lc(system, bit) * coefficient
     return expression
+
+
+@lru_cache(maxsize=1)
+def spend_pedersen_montgomery_tables() -> tuple[
+    tuple[tuple[tuple[int, int], ...], ...], ...
+]:
+    """Generate the six pinned Pedersen generator tables independently."""
+    tables = []
+    for generator_index in range(6):
+        generator = find_group_hash(b"Zcash_PH", generator_index.to_bytes(4, "little"))
+        windows = []
+        window_base = generator
+        for _ in range(63):
+            entries = []
+            multiple = window_base
+            for _ in range(4):
+                coordinates = spend_edwards_to_montgomery_coordinates(multiple)
+                if coordinates is None:
+                    raise R1CSError("Pedersen generator table contains infinity")
+                entries.append(coordinates)
+                multiple = multiple + window_base
+            windows.append(tuple(entries))
+            window_base = window_base.multiply(16)
+        tables.append(tuple(windows))
+    return tuple(tables)
+
+
+def constrain_spend_pedersen_hash(
+    system: R1CS,
+    message_bits: tuple[SpendBoolean, ...] | list[SpendBoolean],
+    label: str = "pedersen hash",
+    personalization_bits: tuple[SpendBoolean, ...] | list[SpendBoolean] = (
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+    ),
+) -> PedersenHashResult:
+    """Port the pinned circuit Pedersen hash over Montgomery segment tables."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if len(personalization_bits) != 6:
+        raise R1CSError("Pedersen personalization requires six bits")
+    for bit in (*personalization_bits, *message_bits):
+        if isinstance(bit, Variable):
+            system.require_owned(bit)
+            if system.witness_value(bit) not in (0, 1):
+                raise R1CSError("Pedersen input bits must be assigned booleans")
+        elif type(bit) is not bool:
+            raise TypeError("Pedersen input bits must be variables or booleans")
+
+    all_bits = tuple(personalization_bits) + tuple(message_bits)
+    if not all_bits:
+        raise R1CSError("Pedersen input must not be empty")
+    chunk_count = (len(all_bits) + 2) // 3
+    segment_count = (chunk_count + 62) // 63
+    if segment_count > 6:
+        raise R1CSError("Pedersen input exceeds the pinned generator capacity")
+    tables = spend_pedersen_montgomery_tables()
+    if len(tables) != 6 or any(
+        len(segment) != 63 or any(len(window) != 4 for window in segment)
+        for segment in tables
+    ):
+        raise R1CSError("Pedersen generator table has an invalid shape")
+    for segment in tables:
+        for window in segment:
+            for x, y in window:
+                if (
+                    type(x) is not int
+                    or type(y) is not int
+                    or not 0 <= x < SCALAR_MODULUS
+                    or not 0 <= y < SCALAR_MODULUS
+                ):
+                    raise R1CSError("Pedersen table has noncanonical coordinates")
+
+    edwards_accumulator_variables: EdwardsPointWitnessVariables | None = None
+    edwards_accumulator_witness: Point | None = None
+    bit_offset = 0
+    for segment_index in range(segment_count):
+        segment_window_count = min(63, chunk_count - segment_index * 63)
+        segment_accumulator: MontgomeryPointWitness | None = None
+        for window_index in range(segment_window_count):
+            chunk = all_bits[bit_offset : bit_offset + 3]
+            bit_offset += len(chunk)
+            selectors = chunk + (False,) * (3 - len(chunk))
+            lookup = constrain_spend_signed_montgomery_lookup(
+                system,
+                selectors,
+                tables[segment_index][window_index],
+                f"{label}/segment {segment_index}, window {window_index}",
+            )
+            selected = MontgomeryPointWitness(lookup.x, lookup.y)
+            if segment_accumulator is None:
+                segment_accumulator = selected
+            else:
+                segment_accumulator = constrain_spend_montgomery_add(
+                    system,
+                    selected,
+                    segment_accumulator,
+                    f"{label}/addition of segment {segment_index}, window {window_index}",
+                )
+        if segment_accumulator is None:
+            raise R1CSError("Pedersen segment has no lookup windows")
+
+        converted_variables = constrain_spend_montgomery_into_edwards(
+            system,
+            segment_accumulator,
+            f"{label}/conversion of segment {segment_index} into edwards",
+        )
+        converted_witness = Point(
+            system.witness_value(converted_variables.u),
+            system.witness_value(converted_variables.v),
+        )
+        if edwards_accumulator_variables is None:
+            edwards_accumulator_variables = converted_variables
+            edwards_accumulator_witness = converted_witness
+        else:
+            assert edwards_accumulator_witness is not None
+            edwards_accumulator_variables = constrain_spend_edwards_point_add(
+                system,
+                converted_variables,
+                converted_witness,
+                edwards_accumulator_variables,
+                edwards_accumulator_witness,
+                f"{label}/addition of segment {segment_index} to accumulator",
+            )
+            edwards_accumulator_witness = Point(
+                system.witness_value(edwards_accumulator_variables.u),
+                system.witness_value(edwards_accumulator_variables.v),
+            )
+
+    if edwards_accumulator_variables is None or edwards_accumulator_witness is None:
+        raise R1CSError("Pedersen hash produced no segment result")
+    return PedersenHashResult(
+        edwards_accumulator_variables, edwards_accumulator_witness
+    )
 
 
 def _validate_point_assignment(

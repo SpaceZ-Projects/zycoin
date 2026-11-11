@@ -18,9 +18,11 @@ from sapling_spend_reference_port import (
     constrain_spend_fixed_base_mul,
     constrain_spend_montgomery_add,
     constrain_spend_montgomery_into_edwards,
+    constrain_spend_pedersen_hash,
     constrain_spend_signed_montgomery_lookup,
     spend_edwards_to_montgomery_coordinates,
     spend_fixed_base_tables,
+    spend_pedersen_montgomery_tables,
 )
 
 from src.bls12_381 import SCALAR_MODULUS
@@ -165,7 +167,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v7":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v8":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -200,6 +202,8 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.signed_lookup_cases = {
             case["name"]: case for case in cls.signed_lookup["cases"]
         }
+        cls.pedersen = cls.reference["pedersen"]
+        cls.pedersen_cases = {case["name"]: case for case in cls.pedersen["cases"]}
 
     def assert_case_matches(
         self, name: str, point: Point, *, expected_satisfied: bool = True
@@ -1180,6 +1184,135 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                 call()
             self.assertEqual(len(system.variables), before_variables)
             self.assertEqual(system.constraint_count, before_rows)
+
+    def test_pedersen_generator_windows_match_pinned_bellman_tables(self) -> None:
+        local_tables = spend_pedersen_montgomery_tables()
+        self.assertEqual(len(local_tables), len(self.pedersen["tables"]))
+        for segment_index, (local_segment, reference_segment) in enumerate(
+            zip(local_tables, self.pedersen["tables"], strict=True)
+        ):
+            self.assertEqual(len(local_segment), 63)
+            self.assertEqual(len(reference_segment), 63)
+            for window_index, (local_window, reference_window) in enumerate(
+                zip(local_segment, reference_segment, strict=True)
+            ):
+                with self.subTest(segment=segment_index, window=window_index):
+                    self.assertEqual(len(local_window), 4)
+                    self.assertEqual(
+                        local_window,
+                        tuple(
+                            (int(point["u"]), int(point["v"]))
+                            for point in reference_window
+                        ),
+                    )
+
+    def test_pedersen_hash_matches_complete_bellman_traces(self) -> None:
+        for name, reference in self.pedersen_cases.items():
+            with self.subTest(case=name):
+                system = R1CS()
+                message_bits = _allocate_boolean_bits(
+                    system, reference["message_bits"], "input bits"
+                )
+                result = constrain_spend_pedersen_hash(system, message_bits)
+                self.assert_system_matches_reference(name, system, reference)
+                self.assertEqual(
+                    (
+                        system.witness_value(result.variables.u),
+                        system.witness_value(result.variables.v),
+                    ),
+                    (int(reference["output_u"]), int(reference["output_v"])),
+                )
+                self.assertEqual(
+                    result.witness,
+                    Point(int(reference["output_u"]), int(reference["output_v"])),
+                )
+
+    def test_pedersen_altered_witnesses_fail_on_identical_rows(self) -> None:
+        reference = self.pedersen_cases["alternating_multi_segment"]
+        system = R1CS()
+        message_bits = _allocate_boolean_bits(
+            system, reference["message_bits"], "input bits"
+        )
+        result = constrain_spend_pedersen_hash(system, message_bits)
+        self.assert_system_matches_reference(
+            "alternating_multi_segment", system, reference
+        )
+
+        message_bit_index = message_bits[0].index
+        invalid_boolean_value = 2
+        self.assertEqual(
+            _local_failed_rows(system, message_bit_index, invalid_boolean_value),
+            _reference_failed_rows(reference, message_bit_index, invalid_boolean_value),
+        )
+
+        sign_bit = message_bits[2]
+        sign_value = system.witness_value(sign_bit)
+        self.assertIn(sign_value, (0, 1))
+        self.assertEqual(
+            _local_failed_rows(system, sign_bit.index, 1 - sign_value),
+            _reference_failed_rows(reference, sign_bit.index, 1 - sign_value),
+        )
+
+        y_record = next(
+            record
+            for record in reference["variables"]
+            if record["annotation"] == "pedersen hash/segment 0, window 0/y/num"
+        )
+        y_index = _reference_index(y_record["identity"])
+        y_value = int.from_bytes(bytes.fromhex(y_record["assignment"]), "little")
+        self.assertEqual(
+            _local_failed_rows(system, y_index, y_value + 1),
+            _reference_failed_rows(reference, y_index, y_value + 1),
+        )
+
+        lambda_record = next(
+            record
+            for record in reference["variables"]
+            if record["annotation"]
+            == "pedersen hash/addition of segment 0, window 1/lambda/num"
+        )
+        lambda_index = _reference_index(lambda_record["identity"])
+        lambda_value = int.from_bytes(
+            bytes.fromhex(lambda_record["assignment"]), "little"
+        )
+        self.assertEqual(
+            _local_failed_rows(system, lambda_index, lambda_value + 1),
+            _reference_failed_rows(reference, lambda_index, lambda_value + 1),
+        )
+
+        output_u = result.variables.u
+        output_u_value = system.witness_value(output_u)
+        self.assertIsNotNone(output_u_value)
+        self.assertEqual(
+            _local_failed_rows(system, output_u.index, output_u_value + 1),
+            _reference_failed_rows(reference, output_u.index, output_u_value + 1),
+        )
+
+    def test_pedersen_invalid_bits_reject_before_mutation(self) -> None:
+        system = R1CS()
+        valid = system.alloc_private("valid bit", 1)
+        unassigned = system.alloc_private("unassigned bit", None)
+        out_of_range = system.alloc_private("out of range bit", 2)
+        foreign_system = R1CS()
+        foreign = foreign_system.alloc_private("foreign bit", 0)
+        invalid_arguments = (
+            lambda: constrain_spend_pedersen_hash(system, (unassigned,)),
+            lambda: constrain_spend_pedersen_hash(system, (out_of_range,)),
+            lambda: constrain_spend_pedersen_hash(system, (foreign,)),
+            lambda: constrain_spend_pedersen_hash(
+                system, (valid,), personalization_bits=(True,)
+            ),
+            lambda: constrain_spend_pedersen_hash(system, (valid, False, 1)),  # type: ignore[arg-type]
+            lambda: constrain_spend_pedersen_hash(system, (valid,) * (1128 + 1)),
+        )
+        for call in invalid_arguments:
+            with self.subTest(call=call):
+                before_variables = len(system.variables)
+                before_rows = system.constraint_count
+                with self.assertRaises((R1CSError, TypeError)):
+                    call()
+                self.assertEqual(len(system.variables), before_variables)
+                self.assertEqual(system.constraint_count, before_rows)
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,
