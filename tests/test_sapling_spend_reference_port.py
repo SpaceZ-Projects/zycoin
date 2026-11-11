@@ -7,15 +7,23 @@ import unittest
 from pathlib import Path
 
 from sapling_spend_reference_port import (
+    allocate_spend_fixed_base_scalar_bits,
     constrain_spend_edwards_point_add,
     constrain_spend_edwards_point_double,
     constrain_spend_edwards_point_not_small_order,
     constrain_spend_edwards_point_repr,
     constrain_spend_edwards_point_witness,
+    constrain_spend_fixed_base_mul,
+    spend_fixed_base_tables,
 )
 
 from src.bls12_381 import SCALAR_MODULUS
-from src.jubjub import CURVE_D, IDENTITY, Point
+from src.jubjub import (
+    CURVE_D,
+    IDENTITY,
+    Point,
+)
+from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, R1CSError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -134,7 +142,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v3":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v4":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -153,6 +161,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         }
         cls.representation_cases = {
             case["name"]: case for case in cls.reference["representations"]
+        }
+        cls.fixed_base = cls.reference["fixed_base"]
+        cls.fixed_base_cases = {
+            case["name"]: case for case in cls.fixed_base["cases"]
         }
 
     def assert_case_matches(
@@ -595,6 +607,163 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             ),
         )
         self.assertEqual(len(bits), 256)
+
+    def test_fixed_base_tables_and_all_lookup_selectors_match_bellman(self) -> None:
+        base = Point(int(self.fixed_base["base_u"]), int(self.fixed_base["base_v"]))
+        tables = spend_fixed_base_tables(base)
+        reference_tables = self.fixed_base["windows"]
+        self.assertEqual(len(tables), 84)
+        self.assertEqual(len(reference_tables), 84)
+        for window_index, (table, reference_table) in enumerate(
+            zip(tables, reference_tables, strict=True)
+        ):
+            with self.subTest(window=window_index):
+                self.assertEqual(len(table), 8)
+                self.assertEqual(len(reference_table), 8)
+                self.assertEqual(
+                    [(point.u, point.v) for point in table],
+                    [
+                        (int(point["u"]), int(point["v"]))
+                        for point in reference_table
+                    ],
+                )
+
+        for selector in range(8):
+            name = f"selector_{selector}"
+            reference = self.fixed_base_cases[name]
+            system = R1CS()
+            bits = allocate_spend_fixed_base_scalar_bits(
+                system, selector, 3
+            )
+            point = constrain_spend_fixed_base_mul(
+                system, bits, base
+            )
+            self.assertEqual(
+                (system.witness_value(point.u), system.witness_value(point.v)),
+                (int(reference["output_u"]), int(reference["output_v"])),
+            )
+            self.assert_system_matches_reference(name, system, reference)
+            self.assertEqual(
+                [system.witness_value(bit) for bit in bits],
+                [int(bit["value"]) for bit in reference["selectors"]],
+            )
+
+    def test_fixed_base_scalar_boundaries_and_full_window_parity(self) -> None:
+        base = Point(int(self.fixed_base["base_u"]), int(self.fixed_base["base_v"]))
+        case_scalars = {
+            "scalar_0": 0,
+            "scalar_1": 1,
+            "scalar_7": 7,
+            "scalar_8": 8,
+            "scalar_9": 9,
+            "scalar_63": 63,
+            "scalar_64": 64,
+            "scalar_65": 65,
+            "scalar_511": 511,
+            "scalar_512": 512,
+            "scalar_513": 513,
+            "u64_max": (1 << 64) - 1,
+            "maximum_scalar": JUBJUB_SCALAR_MODULUS - 1,
+            "all_windows_all_selectors": sum(
+                ((window % 8) << (3 * window))
+                for window in range(84)
+            ),
+        }
+        for name, scalar in case_scalars.items():
+            with self.subTest(case=name):
+                reference = self.fixed_base_cases[name]
+                bit_length = (
+                    64 if name == "u64_max"
+                    else 3 if name.startswith("selector_")
+                    else 252
+                )
+                system = R1CS()
+                bits = allocate_spend_fixed_base_scalar_bits(
+                    system, scalar, bit_length
+                )
+                point = constrain_spend_fixed_base_mul(system, bits, base)
+                expected = base.multiply(scalar)
+                self.assertEqual(
+                    (system.witness_value(point.u), system.witness_value(point.v)),
+                    (expected.u, expected.v),
+                )
+                self.assertEqual(
+                    (expected.u, expected.v),
+                    (int(reference["output_u"]), int(reference["output_v"])),
+                )
+                self.assert_system_matches_reference(name, system, reference)
+                self.assertEqual(len(bits), len(reference["selectors"]))
+                self.assertEqual(
+                    [system.witness_value(bit) for bit in bits],
+                    [int(bit["value"]) for bit in reference["selectors"]],
+                )
+
+    def test_fixed_base_invalid_selector_lookup_witness_and_rejection(self) -> None:
+        base = Point(int(self.fixed_base["base_u"]), int(self.fixed_base["base_v"]))
+        reference = self.fixed_base_cases["selector_5"]
+        system = R1CS()
+        bits = allocate_spend_fixed_base_scalar_bits(system, 5, 3)
+        point = constrain_spend_fixed_base_mul(system, bits, base)
+        self.assertEqual(
+            _local_failed_rows(system, bits[0].index, 2),
+            _reference_failed_rows(
+                reference, bits[0].index, 2
+            ),
+        )
+        lookup_x = next(
+            variable for variable in system.variables
+            if variable.name
+            == "fixed base multiplication/window table lookup 0/x/num"
+        )
+        altered_x = (system.witness_value(lookup_x) + 1) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, lookup_x.index, altered_x),
+            _reference_failed_rows(reference, lookup_x.index, altered_x),
+        )
+        self.assertEqual(point.u.index, lookup_x.index)
+
+        foreign = R1CS()
+        foreign_bit = allocate_spend_fixed_base_scalar_bits(foreign, 1, 1)[0]
+        for bad_bits, bad_base in (
+            ([foreign_bit], base),
+            ([None], base),
+            ([object()], base),
+            ([True], object()),
+        ):
+            before_variables = len(system.variables)
+            before_rows = system.constraint_count
+            with self.assertRaises((R1CSError, TypeError)):
+                constrain_spend_fixed_base_mul(
+                    system,
+                    bad_bits,  # type: ignore[arg-type]
+                    bad_base,  # type: ignore[arg-type]
+                )
+            self.assertEqual(len(system.variables), before_variables)
+            self.assertEqual(system.constraint_count, before_rows)
+
+        unassigned_system = R1CS()
+        unassigned = unassigned_system.alloc_private("unassigned bit", None)
+        with self.assertRaises(R1CSError):
+            constrain_spend_fixed_base_mul(
+                unassigned_system, [unassigned], base
+            )
+        self.assertEqual(len(unassigned_system.variables), 2)
+        self.assertEqual(unassigned_system.constraint_count, 0)
+
+        for scalar, bit_length in (
+            (None, 252),
+            (-1, 252),
+            (JUBJUB_SCALAR_MODULUS, 252),
+            (1, 0),
+        ):
+            target = R1CS()
+            with self.subTest(scalar=scalar, bit_length=bit_length):
+                with self.assertRaises(R1CSError):
+                    allocate_spend_fixed_base_scalar_bits(
+                        target, scalar, bit_length  # type: ignore[arg-type]
+                    )
+                self.assertEqual(len(target.variables), 1)
+                self.assertEqual(target.constraint_count, 0)
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,

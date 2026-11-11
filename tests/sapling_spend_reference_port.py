@@ -3,10 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from typing import TypeAlias
 
 from src.bls12_381 import SCALAR_MODULUS
-from src.jubjub import CURVE_D, Point
+from src.bls12_381 import SCALAR_MODULUS as CIRCUIT_FIELD_MODULUS
+from src.jubjub import (
+    CURVE_D,
+    IDENTITY,
+    Point,
+)
+from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, R1CSError, Variable
+
+SpendBoolean: TypeAlias = Variable | bool
+
+_FIXED_BASE_WINDOW_BITS = 3
+_FIXED_BASE_WINDOW_COUNT = 84
+_JUBJUB_SCALAR_MODULUS = JUBJUB_SCALAR_MODULUS
 
 
 @dataclass(frozen=True)
@@ -418,3 +432,228 @@ def _constrain_spend_strict_field_bits(
         f"{label}/unpacking constraint",
     )
     return little_endian
+
+
+def allocate_spend_fixed_base_scalar_bits(
+    system: R1CS,
+    scalar: int | None,
+    bit_length: int,
+    label: str = "scalar bits",
+) -> tuple[Variable, ...]:
+    """Allocate source-ordered Bellman boolean bits for a scalar witness."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if type(bit_length) is not int or bit_length < 1:
+        raise R1CSError("fixed-base bit length must be a positive integer")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if type(scalar) is not int or not 0 <= scalar < 1 << bit_length:
+        raise R1CSError("fixed-base scalar witness is missing or out of range")
+    if bit_length == 252 and scalar >= _JUBJUB_SCALAR_MODULUS:
+        raise R1CSError("fixed-base scalar is outside the Jubjub scalar field")
+
+    bits: list[Variable] = []
+    for index in range(bit_length):
+        bit = system.alloc_private(f"{label}/bit {index}/boolean", (scalar >> index) & 1)
+        system.enforce(
+            1 - bit.lc(),
+            bit,
+            0,
+            f"{label}/bit {index}/boolean constraint",
+        )
+        bits.append(bit)
+    return tuple(bits)
+
+
+def spend_fixed_base_tables(
+    base: Point,
+) -> tuple[tuple[Point, ...], ...]:
+    """Generate the pinned 84 windows of eight consecutive multiples."""
+    if not isinstance(base, Point) or not _is_spend_fixed_base_base(base.u, base.v):
+        raise R1CSError("fixed-base table source must be a subgroup point")
+
+    windows: list[tuple[Point, ...]] = []
+    window_base = base
+    for _ in range(_FIXED_BASE_WINDOW_COUNT):
+        table = [IDENTITY]
+        multiple = window_base
+        for _ in range(7):
+            table.append(multiple)
+            multiple = multiple + window_base
+        windows.append(tuple(table))
+        window_base = multiple
+    return tuple(windows)
+
+
+@lru_cache(maxsize=32)
+def _spend_fixed_base_tables_cached(
+    base_u: int, base_v: int
+) -> tuple[tuple[Point, ...], ...]:
+    return spend_fixed_base_tables(Point(base_u, base_v))
+
+
+@lru_cache(maxsize=32)
+def _is_spend_fixed_base_base(base_u: int, base_v: int) -> bool:
+    base = Point(base_u, base_v)
+    return base.is_on_curve() and base.is_in_subgroup()
+
+
+def constrain_spend_fixed_base_mul(
+    system: R1CS,
+    bits_le: tuple[SpendBoolean, ...] | list[SpendBoolean],
+    base: Point,
+    label: str = "fixed base multiplication",
+) -> EdwardsPointWitnessVariables:
+    """Port Sapling ``ecc::fixed_base_multiplication`` in isolation."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if not isinstance(base, Point) or not _is_spend_fixed_base_base(base.u, base.v):
+        raise R1CSError("fixed-base multiplication requires a subgroup base")
+    if not bits_le:
+        raise R1CSError("fixed-base multiplication requires at least one bit")
+    for bit in bits_le:
+        if isinstance(bit, Variable):
+            system.require_owned(bit)
+            value = system.witness_value(bit)
+            if value not in (0, 1):
+                raise R1CSError("fixed-base selector must be an assigned boolean")
+        elif type(bit) is not bool:
+            raise TypeError("fixed-base selectors must be variables or booleans")
+
+    tables = _spend_fixed_base_tables_cached(base.u, base.v)
+    window_count = (len(bits_le) + _FIXED_BASE_WINDOW_BITS - 1) // _FIXED_BASE_WINDOW_BITS
+    if window_count > len(tables):
+        raise R1CSError("fixed-base scalar exceeds the 252-bit table")
+
+    accumulator: EdwardsPointWitnessVariables | None = None
+    accumulator_witness: Point | None = None
+    for window in range(window_count):
+        start = window * _FIXED_BASE_WINDOW_BITS
+        window_bits: tuple[SpendBoolean, SpendBoolean, SpendBoolean] = tuple(
+            bits_le[index] if index < len(bits_le) else False
+            for index in range(start, start + _FIXED_BASE_WINDOW_BITS)
+        )  # type: ignore[assignment]
+        values = tuple(_spend_boolean_value(system, bit) for bit in window_bits)
+        selector = sum(value << index for index, value in enumerate(values))
+        selected_witness = tables[window][selector]
+        selected = _constrain_spend_lookup3_xy(
+            system,
+            window_bits,
+            tables[window],
+            selected_witness,
+            f"{label}/window table lookup {window}",
+        )
+        if accumulator is None:
+            accumulator = selected
+            accumulator_witness = selected_witness
+        else:
+            assert accumulator_witness is not None
+            accumulator_witness = accumulator_witness + selected_witness
+            accumulator = constrain_spend_edwards_point_add(
+                system,
+                accumulator,
+                Point(
+                    system.witness_value(accumulator.u),
+                    system.witness_value(accumulator.v),
+                ),
+                selected,
+                selected_witness,
+                f"{label}/addition {window}",
+            )
+    assert accumulator is not None
+    return accumulator
+
+
+def _spend_boolean_value(system: R1CS, bit: SpendBoolean) -> bool:
+    if isinstance(bit, Variable):
+        value = system.witness_value(bit)
+        if value not in (0, 1):
+            raise R1CSError("fixed-base selector must be an assigned boolean")
+        return bool(value)
+    return bit
+
+
+def _spend_boolean_lc(system: R1CS, bit: SpendBoolean):
+    if isinstance(bit, Variable):
+        system.require_owned(bit)
+        return bit.lc()
+    return system.linear_combination((), int(bit))
+
+
+def _constrain_spend_lookup3_xy(
+    system: R1CS,
+    bits: tuple[SpendBoolean, SpendBoolean, SpendBoolean],
+    table: tuple[Point, ...],
+    selected_witness: Point,
+    label: str,
+) -> EdwardsPointWitnessVariables:
+    if len(table) != 8:
+        raise R1CSError("fixed-base lookup requires an eight-entry window")
+    x = system.alloc_private(f"{label}/x/num", selected_witness.u)
+    y = system.alloc_private(f"{label}/y/num", selected_witness.v)
+
+    def coefficients(coordinate: str) -> tuple[int, ...]:
+        values = [0] * 8
+        for index, point in enumerate(table):
+            current = (getattr(point, coordinate) - values[index]) % CIRCUIT_FIELD_MODULUS
+            values[index] = current
+            for position in range(index + 1, 8):
+                if position & index == index:
+                    values[position] = (
+                        values[position] + current
+                    ) % CIRCUIT_FIELD_MODULUS
+        return tuple(values)
+
+    x_coefficients = coefficients("u")
+    y_coefficients = coefficients("v")
+    precomp = _spend_boolean_and(system, bits[1], bits[2], f"{label}/precomp")
+    one = system.one
+
+    def lookup_row(
+        name: str,
+        coeffs: tuple[int, ...],
+        result: Variable,
+    ) -> None:
+        left = (
+            coeffs[1] * one.lc()
+            + coeffs[3] * _spend_boolean_lc(system, bits[1])
+            + coeffs[5] * _spend_boolean_lc(system, bits[2])
+            + coeffs[7] * _spend_boolean_lc(system, precomp)
+        )
+        right = _spend_boolean_lc(system, bits[0])
+        output = (
+            result.lc()
+            - coeffs[0] * one.lc()
+            - coeffs[2] * _spend_boolean_lc(system, bits[1])
+            - coeffs[4] * _spend_boolean_lc(system, bits[2])
+            - coeffs[6] * _spend_boolean_lc(system, precomp)
+        )
+        system.enforce(left, right, output, f"{label}/{name}")
+
+    lookup_row("x-coordinate lookup", x_coefficients, x)
+    lookup_row("y-coordinate lookup", y_coefficients, y)
+    return EdwardsPointWitnessVariables(x, y)
+
+
+def _spend_boolean_and(
+    system: R1CS, left: SpendBoolean, right: SpendBoolean, label: str
+) -> SpendBoolean:
+    if left is False or right is False:
+        return False
+    if left is True:
+        return right
+    if right is True:
+        return left
+    if not isinstance(left, Variable) or not isinstance(right, Variable):
+        raise R1CSError("invalid fixed-base selector")
+    left_value = system.witness_value(left)
+    right_value = system.witness_value(right)
+    if left_value not in (0, 1) or right_value not in (0, 1):
+        raise R1CSError("fixed-base selector must be an assigned boolean")
+    result = system.alloc_private(
+        f"{label}/and result", left_value * right_value
+    )
+    system.enforce(left, right, result, f"{label}/and constraint")
+    return result

@@ -301,7 +301,53 @@ includes the existing synthetic-setup regression, which conflicts with this
 task's prohibition on running synthetic setup. Production Spend and Output,
 official parameters, and proving gates remain unchanged.
 
-The next prescribed isolated unit is **fixed-base lookup**, followed by
-variable-base multiplication. Full Spend matrix alignment, official parameter
-compatibility, parameter-to-circuit binding, and ceremony validity remain
-unverified.
+### Fixed-base lookup and multiplication
+
+The pinned path is `circuit::ecc::fixed_base_multiplication` in
+`sapling-crypto/src/circuit/ecc.rs`, using `constants::generate_circuit_generator`
+and Bellman 0.15 `gadgets::lookup::lookup3_xy`. A fixed generator has **84
+windows**, each with eight ordered affine points `[0, 1, ..., 7] * gen`;
+the next window base is `8 * gen`. The 252 scalar bits are little-endian and
+grouped into consecutive 3-bit selectors, where bit positions contribute
+weights 1, 2, and 4. Incomplete final chunks are padded with constant false.
+Each lookup allocates `x` and `y`, computes `bits[1] AND bits[2]`, and emits
+the ordered x/y lookup rows. The first selected point is the accumulator;
+each later window is added with `EdwardsPoint::add`.
+
+The test-only Bellman harness starts from the pinned public
+`SPENDING_KEY_GENERATOR` constant and reproduces the pinned circuit table
+generation sequence, exporting all **672 table points** for comparison. It
+then uses Bellman's actual `lookup3_xy` and constraint system for the lookup
+trace. The isolated Python port generates the corresponding tables and
+reconstructs the lookup coefficient transform and ordered constraints; it
+does not call production fixed-base helpers.
+
+The full table matched coordinate-for-coordinate across all 84 windows and
+eight entries. All eight selectors matched exactly in their assignments,
+variables, ordered rows, and output point (**6 auxiliary variables / 6 rows**
+including the three input bit Boolean constraints). Scalar fixtures covered
+0, 1, 7/8/9, 63/64/65, 511/512/513, a 64-bit all-ones value, the maximum
+Jubjub scalar, and a 252-bit sequence cycling all eight selectors through
+all 84 windows. For every 252-bit trace, Python and Bellman matched all
+**1,002 auxiliary variables and 1,002 ordered constraints**, every assignment,
+label, and A/B/C coefficient, and output point. The 64-bit trace matched
+**255 auxiliaries / 255 rows**. Scalar multiplication outputs also matched
+independent local Jubjub group multiplication.
+
+Changing a selector to a non-Boolean assignment and altering a selected
+lookup coordinate produced the same failing row indices as the Bellman
+trace. Missing, malformed, foreign, unassigned, and out-of-range witnesses
+are rejected before the fixed-base helper mutates the system. The focused
+isolated Spend primitive suite passed **13 tests**. Existing Spend circuit
+regressions passed **6 tests**, Sapling gadget regressions passed **52 tests**,
+and Rust formatting/build, Ruff, Python syntax checks, and
+`git diff --check` passed. The full Sapling suite was not run because it
+contains the existing synthetic-setup regression prohibited by this task.
+Production Spend and Output, official parameters, and proving gates remain
+unchanged.
+
+The next dependency in the Spend port is **variable-base Edwards scalar
+multiplication**, including conditional point selection and repeated
+doubling/addition. Pedersen/Montgomery lookup remains a separate subsystem.
+Full Spend matrix alignment, official parameter compatibility,
+parameter-to-circuit binding, and ceremony validity remain unverified.

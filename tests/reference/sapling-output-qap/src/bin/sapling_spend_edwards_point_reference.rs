@@ -1,8 +1,10 @@
+use bellman::gadgets::boolean::AllocatedBit;
 use bellman::gadgets::boolean::Boolean;
+use bellman::gadgets::lookup::lookup3_xy;
 use bellman::gadgets::num::AllocatedNum;
 use bellman::{ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
 use bls12_381::Scalar;
-use ff::{Field, PrimeField};
+use ff::{Field, PrimeField, PrimeFieldBits};
 use group::{Curve, Group};
 use jubjub::ExtendedPoint;
 use serde::Serialize;
@@ -28,6 +30,7 @@ struct Export {
     cases: Vec<Case>,
     non_small_order_cases: Vec<NonSmallOrderCase>,
     representations: Vec<RepresentationCase>,
+    fixed_base: FixedBaseExport,
 }
 
 #[derive(Serialize)]
@@ -63,6 +66,31 @@ struct RepresentationCase {
 struct BitRecord {
     identity: String,
     value: bool,
+}
+
+#[derive(Serialize)]
+struct FixedBaseExport {
+    base_u: String,
+    base_v: String,
+    windows: Vec<Vec<PointRecord>>,
+    cases: Vec<FixedBaseCase>,
+}
+
+#[derive(Serialize)]
+struct PointRecord {
+    u: String,
+    v: String,
+}
+
+#[derive(Serialize)]
+struct FixedBaseCase {
+    name: String,
+    output_u: String,
+    output_v: String,
+    selectors: Vec<BitRecord>,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
 }
 
 #[derive(Serialize)]
@@ -569,6 +597,188 @@ fn source_add<CS: ConstraintSystem<Scalar>>(
     Ok(SourcePoint { u: u3, v: v3 })
 }
 
+fn source_fixed_base_multiplication<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    base: &[Vec<(Scalar, Scalar)>],
+    by: &[Boolean],
+) -> Result<SourcePoint, SynthesisError> {
+    let mut result: Option<SourcePoint> = None;
+    for (i, (chunk, window)) in by.chunks(3).zip(base.iter()).enumerate() {
+        let chunk_a = chunk
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Boolean::constant(false));
+        let chunk_b = chunk
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| Boolean::constant(false));
+        let chunk_c = chunk
+            .get(2)
+            .cloned()
+            .unwrap_or_else(|| Boolean::constant(false));
+        let (u, v) = lookup3_xy(
+            cs.namespace(|| format!("window table lookup {i}")),
+            &[chunk_a, chunk_b, chunk_c],
+            window,
+        )?;
+        let point = SourcePoint { u, v };
+        result = Some(match result {
+            None => point,
+            Some(accumulator) => source_add(
+                cs.namespace(|| format!("addition {i}")),
+                &accumulator,
+                &point,
+            )?,
+        });
+    }
+    result.ok_or(SynthesisError::Unsatisfiable)
+}
+
+fn source_fixed_base_tables(mut generator: jubjub::SubgroupPoint) -> Vec<Vec<(Scalar, Scalar)>> {
+    let mut windows = Vec::new();
+    for _ in 0..84 {
+        let mut coefficients = vec![(Scalar::ZERO, Scalar::ONE)];
+        let mut multiple = generator;
+        for _ in 0..7 {
+            let affine = ExtendedPoint::from(multiple).to_affine();
+            coefficients.push((affine.get_u(), affine.get_v()));
+            multiple += generator;
+        }
+        windows.push(coefficients);
+        generator = multiple;
+    }
+    windows
+}
+
+fn allocate_source_bits<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    values: &[bool],
+) -> Result<Vec<Boolean>, SynthesisError> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, value)| {
+            AllocatedBit::alloc(cs.namespace(|| format!("bit {i}")), Some(*value))
+                .map(Boolean::from)
+        })
+        .collect()
+}
+
+fn build_fixed_base_case(
+    name: String,
+    values: Vec<bool>,
+    base: &[Vec<(Scalar, Scalar)>],
+) -> Result<FixedBaseCase, SynthesisError> {
+    let mut system = TraceConstraintSystem::default();
+    let bits = allocate_source_bits(system.namespace(|| "scalar bits"), &values)?;
+    let output = source_fixed_base_multiplication(
+        system.namespace(|| "fixed base multiplication"),
+        base,
+        &bits,
+    )?;
+    let selectors = bits
+        .iter()
+        .map(|bit| match bit {
+            Boolean::Is(bit) => Ok(BitRecord {
+                identity: TraceConstraintSystem::identity(bit.get_variable()),
+                value: bit.get_value().ok_or(SynthesisError::AssignmentMissing)?,
+            }),
+            _ => Err(SynthesisError::Unsatisfiable),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(FixedBaseCase {
+        name,
+        output_u: scalar_decimal(
+            output
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        output_v: scalar_decimal(
+            output
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        selectors,
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    })
+}
+
+fn fixed_base_case_values() -> Vec<(String, Vec<bool>)> {
+    let mut cases = (0u8..8)
+        .map(|selector| {
+            (
+                format!("selector_{selector}"),
+                (0..3).map(|bit| selector & (1 << bit) != 0).collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for scalar in [0u64, 1, 7, 8, 9, 63, 64, 65, 511, 512, 513] {
+        cases.push((
+            format!("scalar_{scalar}"),
+            (0..252)
+                .map(|bit| bit < 64 && (scalar >> bit) & 1 != 0)
+                .collect(),
+        ));
+    }
+    cases.push((
+        "u64_max".to_owned(),
+        (0..64).map(|bit| u64::MAX >> bit & 1 != 0).collect(),
+    ));
+    let max_scalar = -jubjub::Fr::ONE;
+    cases.push((
+        "maximum_scalar".to_owned(),
+        max_scalar
+            .to_le_bits()
+            .iter()
+            .by_vals()
+            .take(jubjub::Fr::NUM_BITS as usize)
+            .collect(),
+    ));
+    cases.push((
+        "all_windows_all_selectors".to_owned(),
+        (0..252)
+            .map(|bit| {
+                let window = bit / 3;
+                let selector = (window % 8) as u8;
+                selector & (1 << (bit % 3)) != 0
+            })
+            .collect(),
+    ));
+    cases
+}
+
+fn build_fixed_base_export() -> Result<FixedBaseExport, SynthesisError> {
+    let base = sapling_crypto::constants::SPENDING_KEY_GENERATOR;
+    let affine = ExtendedPoint::from(base).to_affine();
+    let tables = source_fixed_base_tables(base);
+    let windows = tables
+        .iter()
+        .map(|window| {
+            window
+                .iter()
+                .map(|(u, v)| PointRecord {
+                    u: scalar_decimal(*u),
+                    v: scalar_decimal(*v),
+                })
+                .collect()
+        })
+        .collect();
+    let cases = fixed_base_case_values()
+        .into_iter()
+        .map(|(name, bits)| build_fixed_base_case(name, bits, &tables))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(FixedBaseExport {
+        base_u: scalar_decimal(affine.get_u()),
+        base_v: scalar_decimal(affine.get_v()),
+        windows,
+        cases,
+    })
+}
+
 fn build_add_case(
     name: &'static str,
     left_point: ExtendedPoint,
@@ -786,7 +996,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v3",
+        format: "bellman-sapling-edwards-point-reference-v4",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -794,6 +1004,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         cases,
         non_small_order_cases,
         representations,
+        fixed_base: build_fixed_base_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
