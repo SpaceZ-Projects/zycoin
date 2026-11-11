@@ -51,6 +51,14 @@ class MontgomeryPointWitness:
     y: MontgomeryNumberWitness
 
 
+@dataclass(frozen=True)
+class SignedLookupWitness:
+    x: MontgomeryNumberWitness
+    y: MontgomeryNumberWitness
+    selected_index: int
+    negative: bool
+
+
 def spend_edwards_to_montgomery_coordinates(
     point: Point,
 ) -> tuple[int, int] | None:
@@ -248,6 +256,106 @@ def constrain_spend_montgomery_into_edwards(
         f"{label}/v computation",
     )
     return EdwardsPointWitnessVariables(u, v)
+
+
+def constrain_spend_signed_montgomery_lookup(
+    system: R1CS,
+    bits: tuple[SpendBoolean, ...] | list[SpendBoolean],
+    table: tuple[tuple[int, int], ...] | list[tuple[int, int]],
+    label: str = "signed lookup",
+) -> SignedLookupWitness:
+    """Port Bellman `lookup3_xy_with_conditional_negation` for four entries."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if len(bits) != 3:
+        raise R1CSError("signed lookup requires exactly three selector bits")
+    if len(table) != 4:
+        raise R1CSError("signed lookup requires exactly four Montgomery points")
+    for bit in bits:
+        if isinstance(bit, Variable):
+            system.require_owned(bit)
+            if system.witness_value(bit) not in (0, 1):
+                raise R1CSError("signed lookup selectors must be assigned booleans")
+        elif type(bit) is not bool:
+            raise TypeError("signed lookup selectors must be variables or booleans")
+    for coordinate_pair in table:
+        if (
+            not isinstance(coordinate_pair, tuple)
+            or len(coordinate_pair) != 2
+            or any(
+                type(coordinate) is not int
+                or not 0 <= coordinate < SCALAR_MODULUS
+                for coordinate in coordinate_pair
+            )
+        ):
+            raise R1CSError("signed lookup table coordinates must be canonical pairs")
+
+    values = tuple(_spend_boolean_value(system, bit) for bit in bits)
+    selected_index = int(values[0]) + 2 * int(values[1])
+    negative = values[2]
+    x_values = tuple(pair[0] for pair in table)
+    y_values = tuple(pair[1] for pair in table)
+    x_coefficients = _signed_lookup_coefficients(x_values)
+    y_coefficients = _signed_lookup_coefficients(y_values)
+
+    selected_y = y_values[selected_index]
+    if negative:
+        selected_y = -selected_y % SCALAR_MODULUS
+    y_variable = system.alloc_private(f"{label}/y/num", selected_y)
+
+    precomp = _spend_boolean_and(
+        system, bits[0], bits[1], f"{label}/precomp"
+    )
+    x_expression = _signed_lookup_expression(
+        system, x_coefficients, bits[0], bits[1], precomp
+    )
+    y_expression = _signed_lookup_expression(
+        system, y_coefficients, bits[0], bits[1], precomp
+    )
+    system.enforce(
+        y_expression + y_expression,
+        _spend_boolean_lc(system, bits[2]),
+        y_expression - y_variable,
+        f"{label}/y-coordinate lookup",
+    )
+    x_value = x_values[selected_index]
+    return SignedLookupWitness(
+        MontgomeryNumberWitness(x_expression, x_value),
+        MontgomeryNumberWitness(y_variable, selected_y),
+        selected_index,
+        negative,
+    )
+
+
+def _signed_lookup_coefficients(
+    values: tuple[int, ...],
+) -> tuple[int, int, int, int]:
+    if len(values) != 4:
+        raise R1CSError("signed lookup coefficient calculation requires four values")
+    zero, one, two, three = values
+    return (
+        zero % SCALAR_MODULUS,
+        (one - zero) % SCALAR_MODULUS,
+        (two - zero) % SCALAR_MODULUS,
+        (three - two - one + zero) % SCALAR_MODULUS,
+    )
+
+
+def _signed_lookup_expression(
+    system: R1CS,
+    coefficients: tuple[int, int, int, int],
+    first: SpendBoolean,
+    second: SpendBoolean,
+    precomp: SpendBoolean,
+) -> LinearCombination:
+    expression = system.linear_combination((), coefficients[0])
+    for bit, coefficient in zip(
+        (first, second, precomp), coefficients[1:], strict=True
+    ):
+        expression += _spend_boolean_lc(system, bit) * coefficient
+    return expression
 
 
 def _validate_point_assignment(

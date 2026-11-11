@@ -1,7 +1,7 @@
 use bellman::gadgets::Assignment;
 use bellman::gadgets::boolean::AllocatedBit;
 use bellman::gadgets::boolean::Boolean;
-use bellman::gadgets::lookup::lookup3_xy;
+use bellman::gadgets::lookup::{lookup3_xy, lookup3_xy_with_conditional_negation};
 use bellman::gadgets::num::{AllocatedNum, Num};
 use bellman::{ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
 use bls12_381::Scalar;
@@ -42,6 +42,7 @@ struct Export {
     variable_base: VariableBaseExport,
     montgomery_mappings: Vec<MontgomeryMapping>,
     montgomery_cases: Vec<MontgomeryCase>,
+    signed_lookup: SignedLookupExport,
 }
 
 #[derive(Serialize)]
@@ -144,6 +145,25 @@ struct MontgomeryCase {
     montgomery_y: Option<String>,
     edwards_u: Option<String>,
     edwards_v: Option<String>,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct SignedLookupExport {
+    table: Vec<PointRecord>,
+    cases: Vec<SignedLookupCase>,
+}
+
+#[derive(Serialize)]
+struct SignedLookupCase {
+    name: String,
+    selector: u8,
+    lookup_index: u8,
+    negative: bool,
+    output_x: String,
+    output_y: String,
     satisfied: bool,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
@@ -525,6 +545,69 @@ fn source_edwards_to_montgomery(point: ExtendedPoint) -> Option<(Scalar, Scalar)
         let y = x * Option::<Scalar>::from(u.invert())? * MONTGOMERY_SCALE;
         Some((x, y))
     }
+}
+
+fn source_signed_lookup_table() -> Vec<(Scalar, Scalar)> {
+    let generator = sapling_crypto::constants::PEDERSEN_HASH_GENERATORS[0];
+    let mut multiple = generator;
+    let mut table = Vec::with_capacity(4);
+    for _ in 0..4 {
+        table.push(
+            source_edwards_to_montgomery(ExtendedPoint::from(multiple))
+                .expect("Pedersen table points are finite in Montgomery coordinates"),
+        );
+        multiple += generator;
+    }
+    table
+}
+
+fn build_signed_lookup_export() -> Result<SignedLookupExport, SynthesisError> {
+    let table = source_signed_lookup_table();
+    let cases = (0u8..8)
+        .map(|selector| {
+            let mut system = TraceConstraintSystem::default();
+            let bits = allocate_source_bits(
+                system.namespace(|| "selector bits"),
+                &[selector & 1 != 0, selector & 2 != 0, selector & 4 != 0],
+            )?;
+            let result = lookup3_xy_with_conditional_negation(
+                system.namespace(|| "signed lookup"),
+                &bits,
+                &table,
+            )?;
+            Ok(SignedLookupCase {
+                name: format!("selector_{selector}"),
+                selector,
+                lookup_index: selector & 3,
+                negative: selector & 4 != 0,
+                output_x: scalar_decimal(
+                    result
+                        .0
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                output_y: scalar_decimal(
+                    result
+                        .1
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                satisfied: system.is_satisfied(),
+                variables: system.variables,
+                constraints: system.constraints,
+            })
+        })
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+    Ok(SignedLookupExport {
+        table: table
+            .iter()
+            .map(|(x, y)| PointRecord {
+                u: scalar_decimal(*x),
+                v: scalar_decimal(*y),
+            })
+            .collect(),
+        cases,
+    })
 }
 
 fn source_conditionally_select<CS: ConstraintSystem<Scalar>>(
@@ -1581,7 +1664,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v6",
+        format: "bellman-sapling-edwards-point-reference-v7",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -1593,6 +1676,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         variable_base: build_variable_base_export()?,
         montgomery_mappings: build_montgomery_mappings(),
         montgomery_cases: build_montgomery_cases()?,
+        signed_lookup: build_signed_lookup_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

@@ -18,6 +18,7 @@ from sapling_spend_reference_port import (
     constrain_spend_fixed_base_mul,
     constrain_spend_montgomery_add,
     constrain_spend_montgomery_into_edwards,
+    constrain_spend_signed_montgomery_lookup,
     spend_edwards_to_montgomery_coordinates,
     spend_fixed_base_tables,
 )
@@ -30,6 +31,7 @@ from src.jubjub import (
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, R1CSError, Variable
+from src.sapling_gadgets import _pedersen_montgomery_tables
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
@@ -143,15 +145,17 @@ def _local_failed_rows_with_assignments(
     )
 
 
-def _allocate_boolean_bits(system: R1CS, values: list[bool]) -> tuple:
+def _allocate_boolean_bits(
+    system: R1CS, values: list[bool], label: str = "scalar bits"
+) -> tuple:
     bits = []
     for index, value in enumerate(values):
-        bit = system.alloc_private(f"scalar bits/bit {index}/boolean", int(value))
+        bit = system.alloc_private(f"{label}/bit {index}/boolean", int(value))
         system.enforce(
             1 - bit.lc(),
             bit,
             0,
-            f"scalar bits/bit {index}/boolean constraint",
+            f"{label}/bit {index}/boolean constraint",
         )
         bits.append(bit)
     return tuple(bits)
@@ -161,7 +165,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v6":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v7":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -191,6 +195,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         }
         cls.montgomery_cases = {
             case["name"]: case for case in cls.reference["montgomery_cases"]
+        }
+        cls.signed_lookup = cls.reference["signed_lookup"]
+        cls.signed_lookup_cases = {
+            case["name"]: case for case in cls.signed_lookup["cases"]
         }
 
     def assert_case_matches(
@@ -897,6 +905,119 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                     )
                 self.assertEqual(len(system.variables), before_variables)
                 self.assertEqual(system.constraint_count, before_rows)
+
+    def test_signed_lookup_matches_bellman_for_all_digits_and_signs(self) -> None:
+        table = tuple(
+            (int(point["u"]), int(point["v"]))
+            for point in self.signed_lookup["table"]
+        )
+        self.assertEqual(len(table), 4)
+        self.assertEqual(table, _pedersen_montgomery_tables()[0][0][:4])
+        for selector in range(8):
+            name = f"selector_{selector}"
+            reference = self.signed_lookup_cases[name]
+            with self.subTest(selector=selector):
+                system = R1CS()
+                bits = _allocate_boolean_bits(
+                    system,
+                    [
+                        bool(selector & 1),
+                        bool(selector & 2),
+                        bool(selector & 4),
+                    ],
+                    "selector bits",
+                )
+                result = constrain_spend_signed_montgomery_lookup(
+                    system, bits, table, "signed lookup"
+                )
+                self.assertEqual(result.selected_index, selector & 3)
+                self.assertEqual(result.negative, bool(selector & 4))
+                self.assertEqual(
+                    result.x.value, table[selector & 3][0]
+                )
+                expected_y = table[selector & 3][1]
+                if selector & 4:
+                    expected_y = -expected_y % SCALAR_MODULUS
+                self.assertEqual(result.y.value, expected_y)
+                self.assertEqual(
+                    (
+                        system._evaluate(result.x.expression, system._values),
+                        system.witness_value(result.y.expression),
+                    ),
+                    (int(reference["output_x"]), int(reference["output_y"])),
+                )
+                self.assert_system_matches_reference(name, system, reference)
+
+    def test_signed_lookup_invalid_selectors_witnesses_and_mutations(self) -> None:
+        table = tuple(
+            (int(point["u"]), int(point["v"]))
+            for point in self.signed_lookup["table"]
+        )
+        reference = self.signed_lookup_cases["selector_7"]
+        system = R1CS()
+        bits = _allocate_boolean_bits(
+            system, [True, True, True], "selector bits"
+        )
+        result = constrain_spend_signed_montgomery_lookup(
+            system, bits, table, "signed lookup"
+        )
+        self.assert_system_matches_reference("selector_7", system, reference)
+
+        self.assertEqual(
+            _local_failed_rows(system, bits[2].index, 2),
+            _reference_failed_rows(reference, bits[2].index, 2),
+        )
+        y_variable = result.y.expression
+        assert isinstance(y_variable, Variable)
+        replacement = (system.witness_value(y_variable) + 1) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, y_variable.index, replacement),
+            _reference_failed_rows(reference, y_variable.index, replacement),
+        )
+        precomp = next(
+            variable for variable in system.variables
+            if variable.name == "signed lookup/precomp/and result"
+        )
+        replacement_precomp = 1 - int(system.witness_value(precomp))
+        self.assertEqual(
+            _local_failed_rows(system, precomp.index, replacement_precomp),
+            _reference_failed_rows(reference, precomp.index, replacement_precomp),
+        )
+
+        foreign = R1CS()
+        foreign_bit = _allocate_boolean_bits(foreign, [True], "foreign")[0]
+        unassigned = system.alloc_private("unassigned selector", None)
+        out_of_range = system.alloc_private("non-boolean selector", 2)
+        invalid_calls = (
+            lambda: constrain_spend_signed_montgomery_lookup(
+                system, [True, True], table
+            ),
+            lambda: constrain_spend_signed_montgomery_lookup(
+                system, [True, True, True], table[:3]
+            ),
+            lambda: constrain_spend_signed_montgomery_lookup(
+                system, [True, True, foreign_bit], table
+            ),
+            lambda: constrain_spend_signed_montgomery_lookup(
+                system, [True, True, unassigned], table
+            ),
+            lambda: constrain_spend_signed_montgomery_lookup(
+                system, [True, True, out_of_range], table
+            ),
+            lambda: constrain_spend_signed_montgomery_lookup(
+                system, [True, True, None], table  # type: ignore[list-item]
+            ),
+            lambda: constrain_spend_signed_montgomery_lookup(
+                system, [True, True, True], [(SCALAR_MODULUS, 0), *table[1:]]
+            ),
+        )
+        for call in invalid_calls:
+            before_variables = len(system.variables)
+            before_rows = system.constraint_count
+            with self.assertRaises((R1CSError, TypeError)):
+                call()
+            self.assertEqual(len(system.variables), before_variables)
+            self.assertEqual(system.constraint_count, before_rows)
 
     def test_edwards_to_montgomery_coordinate_mapping(self) -> None:
         mappings = {

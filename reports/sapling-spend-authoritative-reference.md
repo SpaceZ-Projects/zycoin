@@ -456,3 +456,56 @@ Pedersen lookup parity, complete Pedersen hash parity, full Spend matrix
 alignment, or official Spend parameter compatibility. Signed lookup
 integration and the complete Pedersen/note-commitment relation remain
 unverified.
+
+### Signed Montgomery lookup and conditional negation
+
+The pinned implementation is Bellman 0.15
+`gadgets::lookup::lookup3_xy_with_conditional_negation`, called by
+`pedersen_hash::pedersen_hash` in the pinned
+`sapling-crypto/src/circuit/pedersen_hash.rs`. Its three input bits are
+little-endian within a window: bits 0 and 1 choose the ordered table entry
+`i = bit0 + 2*bit1`, and bit 2 is the sign bit. The Pedersen window table
+contains the Montgomery coordinates of `[g, 2g, 3g, 4g]`, in that order.
+Thus the signed digit is `±(1 + bit0 + 2*bit1)`, ranging from `+1` through
+`+4` or `-1` through `-4`. There is no zero-magnitude encoding; selector zero
+means `+1`, and selector four means `-1`.
+
+The lookup allocates only `y` first, with assignment equal to the selected
+table `y` or its field negation. It then computes `precomp = bit0 AND bit1`,
+constructs the unallocated affine `x` expression, and emits one
+`y-coordinate lookup` row:
+`(y_lc + y_lc) * sign = y_lc - y_allocated`. The returned x coordinate is a
+linear-combination-backed `Num`; the returned y coordinate is allocated.
+Boolean AND constant simplifications follow Bellman's `Boolean::and`; the
+all-allocated selector fixtures exercise its allocated-bit branch. The
+isolated Python helper validates selectors and all four canonical table
+coordinates before mutation.
+
+The Rust reference harness calls Bellman's actual
+`lookup3_xy_with_conditional_negation` against the first pinned
+`PEDERSEN_HASH_GENERATORS` window, with all eight selector combinations. The
+exported table’s four points match the Python Pedersen table values and order.
+For each selector, Python and Bellman match exactly at **5 auxiliary
+variables / 5 ordered constraints** (three input Boolean allocations/rows,
+the lookup y allocation, precomp allocation/row, and signed y lookup row).
+Every assignment, variable annotation/index, row label, and A/B/C term was
+compared. Outputs match the table’s selected x and the sign-adjusted y.
+Selectors cover every magnitude from one to four with both signs, including
+the lowest/“zero bits” selector and maximum magnitude four. Altered sign,
+precomp, and lookup-y assignments produce the same failing row indices as
+Bellman.
+
+Wrong selector count, wrong table length, malformed/noncanonical
+coordinates, foreign, unassigned, and non-Boolean selectors reject before the
+Python lookup mutates the system. The focused signed-lookup checks passed
+**2 tests / 53 subtests**. The complete isolated primitive suite passed **21
+tests / 30,353 subtests**; Spend circuit regressions passed **6 tests / 76
+subtests**, and Sapling gadget regressions passed **52 tests / 273 subtests**.
+Ruff, Python syntax checks, Rust formatting/build, and `git diff --check`
+passed. The full Sapling suite was not run.
+
+This verifies the signed lookup gadget and the tested first-window table only.
+It does not establish all Pedersen generator-window values, complete
+Pedersen-hash parity, full Spend matrix alignment, or official parameter
+compatibility. Complete multi-window Pedersen integration and
+note-commitment verification remain unverified.
