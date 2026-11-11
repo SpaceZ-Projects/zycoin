@@ -1,127 +1,40 @@
-﻿# zycoin
+# ZyCoin
 
-Python client library for BitcoinZ and related Zcoin-family blockchain networks.
+ZyCoin is a Python library for coin-aware wallet primitives and asynchronous
+blockchain clients. It discovers coin and network settings from JSON
+configurations, allowing compatible additions without separate coin-specific
+implementation modules.
 
-This package exposes lightweight async clients for Electrum and Bitcore-compatible APIs, plus wallet, key, and transaction helpers used to interact with BitcoinZ networks. It is designed for developers who want to query blockchain data, monitor address activity, broadcast transactions, or build wallet tooling around the BTCZ ecosystem.
+## Capabilities
 
-## Features
+- Password-free BIP-39-based BIP-44 transparent and Sapling ZIP32 derivation,
+  address generation, and explicit encrypted key-record import/export.
+- Shared Sapling ZIP32 viewing-key derivation, compact-output scanning, note
+  trial decryption, nullifier derivation, and commitment-tree witnesses, with
+  coin-specific support gated by verification evidence.
+- Asynchronous Electrum, Bitcore REST/Socket.IO, and Lightwalletd clients.
+- Offline transparent transaction construction and signing for explicitly
+  verified configurations; transaction broadcasting is not provided.
 
-- Async connection management for Electrum servers and Bitcore APIs
-- Address, transaction, balance, mempool, and UTXO queries
-- Header and address subscription support
-- Support for BitcoinZ, Zero, Zclassic, and Flux networks
-- Wallet/key primitives and mnemonic support
-- Simple client manager for registering and managing multiple coins
+Sapling transaction proving and signing are not implemented. Lightwalletd
+positions remain endpoint-derived rather than consensus-authenticated, and
+BitcoinZ Sapling spending remains gated. See the reports index for the
+historical verification evidence and current status classifications.
 
 ## Installation
 
-```bash
-pip install zycoin
+Python 3.10 or later is required:
+
+```sh
+python -m pip install zycoin
 ```
 
-## Quick start
+## Documentation and reports
 
-```python
-import asyncio
-from zycoin.manager import ClientManager
+- [Documentation index](docs/README.md) — installation, usage, derivation,
+  clients, transparent transactions, Sapling, and security limitations.
+- [Reports index](reports/README.md) — chronological technical reports and
+  verification history.
 
-async def on_status(status):
-    print("status:", status)
-
-async def on_notification(message):
-    print("notification:", message)
-
-async def main():
-    manager = ClientManager()
-    manager.on_status = on_status
-    manager.on_block_events = on_notification
-    
-
-    client = manager.add("btcz", "bitcore")
-    await manager.connect("btcz")
-
-    await client.subscribe_address("t1Rci9gRmkJZ22vH7dToFe2Up6TpZypgimH")
-    print(await client.get_balance("t1Rci9gRmkJZ22vH7dToFe2Up6TpZypgimH"))
-
-    await manager.disconnect("btcz")
-
-asyncio.run(main())
-```
-
-## Using the Electrum client directly
-
-```python
-import asyncio
-from zycoin.constants import BitcoinZ
-from zycoin.clients import ElectrumClient
-
-async def main():
-    client = ElectrumClient(BitcoinZ, protocol="ssl")
-    client.on_status = lambda status: print("status:", status)
-
-    await client.connect()
-    print(await client.server_version())
-    print(await client.get_balance("t1Rci9gRmkJZ22vH7dToFe2Up6TpZypgimH"))
-    await client.close()
-
-asyncio.run(main())
-```
-
-## Using the Bitcore client directly
-
-```python
-import asyncio
-from zycoin.constants import BitcoinZ
-from zycoin.clients import BitcoreClient
-
-async def main():
-    client = BitcoreClient(BitcoinZ)
-    client.on_status = lambda status: print("status:", status)
-
-    await client.connect()
-    print(await client.get_history("t1Rci9gRmkJZ22vH7dToFe2Up6TpZypgimH", limit=5))
-    await client.close()
-
-asyncio.run(main())
-```
-
-## Managing several coins
-
-```python
-import asyncio
-from zycoin.manager import ClientManager
-
-async def main():
-    manager = ClientManager()
-    manager.add("btcz", "bitcore")
-    manager.add("zcl")
-    manager.add("zer")
-    manager.add("flux")
-
-    await manager.connect_all()
-    print({coin: manager[coin].coin.NAME for coin in manager.clients})
-
-    await manager.disconnect_all()
-
-asyncio.run(main())
-```
-
-## Available networks
-
-The following coin definitions are included:
-
-- `btcz` — BitcoinZ
-- `flux` — Flux
-- `zcl` — Zclassic
-- `zer` — Zero
-- `zerc` — ZeroClassic
-
-## Notes
-
-- The library uses async IO throughout.
-- For Electrum connections, it selects the fastest reachable server automatically.
-- For Bitcore connections, it communicates with the explorer's WebSocket and REST API.
-
-## License
-
-MIT
+The package uses synthetic examples only in its documentation. Never expose a
+recovery phrase or private key in logs, source control, or support requests.

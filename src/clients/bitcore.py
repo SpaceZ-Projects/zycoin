@@ -3,6 +3,7 @@ import asyncio
 import json
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import urlencode, urlsplit, urlunsplit
+from .errors import PermanentBroadcastRejection, is_permanent_rejection
 
 IS_WEB = False
 
@@ -37,19 +38,23 @@ class BitcoreClient:
     def __init__(
         self,
         coin: Any,
-        timeout: int = 10,
+        timeout: float = 10,
         transport: str = "auto",
     ) -> None:
         if transport not in ("auto", "websocket", "polling"):
             raise ValueError(
                 "transport must be 'auto', 'websocket', or 'polling'"
             )
+        if timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
 
+        if not hasattr(coin, "bitcore") or not hasattr(coin, "network_id"):
+            raise TypeError("BitcoreClient requires a loaded coin network config")
         self.coin: Any = coin
         self.height: int = 0
-        self.base_url: Optional[str] = coin.BITCORE_API.rstrip("/") if coin.BITCORE_API else None
+        self.base_url = self._build_base_url(coin)
         self.url: Optional[str] = self.base_url  # Backward-compatible public attribute.
-        self.timeout: int = timeout
+        self.timeout: float = timeout
         self.transport: str = transport
         self._active_transport: Optional[str] = None
         self._polling_sid: Optional[str] = None
@@ -76,6 +81,37 @@ class BitcoreClient:
         self._connecting: bool = False
         self._reader_task: Optional[asyncio.Task[Any]] = None
         self._keepalive_task: Optional[asyncio.Task[Any]] = None
+
+    @staticmethod
+    def _build_base_url(coin: Any) -> Optional[str]:
+        """Combine the explorer origin and API mount, retaining legacy URLs."""
+        api = getattr(coin, "bitcore_api", None)
+        if not api:
+            return None
+
+        api_parts = urlsplit(api)
+        if api_parts.scheme:
+            return api.rstrip("/")
+
+        explorer = getattr(coin, "bitcore_explorer", None)
+        if not explorer:
+            return api.rstrip("/")
+
+        explorer_parts = urlsplit(explorer)
+        if explorer_parts.scheme not in ("http", "https") or not explorer_parts.netloc:
+            return api.rstrip("/")
+
+        path = "/".join((
+            explorer_parts.path.strip("/"),
+            api_parts.path.strip("/"),
+        )).strip("/")
+        return urlunsplit((
+            explorer_parts.scheme,
+            explorer_parts.netloc,
+            f"/{path}" if path else "",
+            api_parts.query,
+            "",
+        )).rstrip("/")
 
 
     # HTTP
@@ -144,6 +180,11 @@ class BitcoreClient:
 
                 return json.loads(body)
 
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"Bitcore API request timed out: {method} {url}"
+            ) from exc
+
         except aiohttp.ClientError as exc:
             raise ConnectionError(
                 f"Bitcore API connection failed: {exc}"
@@ -205,11 +246,9 @@ class BitcoreClient:
         if base.scheme not in ("http", "https"):
             return None
 
-        socket_path = getattr(
-            self.coin,
-            "BITCORE_SOCKET_PATH",
-            urlsplit(self.SOCKETIO_PATH).path,
-        )
+        socket_path = getattr(self.coin, "bitcore_socket_path", None)
+        if not socket_path:
+            socket_path = urlsplit(self.SOCKETIO_PATH).path
         socket_path = "/" + socket_path.lstrip("/")
         params = {
             "EIO": "3",
@@ -218,7 +257,11 @@ class BitcoreClient:
         if sid:
             params["sid"] = sid
 
-        scheme = "wss" if base.scheme == "https" else "ws"
+        scheme = (
+            ("wss" if base.scheme == "https" else "ws")
+            if transport == "websocket"
+            else base.scheme
+        )
         return urlunsplit((
             scheme,
             base.netloc,
@@ -371,19 +414,35 @@ class BitcoreClient:
                 "Content-Type": "text/plain; charset=UTF-8",
             }
 
-        async with session.request(
-            method,
-            url,
-            data=request_data,
-            headers=headers,
-        ) as response:
-            body = await response.read()
-            if response.status != 200:
-                raise RuntimeError(
-                    f"Polling {method} failed: HTTP "
-                    f"{response.status}: {body!r}"
-                )
-            return body
+        try:
+            async with session.request(
+                method,
+                url,
+                data=request_data,
+                headers=headers,
+                timeout=(
+                    None
+                    if method == "GET" and sid is not None
+                    else self.timeout
+                ),
+            ) as response:
+                body = await response.read()
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"Polling {method} failed: HTTP "
+                        f"{response.status}: {body!r}"
+                    )
+                return body
+
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"Bitcore polling request timed out: {method} {url}"
+            ) from exc
+
+        except aiohttp.ClientError as exc:
+            raise ConnectionError(
+                f"Bitcore polling connection failed: {exc}"
+            ) from exc
 
     @staticmethod
     def _decode_polling_payload(body: bytes) -> List[str]:
@@ -578,6 +637,7 @@ class BitcoreClient:
         """Connect using the native Python websockets package."""
         self.ws = await websockets.connect(
             websocket_url,
+            open_timeout=self.timeout,
             ping_interval=None,
             ping_timeout=None,
         )
@@ -890,10 +950,6 @@ class BitcoreClient:
             for utxo in utxos or []
         ]
 
-    def normalize_utxos(self, utxos: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        """Backward-compatible wrapper for UTXO normalization."""
-        return self._normalize_utxos(utxos)
-
     async def get_balance(self, address: str) -> Dict[str, int]:
         """Return confirmed and unconfirmed balance for an address."""
         data = await self.get(f"addr/{address}")
@@ -904,20 +960,46 @@ class BitcoreClient:
         }
 
     async def get_history(self, address: str, limit: Optional[int] = 10) -> List[Dict[str, Any]]:
-        try:
-            """Return transaction history for an address."""
-            endpoint = f"txs?address={address}"
-            if limit is not None:
-                endpoint += f"&limit={limit}"
+        """Return transaction history for an address."""
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
+        ):
+            raise ValueError("history limit must be a positive integer or None")
+        endpoint = f"txs?address={address}"
+        if limit is not None:
+            endpoint += f"&limit={limit}"
 
+        try:
             result = await self.get(endpoint)
-            txs = result.get("txs", {})
-            return [
-                {"tx_hash": tx.get("txid"), "height": tx.get("blockheight")}
-                for tx in txs
-            ]
-        except Exception:
-            return []
+        except RuntimeError as exc:
+            message = str(exc).lower()
+            if "http 404" in message and "address not found" in message:
+                return []
+            raise
+        if not isinstance(result, dict):
+            raise ValueError("Bitcore history response must be an object")
+
+        txs = result.get("txs", [])
+        if not isinstance(txs, list):
+            raise ValueError("Bitcore history response 'txs' must be a list")
+
+        history = []
+        for index, tx in enumerate(txs):
+            if not isinstance(tx, dict) or not isinstance(tx.get("txid"), str):
+                raise ValueError(
+                    f"Bitcore history response txs[{index}] must contain a txid"
+                )
+            height = tx.get("blockheight")
+            if height is not None and (
+                isinstance(height, bool)
+                or not isinstance(height, int)
+                or height < 0
+            ):
+                raise ValueError(
+                    f"Bitcore history response txs[{index}].blockheight is invalid"
+                )
+            history.append({"tx_hash": tx["txid"], "height": height})
+        return history
 
     async def get_listunspent(self, address: str) -> List[Dict[str, Any]]:
         """Return normalized unspent transaction outputs for an address."""
@@ -925,18 +1007,15 @@ class BitcoreClient:
         return self._normalize_utxos(utxos)
 
     async def get_mempool(self, address: str) -> List[Dict[str, Any]]:
-        try:
-            """Return mempool transactions that involve the given address."""
-            mempool = await self.get("mempool")
-            related_transactions: List[Dict[str, Any]] = []
+        """Return mempool transactions that involve the given address."""
+        mempool = await self.get("mempool")
+        related_transactions: List[Dict[str, Any]] = []
 
-            for transaction in mempool or []:
-                if self._transaction_involves_address(transaction, address):
-                    related_transactions.append(transaction)
+        for transaction in mempool or []:
+            if self._transaction_involves_address(transaction, address):
+                related_transactions.append(transaction)
 
-            return related_transactions
-        except Exception:
-            return []
+        return related_transactions
 
     @staticmethod
     def _transaction_involves_address(transaction: Dict[str, Any], address: str) -> bool:
@@ -953,20 +1032,28 @@ class BitcoreClient:
 
         return False
 
-    async def get_transaction(self, txid: str, verbose: bool = True) -> Dict[str, Any]:
+    async def get_transaction(
+        self,
+        txid: str,
+        verbose: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         """Return a transaction by transaction ID."""
-        return await self.get(f"tx/{txid}")
+        try:
+            return await self.get(f"tx/{txid}")
+        except RuntimeError as exc:
+            if "http 404" in str(exc).lower():
+                return None
+            raise
 
     async def broadcast(self, tx_hex: str) -> Any:
         """Broadcast a signed raw transaction through the Bitcore API."""
         try:
-            result = await self.post(
-                "tx/send",
-                {"rawtx": tx_hex}
-            )
-            return result.get("txid")
-        except Exception:
-            return None
+            result = await self.post("tx/send", {"rawtx": tx_hex})
+        except Exception as exc:
+            if is_permanent_rejection(exc):
+                raise PermanentBroadcastRejection(str(exc)) from exc
+            raise
+        return result.get("txid") if isinstance(result, dict) else None
 
     # Unsupported Electrum-style methods
 

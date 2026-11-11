@@ -5,8 +5,10 @@ import json
 import ssl
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from .errors import PermanentBroadcastRejection, is_permanent_rejection
 
 from ..crypto import address_to_scripthash
+from ..coins import CoinNetworkConfig
 
 IS_WEB = False
 
@@ -14,7 +16,7 @@ try:
     from js import WebSocket
     IS_WEB = True
 except ModuleNotFoundError:
-    pass
+    from websockets.asyncio.client import connect as websocket_connect
 
 
 class ElectrumClient:
@@ -25,11 +27,15 @@ class ElectrumClient:
     """
 
     def __init__(self, coin: Any, protocol: Optional[str] = None) -> None:
+        if not isinstance(coin, CoinNetworkConfig):
+            raise TypeError("ElectrumClient requires a loaded coin network config")
         self.coin = coin
         self.height: int = 0
         self.protocol: str = protocol or ("wss" if IS_WEB else "ssl")
         self.base_url: Optional[Union[str, Tuple[str, int]]] = None
-        self.url: Optional[str] = coin.BITCORE_API.rstrip("/") if coin.BITCORE_API else None
+        self.url: Optional[str] = (
+            coin.bitcore_api.rstrip("/") if coin.bitcore_api else None
+        )
 
         # Transport handles
         self.ws: Optional[Any] = None
@@ -52,10 +58,11 @@ class ElectrumClient:
         self._loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
         self._connected: asyncio.Event = asyncio.Event()
         self._connecting: bool = False
+        self._headers_subscribed = False
 
     def build_target(self, host: str) -> Union[str, Tuple[str, int]]:
         """Resolves a server host and protocol into a connection target (URL or host/port tuple)."""
-        ports = self.coin.DEFAULT_PORTS
+        ports = self.coin.electrum_ports
         if self.protocol == "wss":
             return f"wss://{host}:{ports['w']}"
         elif self.protocol == "ws":
@@ -73,21 +80,31 @@ class ElectrumClient:
         
         try:
             if self.protocol in ("ws", "wss"):
-                ws = WebSocket.new(target)
-                future: asyncio.Future = self._loop.create_future()
+                if IS_WEB:
+                    ws = WebSocket.new(target)
+                    future: asyncio.Future = self._loop.create_future()
 
-                def on_open(_: Any) -> None:
-                    if not future.done():
-                        future.set_result((time.perf_counter() - start) * 1000)
+                    def on_open(_: Any) -> None:
+                        if not future.done():
+                            future.set_result((time.perf_counter() - start) * 1000)
 
-                def on_error(_: Any) -> None:
-                    if not future.done():
-                        future.set_exception(ConnectionError("WebSocket connection failed"))
+                    def on_error(_: Any) -> None:
+                        if not future.done():
+                            future.set_exception(
+                                ConnectionError("WebSocket connection failed")
+                            )
 
-                ws.onopen = on_open
-                ws.onerror = on_error
-                latency = await asyncio.wait_for(future, timeout=timeout)
-                ws.close()
+                    ws.onopen = on_open
+                    ws.onerror = on_error
+                    latency = await asyncio.wait_for(future, timeout=timeout)
+                    ws.close()
+                else:
+                    async with websocket_connect(
+                        target,
+                        open_timeout=timeout,
+                        close_timeout=timeout,
+                    ):
+                        latency = (time.perf_counter() - start) * 1000
                 return (target, latency)
             else:
                 host_str, port = target
@@ -106,7 +123,10 @@ class ElectrumClient:
 
     async def _select_fastest_server(self) -> Union[str, Tuple[str, int]]:
         """Pings all available servers concurrently and returns the target with the lowest latency."""
-        tasks = [self._benchmark_server(host) for host in self.coin.SERVERS]
+        tasks = [
+            self._benchmark_server(host)
+            for host in self.coin.electrum_servers
+        ]
         results = await asyncio.gather(*tasks)
         results.sort(key=lambda x: x[1])
         
@@ -149,7 +169,17 @@ class ElectrumClient:
         await self._connected.wait()
 
     async def _connect_websocket(self) -> None:
-        """Establishes and configures a WebSocket connection for browser-based environments."""
+        """Establishes a WebSocket connection in browser or native Python."""
+        if not IS_WEB:
+            self.ws = await websocket_connect(self.base_url)
+            self._connected.set()
+            if self.on_status:
+                await self.on_status("connected")
+            self.reader_task = self._loop.create_task(
+                self._websocket_reader_loop()
+            )
+            return
+
         self.ws = WebSocket.new(self.base_url)
         future: asyncio.Future = self._loop.create_future()
 
@@ -179,6 +209,19 @@ class ElectrumClient:
         self.ws.onclose = on_close
 
         await future
+
+    async def _websocket_reader_loop(self) -> None:
+        try:
+            async for message in self.ws:
+                await self._dispatch_message(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"WebSocket reader error: {exc}")
+        finally:
+            self._connected.clear()
+            if self.on_status:
+                await self.on_status("disconnected")
 
     async def _connect_tcp(self) -> None:
         """Establishes a TCP or SSL connection socket."""
@@ -235,9 +278,14 @@ class ElectrumClient:
 
     async def close(self) -> None:
         """Closes all active socket connections and cancels pending futures."""
+        self._connected.clear()
+
         if self.ws:
             try:
-                self.ws.close()
+                if IS_WEB:
+                    self.ws.close()
+                else:
+                    await self.ws.close()
             except Exception:
                 pass
             self.ws = None
@@ -254,6 +302,21 @@ class ElectrumClient:
 
         if self.reader_task and not self.reader_task.done():
             self.reader_task.cancel()
+            if self.reader_task is not asyncio.current_task():
+                try:
+                    await self.reader_task
+                except asyncio.CancelledError:
+                    pass
+        self.reader_task = None
+
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+            if self._keepalive_task is not asyncio.current_task():
+                try:
+                    await self._keepalive_task
+                except asyncio.CancelledError:
+                    pass
+        self._keepalive_task = None
 
         if self.on_status:
             try:
@@ -287,7 +350,7 @@ class ElectrumClient:
             else:
                 method = msg.get("method")
                 if method == "blockchain.headers.subscribe":
-                    if self.on_block_events:
+                    if self._headers_subscribed and self.on_block_events:
                         self.height = msg["params"][0]["height"]
                         header_hex = msg["params"][0]["hex"]
                         self._loop.create_task(self._handle_block_header(header_hex))
@@ -340,14 +403,20 @@ class ElectrumClient:
         raw = json.dumps(request)
 
         if self.protocol in ("ws", "wss"):
-            self.ws.send(raw)
+            if IS_WEB:
+                self.ws.send(raw)
+            else:
+                await self.ws.send(raw)
         else:
             if not self.writer:
                 raise ConnectionError("TCP writer not ready")
             self.writer.write((raw + "\n").encode())
             await self.writer.drain()
 
-        return await future
+        try:
+            return await future
+        finally:
+            self._pending.pop(req_id, None)
 
     async def _keepalive_loop(self, interval: int = 30) -> None:
         """Periodically pings the server to keep the connection alive."""
@@ -368,51 +437,68 @@ class ElectrumClient:
         """Subscribes to block header notifications."""
         response = await self.send("blockchain.headers.subscribe")
         self.height = response["height"]
+        self._headers_subscribed = True
         return response
 
-    async def unsubscribe_headers(self) -> Any:
-        """Unsubscribes from block header notifications."""
-        return await self.send("blockchain.headers.unsubscribe")
+    async def unsubscribe_headers(self) -> None:
+        """Stop processing header notifications until the connection is reopened."""
+        self._headers_subscribed = False
 
     async def subscribe_address(self, address: str) -> Any:
         """Subscribes to updates for a specific cryptocurrency address."""
-        sh = address_to_scripthash(address)
+        sh = address_to_scripthash(address, self.coin)
         self._subscribed_addresses[sh] = address
-        return await self.send("blockchain.scripthash.subscribe", [sh])
+        try:
+            return await self.send("blockchain.scripthash.subscribe", [sh])
+        except asyncio.CancelledError:
+            self._subscribed_addresses.pop(sh, None)
+            raise
+        except Exception:
+            self._subscribed_addresses.pop(sh, None)
+            raise
 
-    async def unsubscribe_address(self, address: str) -> Any:
-        """Unsubscribes from updates for a specific address."""
-        sh = address_to_scripthash(address)
+    async def unsubscribe_address(self, address: str) -> None:
+        """Stop processing notifications for an address on this connection."""
+        sh = address_to_scripthash(address, self.coin)
         self._subscribed_addresses.pop(sh, None)
-        return await self.send("blockchain.scripthash.unsubscribe", [sh])
 
     async def get_balance(self, address: str) -> Dict[str, Any]:
         """Gets the confirmed and unconfirmed balance for an address."""
-        sh = address_to_scripthash(address)
+        sh = address_to_scripthash(address, self.coin)
         return await self.send("blockchain.scripthash.get_balance", [sh])
 
     async def get_history(self, address: str) -> List[Dict[str, Any]]:
         """Gets the transaction history for an address."""
-        sh = address_to_scripthash(address)
+        sh = address_to_scripthash(address, self.coin)
         return await self.send("blockchain.scripthash.get_history", [sh])
 
     async def get_listunspent(self, address: str) -> List[Dict[str, Any]]:
         """Gets unspent transaction outputs (UTXOs) for an address."""
-        sh = address_to_scripthash(address)
+        sh = address_to_scripthash(address, self.coin)
         return await self.send("blockchain.scripthash.listunspent", [sh])
 
     async def get_mempool(self, address: str) -> List[Dict[str, Any]]:
         """Gets unconfirmed mempool transactions for an address."""
-        sh = address_to_scripthash(address)
+        sh = address_to_scripthash(address, self.coin)
         return await self.send("blockchain.scripthash.get_mempool", [sh])
 
     async def get_transaction(self, txid: str, verbose: bool = True) -> Any:
         """Retrieves raw or verbose transaction data by transaction hash."""
-        return await self.send("blockchain.transaction.get", [txid, verbose])
+        try:
+            return await self.send("blockchain.transaction.get", [txid, verbose])
+        except Exception as exc:
+            if "no such mempool or blockchain transaction" in str(exc).lower():
+                return None
+            raise
 
     async def broadcast(self, tx_hex: str) -> Any:
         """Broadcasts a raw signed transaction hex to the network."""
-        return await self.send("blockchain.transaction.broadcast", [tx_hex])
+        try:
+            return await self.send("blockchain.transaction.broadcast", [tx_hex])
+        except Exception as exc:
+            if is_permanent_rejection(exc):
+                raise PermanentBroadcastRejection(str(exc)) from exc
+            raise
 
     async def estimate_fee(self, blocks: int) -> Any:
         """Estimates the transaction fee per kilobyte for a given target block confirmation count."""
@@ -430,7 +516,7 @@ class ElectrumClient:
         """Retrieves the server donation address, if supported."""
         return await self.send("server.donation_address")
 
-    async def server_version(self, client_name: str = "Electrum Client", protocol_version: str = "1.4") -> Any:
+    async def server_version(self, client_name: str = "ZyCoinTipBot", protocol_version: str = "1.4") -> Any:
         """Negotiates protocol and client version with the server."""
         return await self.send("server.version", [client_name, protocol_version])
 

@@ -1,0 +1,44 @@
+{
+  "complete_spend_relation_vector": false,
+  "source_revisions": {
+    "sapling_crypto": {
+      "version": "0.9.0",
+      "commit": "88a7946b4a3066787776e11f0a502654167e022d",
+      "repository": "https://github.com/zcash/sapling-crypto"
+    },
+    "zcash_test_vectors": {
+      "commit": "78321beacb0e0477e33cd002b56585a107c2708c",
+      "repository": "https://github.com/zcash/zcash-test-vectors"
+    }
+  },
+  "joined_fixtures": {
+    "key_components": "sapling_nullifier_reference.json",
+    "merkle_path": "sapling_merkle_tree_reference.json"
+  },
+  "case_join": {
+    "key_components_case_index": 0,
+    "merkle_witness_index": 0,
+    "matching_fields": [
+      {
+        "key_components": "note_cmu",
+        "merkle_path": "note_commitment"
+      },
+      {
+        "key_components": "note_pos",
+        "merkle_path": "position"
+      }
+    ]
+  },
+  "available_relations": [
+    "note commitment and position cross-fixture identity",
+    "independent Merkle path and anchor for the joined note",
+    "note nullifier from the key-component vector"
+  ],
+  "not_supplied": [
+    "one coherent Spend value commitment and its cv coordinates",
+    "ak, ar, and expected rk coordinates for this note",
+    "a single record binding all seven Spend public inputs",
+    "a serialized complete private-witness assignment or Bellman trace"
+  ],
+  "limitation": "The joined key-component note has value zero; matching its path root does not verify the Spend circuit's conditional nonzero-value anchor rule."
+}

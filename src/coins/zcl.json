@@ -1,0 +1,88 @@
+{
+  "id": "zcl",
+  "name": "Zclassic",
+  "symbol": "ZCL",
+  "github": "https://github.com/ZClassicCommunity/zclassic",
+  "networks": {
+    "mainnet": {
+      "verification": "configured_unverified",
+      "address": {
+        "wif_prefix": 128,
+        "p2pkh_prefix_hex": "1cb8",
+        "p2sh_prefix_hex": "1cbd",
+        "bech32_hrp": null,
+        "verification": "verified",
+        "verification_sources": [
+          "https://github.com/ZClassicCommunity/zclassic/blob/master/src/chainparams.cpp"
+        ]
+      },
+      "electrum": {
+        "status": "unsupported",
+        "servers": [],
+        "ports": {}
+      },
+      "bitcore": {
+        "status": "configured_unverified",
+        "explorer_url": "https://explorer.zcl.zelcore.io",
+        "api_path": "/api/",
+        "socket_path": "/socket.io/"
+      },
+      "lightwalletd": {
+        "status": "unsupported",
+        "endpoints": [],
+        "implemented_rpcs": []
+      },
+      "transparent_derivation": {
+        "status": "supported_verified_parameters",
+        "path": "m/44'/147'/{account}'",
+        "coin_type": 147,
+        "verification_sources": [
+          "https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki",
+          "https://github.com/satoshilabs/slips/blob/master/slip-0044.md"
+        ]
+      },
+      "sapling": {
+        "status": "partial",
+        "consensus_upgrade_name": "Sapling",
+        "activation_height": 476969,
+        "consensus_branch_id_hex": "76b809bb",
+        "zip32_coin_type": 147,
+        "derivation_path": "m/32'/147'/{account}'",
+        "derivation_path_status": "unverified",
+        "payment_address_hrp": "zs",
+        "full_viewing_key_hrp": null,
+        "base_full_viewing_key_hrp": "zviews",
+        "incoming_viewing_key_hrp": "zivks",
+        "extended_spending_key_hrp": "secret-extended-key-main",
+        "testnet": {
+          "activation_height": 20,
+          "consensus_branch_id_hex": "76b809bb",
+          "payment_address_hrp": "ztestsapling",
+          "base_full_viewing_key_hrp": "zviewtestsapling",
+          "incoming_viewing_key_hrp": "zivktestsapling",
+          "extended_spending_key_hrp": "secret-extended-key-test"
+        },
+        "parameter_files": [
+          "sapling-spend.params",
+          "sapling-output.params"
+        ],
+        "lightwalletd_compact_block_capability": "not_configured",
+        "verification_sources": [
+          "https://github.com/ZclassicCommunity/zclassic/blob/14a83d510ffd109d3fa09bf74ebf8c28854a263f/src/chainparams.cpp",
+          "https://github.com/ZclassicCommunity/zclassic/blob/14a83d510ffd109d3fa09bf74ebf8c28854a263f/src/consensus/upgrades.cpp",
+          "https://github.com/ZclassicCommunity/zclassic/blob/14a83d510ffd109d3fa09bf74ebf8c28854a263f/src/wallet/rpcwallet.cpp",
+          "https://github.com/ZclassicCommunity/zclassic/blob/14a83d510ffd109d3fa09bf74ebf8c28854a263f/zcutil/fetch-params.sh"
+        ]
+      },
+      "extended_key_headers": {
+        "xpub": {
+          "standard": "0488b21e"
+        },
+        "xprv": {
+          "standard": "0488ade4"
+        }
+      },
+      "branch_id_hex": "930b540d"
+    }
+  }
+}

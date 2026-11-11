@@ -1,0 +1,70 @@
+{
+  "id": "zer",
+  "name": "Zero",
+  "symbol": "ZER",
+  "github": "https://github.com/zerocurrencycoin/Zero",
+  "networks": {
+    "mainnet": {
+      "verification": "configured_unverified",
+      "address": {
+        "wif_prefix": 128,
+        "p2pkh_prefix_hex": "1cb8",
+        "p2sh_prefix_hex": "1cbd",
+        "bech32_hrp": null,
+        "verification": "verified",
+        "verification_sources": [
+          "https://github.com/zerocurrencycoin/Zero/blob/master/src/chainparams.cpp"
+        ]
+      },
+      "electrum": {
+        "status": "unsupported",
+        "servers": [],
+        "ports": {}
+      },
+      "bitcore": {
+        "status": "configured_unverified",
+        "explorer_url": "https://insight.zerocurrency.io",
+        "api_path": "/insight-api-zero/",
+        "socket_path": "/socket.io/"
+      },
+      "lightwalletd": {
+        "status": "unsupported",
+        "endpoints": [],
+        "implemented_rpcs": []
+      },
+      "transparent_derivation": {
+        "status": "supported_verified_parameters",
+        "path": "m/44'/323'/{account}'",
+        "coin_type": 323,
+        "verification_sources": [
+          "https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki",
+          "https://github.com/satoshilabs/slips/blob/master/slip-0044.md"
+        ]
+      },
+      "sapling": {
+        "status": "unsupported",
+        "activation_height": 492850,
+        "zip32_coin_type": 323,
+        "derivation_path": "m/32'/323'/{account}'",
+        "payment_address_hrp": null,
+        "full_viewing_key_hrp": null,
+        "incoming_viewing_key_hrp": null,
+        "extended_spending_key_hrp": null,
+        "lightwalletd_compact_block_capability": "unsupported",
+        "verification_sources": [
+          "https://github.com/zerocurrency/zero/blob/695bde1413b67e9dd5c2d38221a67184791b28f1/src/chainparams.cpp",
+          "https://github.com/zerocurrency/zero/blob/695bde1413b67e9dd5c2d38221a67184791b28f1/src/clientversion.h"
+        ]
+      },
+      "extended_key_headers": {
+        "xpub": {
+          "standard": "0488b21e"
+        },
+        "xprv": {
+          "standard": "0488ade4"
+        }
+      },
+      "branch_id_hex": "7361707a"
+    }
+  }
+}

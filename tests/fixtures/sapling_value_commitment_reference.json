@@ -1,0 +1,18 @@
+{
+  "source": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/test-vectors/json/sapling_note_encryption.json",
+  "implementation": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/zcash_test_vectors/sapling/note_encryption.py",
+  "formula_source": "https://github.com/zcash/sapling-crypto/blob/88a7946b4a3066787776e11f0a502654167e022d/src/value.rs",
+  "fields": {
+    "value": "unsigned 64-bit integer",
+    "randomness": "canonical Jubjub scalar, little-endian bytes",
+    "commitment": "canonical compressed Jubjub point"
+  },
+  "cases": [
+    {
+      "name": "sapling note encryption vector 0",
+      "value": 100000000,
+      "randomness": "39176dac39ace4980ecc8d778e89860255ec3615060000000000000000000000",
+      "commitment": "a9cb0d137232ff8448d0f078b6814c66cb331b0f2d3d8a085bedba815f00a8db"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "id": "glink",
+  "name": "Gemlink",
+  "symbol": "GLINK",
+  "github": "https://github.com/gemlink/gemlink",
+  "networks": {
+    "mainnet": {
+      "verification": "configured_unverified",
+      "address": {
+        "wif_prefix": 128,
+        "p2pkh_prefix_hex": "1c28",
+        "p2sh_prefix_hex": "1c2d",
+        "bech32_hrp": null,
+        "verification": "verified",
+        "verification_sources": [
+          "https://github.com/gemlink/gemlink/blob/master/src/chainparams.cpp"
+        ]
+      },
+      "electrum": {
+        "status": "unsupported",
+        "servers": [],
+        "ports": {}
+      },
+      "bitcore": {
+        "status": "configured_unverified",
+        "explorer_url": "https://explorer.gemlink.org",
+        "api_path": "/api/",
+        "socket_path": "/socket.io/"
+      },
+      "lightwalletd": {
+        "status": "unsupported",
+        "endpoints": [],
+        "implemented_rpcs": []
+      },
+      "transparent_derivation": {
+        "status": "unverified",
+        "path": "m/44'/407'/{account}'",
+        "coin_type": 407
+      },
+      "sapling": {
+        "status": "unknown",
+        "activation_height": 520000,
+        "zip32_coin_type": 407,
+        "derivation_path": "m/32'/407'/{account}'",
+        "payment_address_hrp": null,
+        "full_viewing_key_hrp": null,
+        "incoming_viewing_key_hrp": null,
+        "extended_spending_key_hrp": null,
+        "lightwalletd_compact_block_capability": "not_configured",
+        "audit_note": "No authoritative Gemlink node source with Sapling consensus or wallet parameters was located."
+      },
+      "extended_key_headers": {
+        "xpub": {
+          "standard": "0488b21e"
+        },
+        "xprv": {
+          "standard": "0488ade4"
+        }
+      },
+      "branch_id_hex": "76b809bb"
+    }
+  }
+}

@@ -1,15 +1,30 @@
 
 import asyncio
+from urllib.parse import urlsplit
+
 from .clients import ElectrumClient, BitcoreClient
-from . import constants
+from .coins import (
+    CoinConfig,
+    ConfigurationError,
+    get_coin_config as get_coin_config,
+    get_coin_network as get_coin_network,
+    load_coin_configs,
+    set_active_network,
+)
 
 
 class ClientManager:
 
-    def __init__(self):
+    def __init__(self, coin_configs=None):
+        self.coin_configs = (
+            load_coin_configs()
+            if coin_configs is None
+            else dict(coin_configs)
+        )
         self.clients = {}
         self.protocols = {}
         self._switch_locks = {}
+        self._network_configs = {}
 
         self.on_block_events = None
         self.on_address_events = None
@@ -17,20 +32,36 @@ class ClientManager:
 
         self.ks = None
 
-    def add(self, coin, protocol=None):
+    def add(self, coin, protocol=None, network="mainnet"):
         key = coin.strip().lower()
 
-        if key not in constants.COINS:
-            raise ValueError(f"Unknown coin: {coin}")
+        if key not in self.coin_configs:
+            raise ConfigurationError(f"unknown coin: {coin}")
 
         if key in self.clients:
+            if self._network_configs[key].network_id != network:
+                raise ConfigurationError(
+                    f"coin '{key}' is already registered for network "
+                    f"'{self._network_configs[key].network_id}'"
+                )
             return self.clients[key]
 
-        coin_class = constants.COINS[key]
+        coin_config = self.coin_configs[key]
+        if not isinstance(coin_config, CoinConfig):
+            raise ConfigurationError(f"invalid configuration for coin '{key}'")
+        network_config = coin_config.get_network(network)
+        self._network_configs[key] = network_config
 
-        electrum_protocols = ["tcp", "ssl", "wss"]
+        electrum_protocols = ["tcp", "ssl", "wss", "ws"]
 
-        if protocol == "bitcore":
+        if protocol == "lightwalletd":
+            if not network_config.lightwalletd_endpoints:
+                raise ValueError(
+                    f"Coin '{key}' has no Lightwalletd servers"
+                )
+            protocols = ["lightwalletd"]
+
+        elif protocol == "bitcore":
             protocols = ["bitcore"] + electrum_protocols
 
         elif protocol in electrum_protocols:
@@ -39,9 +70,9 @@ class ClientManager:
             ] + ["bitcore"]
 
         else:
-            if coin_class.SERVERS:
+            if network_config.electrum_servers:
                 protocols = electrum_protocols + ["bitcore"]
-            elif coin_class.BITCORE_API:
+            elif network_config.bitcore_api:
                 protocols = ["bitcore"] + electrum_protocols
             else:
                 raise ValueError(
@@ -53,7 +84,7 @@ class ClientManager:
 
         client = self._create_client(
             key,
-            coin_class,
+            network_config,
             protocols[0]
         )
 
@@ -61,18 +92,36 @@ class ClientManager:
 
         return client
 
-    def _create_client(self, coin, coin_class, protocol):
-        if protocol in ("tcp", "ssl", "wss"):
-            if not coin_class.SERVERS:
+    def _create_client(self, coin, network_config, protocol):
+        if protocol == "lightwalletd":
+            from .clients.lightwalletd import LightwalletdClient
+
+            servers = network_config.lightwalletd_endpoints
+            if not servers:
+                raise ValueError(f"Coin '{coin}' has no Lightwalletd servers")
+
+            endpoint = urlsplit(f"//{servers[0]}")
+            if not endpoint.hostname:
+                raise ValueError(
+                    f"Invalid Lightwalletd server for coin '{coin}'"
+                )
+
+            client = LightwalletdClient(
+                endpoint.hostname,
+                endpoint.port or 9067,
+            )
+
+        elif protocol in ("tcp", "ssl", "wss", "ws"):
+            if not network_config.electrum_servers:
                 raise ValueError(f"Coin '{coin}' has no Electrum servers")
-
-            client = ElectrumClient(coin_class, protocol=protocol)
-
+        
+            client = ElectrumClient(network_config, protocol=protocol)
+        
         elif protocol == "bitcore":
-            if not coin_class.BITCORE_API:
+            if not network_config.bitcore_api:
                 raise ValueError(f"Coin '{coin}' has no Bitcore API")
-
-            client = BitcoreClient(coin_class)
+        
+            client = BitcoreClient(network_config)
 
         else:
             raise ValueError(f"Unknown protocol: {protocol}")
@@ -135,7 +184,7 @@ class ClientManager:
 
     async def _connect_with_fallback(self, coin):
         protocols = self.protocols[coin]
-        coin_class = constants.COINS[coin]
+        network_config = self._network_configs[coin]
 
         current = self.clients.get(coin)
         current_protocol = self._get_protocol(current)
@@ -155,7 +204,7 @@ class ClientManager:
                 else:
                     client = self._create_client(
                         coin,
-                        coin_class,
+                        network_config,
                         protocol
                     )
 
@@ -224,7 +273,7 @@ class ClientManager:
                     f"No alternative protocol available for {key}"
                 )
 
-            coin_class = constants.COINS[key]
+            network_config = self._network_configs[key]
 
             last_error = None
 
@@ -234,7 +283,7 @@ class ClientManager:
                 try:
                     client = self._create_client(
                         key,
-                        coin_class,
+                        network_config,
                         protocol
                     )
 
@@ -298,10 +347,10 @@ class ClientManager:
             return client._connected.is_set()
 
         if isinstance(client, BitcoreClient):
-            return (
-                client.session is not None
-                and not client.session.closed
-            )
+            return client._connected.is_set()
+
+        if getattr(client, "protocol", None) == "lightwalletd":
+            return client.connected
 
         return False
 
@@ -312,13 +361,18 @@ class ClientManager:
         if isinstance(client, BitcoreClient):
             return "bitcore"
 
+        if getattr(client, "protocol", None) == "lightwalletd":
+            return "lightwalletd"
+
         return None
 
     def get_protocol(self, coin):
         return self._get_protocol(self.get(coin))
 
-    def set_network(self, coin):
-        constants.set_coin(coin)
+    def set_network(self, coin, network="mainnet"):
+        if coin.strip().lower() not in self.coin_configs:
+            raise ConfigurationError(f"unknown coin: {coin}")
+        return set_active_network(coin, network)
 
     def __getitem__(self, coin):
         return self.get(coin)

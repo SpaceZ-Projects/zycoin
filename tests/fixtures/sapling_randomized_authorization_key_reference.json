@@ -1,0 +1,19 @@
+{
+  "source": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/test-vectors/json/sapling_signatures.json",
+  "generator_source": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/zcash_test_vectors/sapling/redjubjub.py",
+  "generator_revision": "78321beacb0e0477e33cd002b56585a107c2708c",
+  "generator_relation": "rvk = vk + SPENDING_KEY_BASE * alpha",
+  "fields": {
+    "ak": "vk",
+    "ar": "alpha",
+    "rk": "rvk"
+  },
+  "encoding": "Each value is 32 bytes. ar is a canonical little-endian Jubjub scalar. ak and rk use canonical compressed Jubjub point encodings: the v coordinate is little-endian with the u-coordinate parity in the high bit. ar embeds unchanged into the BLS12-381 circuit scalar field.",
+  "case_index": 0,
+  "case": {
+    "ak": "9b0153b03d320fe23e2834d5d61dbb1f519b3f41f8f946152bf0c3f247d11807",
+    "ar": "ffd1a1273252b187f4ed326dfc98853e2917c2b36379b175da63b9ef6dda6c08",
+    "rk": "c1babcb6eae2b994ee6d65c10b9dad5940dc735b07504daed1e46b0709b45136"
+  },
+  "limitation": "This independent vector validates a nonzero Jubjub-scalar randomizer, a strict subset of the canonical BLS12-381 scalar range accepted by the Spend circuit. It does not constitute a complete Spend witness."
+}

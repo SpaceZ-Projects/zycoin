@@ -1,0 +1,94 @@
+{
+  "id": "flux",
+  "name": "Flux",
+  "symbol": "FLUX",
+  "github": "https://github.com/RunOnFlux/fluxd",
+  "networks": {
+    "mainnet": {
+      "verification": "configured_unverified",
+      "address": {
+        "wif_prefix": 128,
+        "p2pkh_prefix_hex": "1cb8",
+        "p2sh_prefix_hex": "1cbd",
+        "bech32_hrp": null,
+        "verification": "verified",
+        "verification_sources": [
+          "https://github.com/RunOnFlux/fluxd/blob/master/src/chainparams.cpp"
+        ]
+      },
+      "electrum": {
+        "status": "configured_unverified",
+        "servers": [
+          "electrumx.runonflux.io",
+          "electrumx2.runonflux.io"
+        ],
+        "ports": {
+          "tcp": 50001,
+          "ssl": 50002,
+          "websocket": 50004
+        }
+      },
+      "bitcore": {
+        "status": "configured_unverified",
+        "explorer_url": "https://explorer.runonflux.io",
+        "api_path": "/api/",
+        "socket_path": "/socket.io/"
+      },
+      "lightwalletd": {
+        "status": "unsupported",
+        "endpoints": [],
+        "implemented_rpcs": []
+      },
+      "transparent_derivation": {
+        "status": "supported_verified_parameters",
+        "path": "m/44'/19167'/{account}'",
+        "coin_type": 19167,
+        "verification_sources": [
+          "https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki",
+          "https://github.com/satoshilabs/slips/blob/master/slip-0044.md"
+        ]
+      },
+      "sapling": {
+        "status": "partial",
+        "consensus_upgrade_name": "Acadia",
+        "activation_height": 250000,
+        "consensus_branch_id_hex": "76b809bb",
+        "zip32_coin_type": 19167,
+        "derivation_path": "m/32'/19167'/{account}'",
+        "derivation_path_status": "unverified",
+        "payment_address_hrp": "za",
+        "full_viewing_key_hrp": null,
+        "base_full_viewing_key_hrp": "zviewa",
+        "incoming_viewing_key_hrp": "zivka",
+        "extended_spending_key_hrp": "secret-extended-key-main",
+        "testnet": {
+          "activation_height": 210,
+          "consensus_branch_id_hex": "76b809bb",
+          "payment_address_hrp": "ztestacadia",
+          "base_full_viewing_key_hrp": "zviewtestacadia",
+          "incoming_viewing_key_hrp": "zivktestacadia",
+          "extended_spending_key_hrp": "secret-extended-key-test"
+        },
+        "parameter_files": [
+          "sapling-spend.params",
+          "sapling-output.params"
+        ],
+        "lightwalletd_compact_block_capability": "not_configured",
+        "verification_sources": [
+          "https://github.com/RunOnFlux/fluxd/blob/8a60ee6316371a120ae8546c8d42f4cb3bc71158/src/chainparams.cpp",
+          "https://github.com/RunOnFlux/fluxd/blob/8a60ee6316371a120ae8546c8d42f4cb3bc71158/src/consensus/upgrades.cpp",
+          "https://github.com/RunOnFlux/fluxd/blob/8a60ee6316371a120ae8546c8d42f4cb3bc71158/zcutil/fetch-params.sh"
+        ]
+      },
+      "extended_key_headers": {
+        "xpub": {
+          "standard": "0488b21e"
+        },
+        "xprv": {
+          "standard": "0488ade4"
+        }
+      },
+      "branch_id_hex": "76b809bb"
+    }
+  }
+}

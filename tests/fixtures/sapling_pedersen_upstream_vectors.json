@@ -1,0 +1,26 @@
+{
+  "reference_repository": "https://github.com/zcash/sapling-crypto",
+  "reference_revision": "88a7946b4a3066787776e11f0a502654167e022d",
+  "source": "src/pedersen_hash/test_vectors.rs",
+  "source_provenance": "Pinned upstream Sapling Pedersen test vectors; each input_bits vector begins with the six NoteCommitment personalization bits.",
+  "vectors": [
+    {
+      "personalization": "NoteCommitment",
+      "message_bits": [],
+      "hash_u": "0x06b1187c11ca4fb4383b2e0d0dbbde3ad3617338b5029187ec65a5eaed5e4d0b",
+      "hash_v": "0x3ce70f536652f0dea496393a1e55c4e08b9d55508e16d11e5db40d4810cbc982"
+    },
+    {
+      "personalization": "NoteCommitment",
+      "message_bits": [0],
+      "hash_u": "0x2fc3bc454c337f71d4f04f86304262fcbfc9ecd808716b92fc42cbe6827f7f1a",
+      "hash_v": "0x46d0d25bf1a654eedc6a9b1e5af398925113959feac31b7a2c036ff9b9ec0638"
+    },
+    {
+      "personalization": "NoteCommitment",
+      "message_bits": [1],
+      "hash_u": "0x4f8ce0e0a9e674b3ab9606a7d7aefba386e81583d81918127814cde41d209d97",
+      "hash_v": "0x312b5ab93b14c9b9af334fe1fe3c50fffb53fbd074fa40ca600febde7c97e346"
+    }
+  ]
+}

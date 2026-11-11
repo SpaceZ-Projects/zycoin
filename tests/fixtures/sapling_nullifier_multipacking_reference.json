@@ -1,0 +1,15 @@
+{
+  "nullifier_source": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/test-vectors/json/sapling_key_components.json",
+  "packing_specification": "https://docs.rs/crate/bellman/0.15.0/source/src/gadgets/multipack.rs",
+  "circuit_source": "https://github.com/zcash/sapling-crypto/blob/88a7946b4a3066787776e11f0a502654167e022d/src/circuit.rs",
+  "case": {
+    "name": "Sapling key-components vector 0",
+    "nullifier_digest_hex": "44fad6564ffdec9fa19c43a28f861d5ebf602346007de76267d9752747ab4063",
+    "digest_bit_order": "little-endian within each byte",
+    "chunk_widths": [254, 2],
+    "packed_public_inputs_decimal": [
+      "15945210029497314482160337095886142342816578537174547304857438980922152516164",
+      "1"
+    ]
+  }
+}

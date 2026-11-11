@@ -1,0 +1,69 @@
+{
+  "id": "kmdcl",
+  "name": "KomodoClassic",
+  "symbol": "KMDCL",
+  "github": "https://github.com/kmdclassic/KmdClassic",
+  "networks": {
+    "mainnet": {
+      "verification": "configured_unverified",
+      "address": {
+        "wif_prefix": 188,
+        "p2pkh_prefix_hex": "3c",
+        "p2sh_prefix_hex": "55",
+        "bech32_hrp": null,
+        "verification": "verified",
+        "verification_sources": [
+          "https://github.com/kmdclassic/KmdClassic/blob/master/src/chainparams.cpp"
+        ]
+      },
+      "electrum": {
+        "status": "configured_unverified",
+        "servers": [
+          "electrum.kmdclassic.com"
+        ],
+        "ports": {
+          "tcp": 50001,
+          "ssl": 50002,
+          "websocket": 50004
+        }
+      },
+      "bitcore": {
+        "status": "configured_unverified",
+        "explorer_url": "https://explorer.kmdclassic.com",
+        "api_path": "/insight-api-komodo/",
+        "socket_path": "/socket.io/"
+      },
+      "lightwalletd": {
+        "status": "unsupported",
+        "endpoints": [],
+        "implemented_rpcs": []
+      },
+      "transparent_derivation": {
+        "status": "unverified",
+        "path": "m/44'/141'/{account}'",
+        "coin_type": 141
+      },
+      "sapling": {
+        "status": "unknown",
+        "activation_height": null,
+        "zip32_coin_type": 141,
+        "derivation_path": "m/32'/141'/{account}'",
+        "payment_address_hrp": null,
+        "full_viewing_key_hrp": null,
+        "incoming_viewing_key_hrp": null,
+        "extended_spending_key_hrp": null,
+        "lightwalletd_compact_block_capability": "not_configured",
+        "audit_note": "No authoritative Komodo Classic node source with Sapling consensus or wallet parameters was located."
+      },
+      "extended_key_headers": {
+        "xpub": {
+          "standard": "0488b21e"
+        },
+        "xprv": {
+          "standard": "0488ade4"
+        }
+      },
+      "branch_id_hex": "7361707a"
+    }
+  }
+}

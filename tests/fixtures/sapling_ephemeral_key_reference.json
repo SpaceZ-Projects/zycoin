@@ -1,0 +1,13 @@
+{
+  "source": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/test-vectors/json/sapling_note_encryption.json",
+  "implementation": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/zcash_test_vectors/sapling/note_encryption.py",
+  "case": {
+    "default_d": "f19d9b797e39f337445839",
+    "esk": "81c7b2171ff4415250cac01f5982fd8f49619d61ad78f6830b3c606145962a0e",
+    "epk": "ded68f05c658fcae5ae218646ff844406f84426784040d0bef2b09cb3848c4dc"
+  },
+  "encoding": {
+    "esk": "canonical Jubjub scalar, little-endian bytes",
+    "epk": "compressed Jubjub point"
+  }
+}

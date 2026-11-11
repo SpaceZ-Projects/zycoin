@@ -1,0 +1,28 @@
+{
+  "coin": "btcz",
+  "network": "mainnet",
+  "source": "lightd.btcz.rocks:443",
+  "retrieval": [
+    "GetBlockRange",
+    "GetTransaction"
+  ],
+  "observed_tip_height": 1865934,
+  "transaction": {
+    "txid": "2a35efbe318b79b1e357b8ad6145561bd90dd37200a9dcc691adf1a05cdc8dd3",
+    "height": 1865916,
+    "block_hash": "e13e65970ada9ad749fcc5be815cdeae4a01faad98d3c4fa792c224144070000",
+    "transaction_index": 1,
+    "raw_transaction_bytes": 3321,
+    "sapling_output_index": 0
+  },
+  "compact_output": {
+    "cmu": "f7ce4e48ed6ece64e27a7bd261d54c101814396b064fc15e23e7545cd7f33f08",
+    "ephemeral_key": "7e2cc2299409ec8dc4da6ab6deb3a512bd6cf75c184c8c903a1d97db060ae586",
+    "ciphertext_prefix": "a80ca6ddd16d3a50bd83c9e4cca679a2b56122f19125fa07de7c9f81fe8db27b378b534f891e53a1cc9cfedaf81652bc4da0541f"
+  },
+  "decryption_fixture_status": "incomplete",
+  "missing": [
+    "A controlled IVK or FVK that corresponds to this on-chain output",
+    "Independently established note plaintext, value, and diversifier for this output"
+  ]
+}

@@ -4,12 +4,13 @@ import os
 import ecdsa
 import pyaes
 import hmac
+import hashlib
+import struct
 from ecdsa.ellipticcurve import Point
 from ecdsa.curves import SECP256k1
 from ecdsa.ecdsa import curve_secp256k1, generator_secp256k1
-import hashlib
 from .util import *
-from . import constants
+from .coins import get_active_network
 
 TYPE_ADDRESS = 0
 TYPE_PUBKEY  = 1
@@ -23,6 +24,146 @@ SCRIPT_TYPES = {
 AES = None
 
 BIP32_PRIME = 0x80000000
+
+
+class EnumException(Exception):
+    pass
+
+
+class Enumeration:
+    def __init__(self, name, enumList):
+        self.__doc__ = name
+        lookup = {}
+        reverseLookup = {}
+        i = 0
+        uniqueNames = []
+        uniqueValues = []
+        for x in enumList:
+            if isinstance(x, tuple):
+                x, i = x
+            if not isinstance(x, str):
+                raise EnumException("enum name is not a string: " + x)
+            if not isinstance(i, int):
+                raise EnumException("enum value is not an integer: " + i)
+            if x in uniqueNames:
+                raise EnumException("enum name is not unique: " + x)
+            if i in uniqueValues:
+                raise EnumException("enum value is not unique for " + x)
+            uniqueNames.append(x)
+            uniqueValues.append(i)
+            lookup[x] = i
+            reverseLookup[i] = x
+            i = i + 1
+        self.lookup = lookup
+        self.reverseLookup = reverseLookup
+
+    def __getattr__(self, attr):
+        if attr not in self.lookup:
+            raise AttributeError
+        return self.lookup[attr]
+
+    def whatis(self, value):
+        return self.reverseLookup[value]
+
+
+opcodes = Enumeration("Opcodes", [
+    ("OP_0", 0), ("OP_PUSHDATA1",76), "OP_PUSHDATA2", "OP_PUSHDATA4", "OP_1NEGATE", "OP_RESERVED",
+    "OP_1", "OP_2", "OP_3", "OP_4", "OP_5", "OP_6", "OP_7",
+    "OP_8", "OP_9", "OP_10", "OP_11", "OP_12", "OP_13", "OP_14", "OP_15", "OP_16",
+    "OP_NOP", "OP_VER", "OP_IF", "OP_NOTIF", "OP_VERIF", "OP_VERNOTIF", "OP_ELSE", "OP_ENDIF", "OP_VERIFY",
+    "OP_RETURN", "OP_TOALTSTACK", "OP_FROMALTSTACK", "OP_2DROP", "OP_2DUP", "OP_3DUP", "OP_2OVER", "OP_2ROT", "OP_2SWAP",
+    "OP_IFDUP", "OP_DEPTH", "OP_DROP", "OP_DUP", "OP_NIP", "OP_OVER", "OP_PICK", "OP_ROLL", "OP_ROT",
+    "OP_SWAP", "OP_TUCK", "OP_CAT", "OP_SUBSTR", "OP_LEFT", "OP_RIGHT", "OP_SIZE", "OP_INVERT", "OP_AND",
+    "OP_OR", "OP_XOR", "OP_EQUAL", "OP_EQUALVERIFY", "OP_RESERVED1", "OP_RESERVED2", "OP_1ADD", "OP_1SUB", "OP_2MUL",
+    "OP_2DIV", "OP_NEGATE", "OP_ABS", "OP_NOT", "OP_0NOTEQUAL", "OP_ADD", "OP_SUB", "OP_MUL", "OP_DIV",
+    "OP_MOD", "OP_LSHIFT", "OP_RSHIFT", "OP_BOOLAND", "OP_BOOLOR",
+    "OP_NUMEQUAL", "OP_NUMEQUALVERIFY", "OP_NUMNOTEQUAL", "OP_LESSTHAN",
+    "OP_GREATERTHAN", "OP_LESSTHANOREQUAL", "OP_GREATERTHANOREQUAL", "OP_MIN", "OP_MAX",
+    "OP_WITHIN", "OP_RIPEMD160", "OP_SHA1", "OP_SHA256", "OP_HASH160",
+    "OP_HASH256", "OP_CODESEPARATOR", "OP_CHECKSIG", "OP_CHECKSIGVERIFY", "OP_CHECKMULTISIG",
+    "OP_CHECKMULTISIGVERIFY",
+    ("OP_NOP1", 0xB0),
+    ("OP_CHECKLOCKTIMEVERIFY", 0xB1), ("OP_CHECKSEQUENCEVERIFY", 0xB2),
+    "OP_NOP4", "OP_NOP5", "OP_NOP6", "OP_NOP7", "OP_NOP8", "OP_NOP9", "OP_NOP10",
+    ("OP_INVALIDOPCODE", 0xFF),
+])
+
+
+def script_GetOp(_bytes):
+    i = 0
+    while i < len(_bytes):
+        vch = None
+        opcode = _bytes[i]
+        i += 1
+
+        if opcode <= opcodes.OP_PUSHDATA4:
+            nSize = opcode
+            if opcode == opcodes.OP_PUSHDATA1:
+                nSize = _bytes[i]
+                i += 1
+            elif opcode == opcodes.OP_PUSHDATA2:
+                (nSize,) = struct.unpack_from('<H', _bytes, i)
+                i += 2
+            elif opcode == opcodes.OP_PUSHDATA4:
+                (nSize,) = struct.unpack_from('<I', _bytes, i)
+                i += 4
+            vch = _bytes[i:i + nSize]
+            i += nSize
+
+        yield opcode, vch, i
+
+
+def script_GetOpName(opcode):
+    return (opcodes.whatis(opcode)).replace("OP_", "")
+
+
+def parse_scriptSig(d, _bytes):
+    try:
+        list(script_GetOp(_bytes))
+    except Exception:
+        print(
+            "parse_scriptSig: cannot find address in input script (coinbase?)",
+            bh2u(_bytes),
+        )
+        return
+
+
+def match_decoded(decoded, to_match):
+    if len(decoded) != len(to_match):
+        return False
+    for i in range(len(decoded)):
+        if (
+            to_match[i] == opcodes.OP_PUSHDATA4
+            and decoded[i][0] <= opcodes.OP_PUSHDATA4
+            and decoded[i][0] > 0
+        ):
+            continue
+        if to_match[i] != decoded[i][0]:
+            return False
+    return True
+
+
+def get_address_from_output_script(_bytes, *, net=None):
+    decoded = [x for x in script_GetOp(_bytes)]
+    match = [opcodes.OP_PUSHDATA4, opcodes.OP_CHECKSIG]
+    if match_decoded(decoded, match):
+        return TYPE_PUBKEY, bh2u(decoded[0][1])
+
+    match = [
+        opcodes.OP_DUP,
+        opcodes.OP_HASH160,
+        opcodes.OP_PUSHDATA4,
+        opcodes.OP_EQUALVERIFY,
+        opcodes.OP_CHECKSIG,
+    ]
+    if match_decoded(decoded, match):
+        return TYPE_ADDRESS, hash160_to_p2pkh(decoded[2][1], net=net)
+
+    match = [opcodes.OP_HASH160, opcodes.OP_PUSHDATA4, opcodes.OP_EQUAL]
+    if match_decoded(decoded, match):
+        return TYPE_ADDRESS, hash160_to_p2sh(decoded[1][1], net=net)
+
+    return TYPE_SCRIPT, bh2u(_bytes)
 
 __b58chars = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 assert len(__b58chars) == 58
@@ -63,25 +204,48 @@ def base_decode(v, length, base):
 
 def b58_address_to_hash160(addr):
     addr = to_bytes(addr, 'ascii')
-    _bytes = base_decode(addr, 26, base=58)
-    return _bytes[0:2], _bytes[2:22]
+    decoded = base_decode(addr, None, base=58)
+    if decoded is None or len(decoded) < 25:
+        raise ValueError("Invalid Base58 address length")
 
-def address_to_script(addr):
+    payload, checksum = decoded[:-4], decoded[-4:]
+    if Hash(payload)[:4] != checksum:
+        raise ValueError("Invalid Base58 address checksum")
+    if len(payload) not in (21, 22):
+        raise ValueError("Unsupported Base58 address version length")
+
+    return payload[:-20], payload[-20:]
+
+def address_to_script(addr, net=None):
+    network = net or get_active_network()
+    hrp = network.bech32_hrp
+    if hrp and addr.lower().startswith(f"{hrp}1"):
+        witness_version, witness_program = decode_segwit_address(addr, hrp)
+        version_opcode = (
+            "00" if witness_version == 0
+            else f"{0x50 + witness_version:02x}"
+        )
+        return (
+            version_opcode
+            + f"{len(witness_program):02x}"
+            + witness_program.hex()
+        )
+
     addrtype, hash_160 = b58_address_to_hash160(addr)
-    if addrtype == constants.net.ADDRTYPE_P2PKH:
+    if addrtype == network.addrtype_p2pkh:
         script = '76a9'
         script += push_script(bh2u(hash_160))
         script += '88ac'
-    elif addrtype == constants.net.ADDRTYPE_P2SH:
+    elif addrtype == network.addrtype_p2sh:
         script = 'a9'
         script += push_script(bh2u(hash_160))
         script += '87'
     else:
-        print('unknown address type: {}'.format(addrtype))
+        raise ValueError(f"Address does not match {network.name}")
     return script
 
-def address_to_scripthash(addr):
-    script = address_to_script(addr)
+def address_to_scripthash(addr, net=None):
+    script = address_to_script(addr, net)
     return script_to_scripthash(script)
 
 def script_to_scripthash(script: str) -> str:
@@ -131,15 +295,140 @@ def hash160_to_b58_address(h160, addrtype):
     s += h160
     return base_encode(s+Hash(s)[0:4], base=58)
 
-def hash160_to_p2pkh(h160):
-    return hash160_to_b58_address(h160, constants.net.ADDRTYPE_P2PKH)
+def hash160_to_p2pkh(h160, net=None):
+    network = net or get_active_network()
+    return hash160_to_b58_address(h160, network.addrtype_p2pkh)
 
-def hash160_to_p2sh(h160):
-    return hash160_to_b58_address(h160, constants.net.ADDRTYPE_P2SH)
+def hash160_to_p2sh(h160, net=None):
+    network = net or get_active_network()
+    return hash160_to_b58_address(h160, network.addrtype_p2sh)
+
+
+_BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+_BECH32_GENERATORS = (
+    0x3B6A57B2,
+    0x26508E6D,
+    0x1EA119FA,
+    0x3D4233DD,
+    0x2A1462B3,
+)
+_BECH32_CONST = 1
+_BECH32M_CONST = 0x2BC830A3
+
+
+def _bech32_polymod(values):
+    checksum = 1
+    for value in values:
+        top = checksum >> 25
+        checksum = ((checksum & 0x1FFFFFF) << 5) ^ value
+        for index, generator in enumerate(_BECH32_GENERATORS):
+            if (top >> index) & 1:
+                checksum ^= generator
+    return checksum
+
+
+def _bech32_hrp_expand(hrp):
+    return [ord(char) >> 5 for char in hrp] + [0] + [
+        ord(char) & 31 for char in hrp
+    ]
+
+
+def _convert_bits(data, from_bits, to_bits, pad):
+    accumulator = 0
+    bit_count = 0
+    result = []
+    max_value = (1 << to_bits) - 1
+    max_accumulator = (1 << (from_bits + to_bits - 1)) - 1
+
+    for value in data:
+        if value < 0 or value >> from_bits:
+            raise ValueError("Invalid data value for bit conversion")
+        accumulator = (
+            (accumulator << from_bits) | value
+        ) & max_accumulator
+        bit_count += from_bits
+        while bit_count >= to_bits:
+            bit_count -= to_bits
+            result.append((accumulator >> bit_count) & max_value)
+
+    if pad:
+        if bit_count:
+            result.append((accumulator << (to_bits - bit_count)) & max_value)
+    elif bit_count >= from_bits or (
+        (accumulator << (to_bits - bit_count)) & max_value
+    ):
+        raise ValueError("Invalid padding in address")
+
+    return result
+
+
+def decode_segwit_address(address, expected_hrp):
+    if not address or (address.lower() != address and address.upper() != address):
+        raise ValueError("Invalid mixed-case SegWit address")
+
+    address = address.lower()
+    separator = address.rfind("1")
+    if separator < 1 or separator + 8 > len(address) or len(address) > 90:
+        raise ValueError("Invalid SegWit address")
+
+    hrp = address[:separator]
+    if hrp != expected_hrp:
+        raise ValueError("SegWit address belongs to another network")
+
+    try:
+        data = [_BECH32_CHARSET.index(char) for char in address[separator + 1:]]
+    except ValueError as exc:
+        raise ValueError("Invalid character in SegWit address") from exc
+
+    polymod = _bech32_polymod(_bech32_hrp_expand(hrp) + data)
+    if polymod not in (_BECH32_CONST, _BECH32M_CONST):
+        raise ValueError("Invalid SegWit address checksum")
+
+    witness_version = data[0]
+    if witness_version > 16:
+        raise ValueError("Invalid witness version")
+    program = bytes(_convert_bits(data[1:-6], 5, 8, False))
+    if not 2 <= len(program) <= 40:
+        raise ValueError("Invalid witness program length")
+    if witness_version == 0 and (
+        len(program) not in (20, 32) or polymod != _BECH32_CONST
+    ):
+        raise ValueError("Invalid version 0 witness address")
+    if witness_version != 0 and polymod != _BECH32M_CONST:
+        raise ValueError("Invalid Bech32m witness address")
+
+    return witness_version, program
+
+
+def encode_segwit_address(hrp, witness_version, witness_program):
+    if not 0 <= witness_version <= 16:
+        raise ValueError("Invalid witness version")
+    if not 2 <= len(witness_program) <= 40:
+        raise ValueError("Invalid witness program length")
+    if witness_version == 0 and len(witness_program) not in (20, 32):
+        raise ValueError("Invalid version 0 witness program length")
+
+    data = [witness_version] + _convert_bits(
+        witness_program,
+        8,
+        5,
+        True,
+    )
+    checksum_constant = (
+        _BECH32_CONST if witness_version == 0 else _BECH32M_CONST
+    )
+    values = _bech32_hrp_expand(hrp) + data
+    polymod = _bech32_polymod(values + [0] * 6) ^ checksum_constant
+    checksum = [
+        (polymod >> (5 * (5 - index))) & 31
+        for index in range(6)
+    ]
+    return hrp + "1" + "".join(
+        _BECH32_CHARSET[value] for value in data + checksum
+    )
 
 
 def script_to_address(script, *, net=None):
-    from .transaction import get_address_from_output_script
     t, addr = get_address_from_output_script(bytes.fromhex(script), net=net)
     assert t == TYPE_ADDRESS
     return addr
@@ -226,8 +515,8 @@ def hash_160(public_key):
         md = ripemd.new(sha256(public_key))
         return md.digest()
 
-def public_key_to_p2pkh(public_key):
-    return hash160_to_p2pkh(hash_160(public_key))
+def public_key_to_p2pkh(public_key, net=None):
+    return hash160_to_p2pkh(hash_160(public_key), net)
 
 
 def EncodeBase58Check(vchIn):
@@ -235,11 +524,12 @@ def EncodeBase58Check(vchIn):
     return base_encode(vchIn + hash[0:4], base=58)
 
 
-def serialize_privkey(secret, compressed, txin_type, internal_use=False):
+def serialize_privkey(secret, compressed, txin_type, internal_use=False, net=None):
+    network = net or get_active_network()
     if internal_use:
-        prefix = bytes([(SCRIPT_TYPES[txin_type] + constants.net.WIF_PREFIX) & 255])
+        prefix = bytes([(SCRIPT_TYPES[txin_type] + network.wif_prefix) & 255])
     else:
-        prefix = bytes([constants.net.WIF_PREFIX])
+        prefix = bytes([network.wif_prefix])
     suffix = b'\01' if compressed else b''
     vchIn = prefix + secret + suffix
     base58_wif = EncodeBase58Check(vchIn)
@@ -270,7 +560,8 @@ def minikey_to_private_key(text):
     return sha256(text)
     
 
-def deserialize_privkey(key):
+def deserialize_privkey(key, net=None):
+    network = net or get_active_network()
     if is_minikey(key):
         return 'p2pkh', minikey_to_private_key(key), True
 
@@ -287,9 +578,9 @@ def deserialize_privkey(key):
                                .format(neutered_privkey))
 
     if txin_type is None:
-        txin_type = inv_dict(SCRIPT_TYPES)[vch[0] - constants.net.WIF_PREFIX]
+        txin_type = inv_dict(SCRIPT_TYPES)[vch[0] - network.wif_prefix]
     else:
-        if vch[0] != constants.net.WIF_PREFIX:
+        if vch[0] != network.wif_prefix:
             raise Exception('invalid prefix ({}) for WIF key'.format(vch[0]))
 
     if len(vch) not in [33, 34]:
@@ -384,7 +675,8 @@ def deserialize_xkey(xkey, prv, *, net=None):
     child_number = xkey[9:13]
     c = xkey[13:13+32]
     header = int('0x' + bh2u(xkey[0:4]), 16)
-    headers = constants.net.XPRV_HEADERS if prv else constants.net.XPUB_HEADERS
+    network = net or get_active_network()
+    headers = network.xprv_headers if prv else network.xpub_headers
     if header not in headers.values():
         raise Exception('Invalid extended key format: {}'
                                .format(hex(header)))
@@ -424,7 +716,6 @@ def CKD_pub(cK, c, n):
 
 
 def _CKD_pub(cK, c, s):
-    order = generator_secp256k1.order()
     I = hmac.new(c, cK + s, hashlib.sha512).digest()
     curve = SECP256k1
     pubkey_point = ecdsa.util.string_to_number(I[0:32])*curve.generator + ser_to_point(cK)
@@ -449,10 +740,12 @@ def _CKD_priv(k, c, s, is_prime):
     return k_n, c_n
 
 def xpub_header(xtype, *, net=None):
-    return bfh("%08x" % constants.net.XPUB_HEADERS[xtype])
+    network = net or get_active_network()
+    return bfh("%08x" % network.xpub_headers[xtype])
 
 def xprv_header(xtype, *, net=None):
-    return bfh("%08x" % constants.net.XPRV_HEADERS[xtype])
+    network = net or get_active_network()
+    return bfh("%08x" % network.xprv_headers[xtype])
 
 def serialize_xpub(xtype, c, cK, depth=0, fingerprint=b'\x00'*4,
                    child_number=b'\x00'*4, *, net=None):
@@ -473,8 +766,8 @@ def deserialize_xprv(xkey, *, net=None):
     return deserialize_xkey(xkey, True, net=net)
     
 
-def bip32_public_derivation(xpub, branch, sequence):
-    xtype, depth, fingerprint, child_number, c, cK = deserialize_xpub(xpub)
+def bip32_public_derivation(xpub, branch, sequence, *, net=None):
+    xtype, depth, fingerprint, child_number, c, cK = deserialize_xpub(xpub, net=net)
     if not sequence.startswith(branch):
         raise ValueError('incompatible branch ({}) and sequence ({})'
                          .format(branch, sequence))
@@ -487,7 +780,7 @@ def bip32_public_derivation(xpub, branch, sequence):
         depth += 1
     fingerprint = hash_160(parent_cK)[0:4]
     child_number = bfh("%08X"%i)
-    return serialize_xpub(xtype, c, cK, depth, fingerprint, child_number)
+    return serialize_xpub(xtype, c, cK, depth, fingerprint, child_number, net=net)
 
 
 def get_pubkeys_from_secret(secret):
@@ -498,30 +791,30 @@ def get_pubkeys_from_secret(secret):
     K_compressed = GetPubKey(public_key.pubkey,True)
     return K, K_compressed
 
-def xpub_from_xprv(xprv):
-    xtype, depth, fingerprint, child_number, c, k = deserialize_xprv(xprv)
-    K, cK = get_pubkeys_from_secret(k)
-    return serialize_xpub(xtype, c, cK, depth, fingerprint, child_number)
+def xpub_from_xprv(xprv, *, net=None):
+    xtype, depth, fingerprint, child_number, c, k = deserialize_xprv(xprv, net=net)
+    _, cK = get_pubkeys_from_secret(k)
+    return serialize_xpub(xtype, c, cK, depth, fingerprint, child_number, net=net)
 
 
 
-def bip32_root(seed, xtype):
+def bip32_root(seed, xtype, *, net=None):
     I = hmac.new(b"Bitcoin seed", seed, hashlib.sha512).digest()
     master_k = I[0:32]
     master_c = I[32:]
-    K, cK = get_pubkeys_from_secret(master_k)
-    xprv = serialize_xprv(xtype, master_c, master_k)
-    xpub = serialize_xpub(xtype, master_c, cK)
+    _, cK = get_pubkeys_from_secret(master_k)
+    xprv = serialize_xprv(xtype, master_c, master_k, net=net)
+    xpub = serialize_xpub(xtype, master_c, cK, net=net)
     return xprv, xpub
 
 
-def bip32_private_derivation(xprv, branch, sequence):
+def bip32_private_derivation(xprv, branch, sequence, *, net=None):
     if not sequence.startswith(branch):
         raise ValueError('incompatible branch ({}) and sequence ({})'
                          .format(branch, sequence))
     if branch == sequence:
-        return xprv, xpub_from_xprv(xprv)
-    xtype, depth, fingerprint, child_number, c, k = deserialize_xprv(xprv)
+        return xprv, xpub_from_xprv(xprv, net=net)
+    xtype, depth, fingerprint, child_number, c, k = deserialize_xprv(xprv, net=net)
     sequence = sequence[len(branch):]
     for n in sequence.split('/'):
         if n == '': continue
@@ -532,9 +825,9 @@ def bip32_private_derivation(xprv, branch, sequence):
     _, parent_cK = get_pubkeys_from_secret(parent_k)
     fingerprint = hash_160(parent_cK)[0:4]
     child_number = bfh("%08X"%i)
-    K, cK = get_pubkeys_from_secret(k)
-    xpub = serialize_xpub(xtype, c, cK, depth, fingerprint, child_number)
-    xprv = serialize_xprv(xtype, c, k, depth, fingerprint, child_number)
+    _, cK = get_pubkeys_from_secret(k)
+    xpub = serialize_xpub(xtype, c, cK, depth, fingerprint, child_number, net=net)
+    xprv = serialize_xprv(xtype, c, k, depth, fingerprint, child_number, net=net)
     return xprv, xpub
 
 
@@ -543,29 +836,40 @@ def bip32_private_key(sequence, k, chain):
         k, chain = CKD_priv(k, chain, i)
     return k
 
-def is_b58_address(addr):
+def is_b58_address(addr, net=None):
+    network = net or get_active_network()
     try:
         addrtype, h = b58_address_to_hash160(addr)
-    except Exception as e:
+    except Exception:
         return False
-    if addrtype not in [constants.net.ADDRTYPE_P2PKH, constants.net.ADDRTYPE_P2SH]:
+    if addrtype not in [network.addrtype_p2pkh, network.addrtype_p2sh]:
         return False
     return addr == hash160_to_b58_address(h, addrtype)
 
-def is_address(addr):
-    return is_b58_address(addr)
-
-
-def is_xpub(text):
+def is_address(addr, net=None):
+    network = net or get_active_network()
+    if is_b58_address(addr, network):
+        return True
+    hrp = network.bech32_hrp
+    if not hrp:
+        return False
     try:
-        deserialize_xpub(text)
+        decode_segwit_address(addr, hrp)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def is_xpub(text, net=None):
+    try:
+        deserialize_xpub(text, net=net)
         return True
     except:
         return False
     
-def is_xprv(text):
+def is_xprv(text, net=None):
     try:
-        deserialize_xprv(text)
+        deserialize_xprv(text, net=net)
         return True
     except:
         return False
@@ -612,7 +916,7 @@ def verify_message(address, sig, message):
             raise Exception("Bad signature")
         public_key.verify_digest(sig[1:], h, sigdecode = ecdsa.util.sigdecode_string)
         return True
-    except Exception as e:
+    except Exception:
         return False
 
 
@@ -674,7 +978,7 @@ class EC_KEY(object):
             try:
                 self.verify_message(sig, message)
                 return sig
-            except Exception as e:
+            except Exception:
                 continue
         else:
             raise Exception("error: cannot sign message")

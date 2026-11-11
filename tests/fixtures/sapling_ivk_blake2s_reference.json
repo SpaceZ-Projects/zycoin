@@ -1,0 +1,10 @@
+{
+  "source": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/test-vectors/json/sapling_zip32.json",
+  "implementation": "https://github.com/zcash/zcash-test-vectors/blob/78321beacb0e0477e33cd002b56585a107c2708c/zcash_test_vectors/sapling/zip32.py",
+  "fields": ["ak", "nk", "ivk"],
+  "case": {
+    "ak": "93442e5feffbff16e7217202dc7306729ffffe85af5683bce2642e3eeb5d3871",
+    "nk": "dce8e7edece04b8950417f85ba57691b783c45b1a27422db1693dceb67b10106",
+    "ivk": "4847a130e799d3dbea36a1c16467d621fb2d80e30b3b1d1a426893415dad6601"
+  }
+}

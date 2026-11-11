@@ -1,0 +1,156 @@
+{
+  "id": "zec",
+  "name": "Zcash",
+  "symbol": "ZEC",
+  "github": "https://github.com/zcashfoundation/zebra",
+  "networks": {
+    "mainnet": {
+      "verification": "configured_unverified",
+      "address": {
+        "wif_prefix": 128,
+        "p2pkh_prefix_hex": "1cb8",
+        "p2sh_prefix_hex": "1cbd",
+        "bech32_hrp": null,
+        "verification": "verified",
+        "verification_sources": [
+          "https://github.com/zcash/zcash/blob/558f686599586f55def3db86955d74d3be44605e/src/chainparams.cpp"
+        ]
+      },
+      "electrum": {
+        "status": "unsupported",
+        "servers": [],
+        "ports": {}
+      },
+      "bitcore": {
+        "status": "unsupported",
+        "explorer_url": null,
+        "api_path": null,
+        "socket_path": null
+      },
+      "lightwalletd": {
+        "status": "configured_unverified",
+        "endpoints": [
+          "zec.rocks:443",
+          "lwd.zcashexplorer.app:9067",
+          "zec-node.cakewallet.com:443"
+        ],
+        "implemented_rpcs": [
+          "GetLightdInfo",
+          "GetLatestBlock",
+          "GetBlock",
+          "GetBlockRange",
+          "GetTransaction",
+          "SendTransaction",
+          "GetTaddressTxids",
+          "GetTaddressTransactions"
+        ]
+      },
+      "transparent_derivation": {
+        "status": "supported_verified_parameters",
+        "path": "m/44'/133'/{account}'",
+        "coin_type": 133,
+        "verification_sources": [
+          "https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki",
+          "https://github.com/satoshilabs/slips/blob/master/slip-0044.md",
+          "https://github.com/zcash/zcash/blob/558f686599586f55def3db86955d74d3be44605e/src/chainparams.cpp"
+        ]
+      },
+      "sapling": {
+        "status": "supported_verified_parameters",
+        "note_decryption_status": "supported_verified_parameters",
+        "activation_height": 419200,
+        "zip212_activation_height": 1046400,
+        "zip212_grace_period_blocks": 32256,
+        "zip32_coin_type": 133,
+        "derivation_path": "m/32'/133'/{account}'",
+        "derivation_path_status": "supported_verified_parameters",
+        "payment_address_hrp": "zs",
+        "full_viewing_key_hrp": "zxviews",
+        "incoming_viewing_key_hrp": "zivks",
+        "extended_spending_key_hrp": "secret-extended-key-main",
+        "consensus_branch_id_hex": "76b809bb",
+        "lightwalletd_compact_block_capability": "endpoint_unverified",
+        "verification_sources": [
+          "https://github.com/zcash/zcash/blob/558f686599586f55def3db86955d74d3be44605e/src/chainparams.cpp",
+          "https://github.com/zcash/zcash/blob/558f686599586f55def3db86955d74d3be44605e/src/consensus/upgrades.cpp",
+          "https://github.com/zcash/zcash/blob/558f686599586f55def3db86955d74d3be44605e/src/wallet/rpcwallet.cpp",
+          "https://github.com/satoshilabs/slips/blob/master/slip-0044.md",
+          "https://zips.z.cash/zip-0212"
+        ]
+      },
+      "extended_key_headers": {
+        "xpub": {
+          "standard": "0488b21e"
+        },
+        "xprv": {
+          "standard": "0488ade4"
+        }
+      },
+      "branch_id_hex": "37a5165b"
+    },
+    "testnet": {
+      "verification": "configured_unverified",
+      "address": {
+        "wif_prefix": 239,
+        "p2pkh_prefix_hex": "1d25",
+        "p2sh_prefix_hex": "1cba",
+        "bech32_hrp": null,
+        "verification": "verified",
+        "verification_sources": [
+          "https://github.com/zcash/zcash/blob/558f686599586f55def3db86955d74d3be44605e/src/chainparams.cpp"
+        ]
+      },
+      "electrum": {
+        "status": "unsupported",
+        "servers": [],
+        "ports": {}
+      },
+      "bitcore": {
+        "status": "unsupported",
+        "explorer_url": null,
+        "api_path": null,
+        "socket_path": null
+      },
+      "lightwalletd": {
+        "status": "unsupported",
+        "endpoints": [],
+        "implemented_rpcs": []
+      },
+      "transparent_derivation": {
+        "status": "supported_verified_parameters",
+        "path": "m/44'/1'/{account}'",
+        "coin_type": 1,
+        "verification_sources": [
+          "https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki",
+          "https://github.com/satoshilabs/slips/blob/master/slip-0044.md",
+          "https://github.com/zcash/zcash/blob/558f686599586f55def3db86955d74d3be44605e/src/chainparams.cpp"
+        ]
+      },
+      "sapling": {
+        "status": "partial",
+        "activation_height": 280000,
+        "zip32_coin_type": 1,
+        "derivation_path": null,
+        "derivation_path_status": "unverified",
+        "payment_address_hrp": "ztestsapling",
+        "full_viewing_key_hrp": "zxviewtestsapling",
+        "incoming_viewing_key_hrp": "zivktestsapling",
+        "extended_spending_key_hrp": "secret-extended-key-test",
+        "consensus_branch_id_hex": "76b809bb",
+        "lightwalletd_compact_block_capability": "not_configured",
+        "verification_sources": [
+          "https://github.com/zcash/zcash/blob/master/src/chainparams.cpp",
+          "https://github.com/zcash/zcash/blob/master/src/consensus/upgrades.cpp"
+        ]
+      },
+      "extended_key_headers": {
+        "xpub": {
+          "standard": "043587cf"
+        },
+        "xprv": {
+          "standard": "04358394"
+        }
+      }
+    }
+  }
+}
