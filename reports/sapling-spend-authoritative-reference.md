@@ -507,8 +507,9 @@ passed. The full Sapling suite was not run.
 This verifies the signed lookup gadget and the tested first-window table only.
 It does not establish all Pedersen generator-window values, complete
 Pedersen-hash parity, full Spend matrix alignment, or official parameter
-compatibility. Complete multi-window Pedersen integration and
-note-commitment verification remain unverified.
+compatibility. At that earlier signed-lookup checkpoint, complete
+multi-window Pedersen integration and note-commitment verification remained
+unverified; see the subsequent verified sections below.
 
 ### Complete Pedersen hash path
 
@@ -566,7 +567,68 @@ full Sapling suite was not run because it includes the prohibited
 synthetic-setup regression.
 
 This establishes parity for the complete Pedersen hash path and tested input
-cases only. It does not establish note-commitment parity, full Spend matrix
-alignment, upstream Bellman full-circuit matrix equivalence, or official
-parameter compatibility. Parameter-to-circuit binding and ceremony validity
-remain separately unverified.
+cases only. At this checkpoint, note-commitment parity was not yet established.
+Full Spend matrix alignment, upstream Bellman full-circuit matrix equivalence,
+and official parameter compatibility remain unverified. Parameter-to-circuit
+binding and ceremony validity remain separately unverified.
+
+### Source-faithful note commitment
+
+The pinned `Spend::synthesize` in `circuit.rs` forms note contents in this
+order: the 64 little-endian bits returned by
+`expose_value_commitment`'s `u64_into_boolean_vec_le`, then
+`EdwardsPoint::repr` for `g_d`, then `EdwardsPoint::repr` for `pk_d`.
+The diversifier-derived `g_d` and `pk_d = g_d.mul(ivk)` are computed earlier
+in Spend synthesis; their coordinate witnesses enter this isolated relation
+as already-allocated point variables.
+`repr` uses strict little-endian field decompositions and emits each point as
+the 255 bits of `v` followed by the least-significant bit of `u`. Thus the
+Pedersen message is exactly **576 bits**; the NoteCommitment personalization
+adds six `true` bits, yielding 582 bits / 194 three-bit lookup windows. The
+verified hash processes four generator segments with 63, 63, 63, and 5
+windows.
+
+After `note content hash`, Spend decomposes `commitment_randomness` (`rcm`)
+with `field_into_boolean_vec_le` into the 252 little-endian Jubjub scalar
+bits, multiplies them by `NOTE_COMMITMENT_RANDOMNESS_GENERATOR` using
+`ecc::fixed_base_multiplication`, then adds that point to the Pedersen result
+under `randomization of note commitment`. The isolated
+`constrain_spend_note_commitment` in
+`tests/sapling_spend_reference_port.py` composes the already verified strict
+representation, complete Pedersen hash, fixed-base multiplication, and
+Edwards addition helpers. It takes the prior `g_d` and `pk_d` witness
+variables as inputs, matching their earlier allocation in Spend synthesis;
+the reference trace includes their source witness/curve-interpretation
+prefix. It validates value, randomness, point ownership, assignments, and
+witness consistency before this helper allocates its note-value bits.
+
+The Bellman 0.15 harness calls Bellman's actual `u64_into_boolean_vec_le`,
+`field_into_boolean_vec_le`, strict field-bit decomposition, and fixed-base
+lookup, plus the already verified Pedersen lookup path. It uses actual pinned
+Sapling diversifier derivation for four distinct valid 11-byte diversifiers,
+and exports the pinned note-randomness generator. The full traces match
+exactly for zero, one, middle, and maximum u64 values; `rcm` zero, one, a
+representative scalar, and the maximum Jubjub scalar; and varied diversified
+`g_d` and `pk_d` points. Each trace contains **3,612 auxiliary variables and
+3,614 ordered constraints**, including the two input point witness/curve
+interpretation prefixes. All output hashes, randomized commitment
+coordinates, assignments, annotation/index order, labels, ordered A/B/C
+expressions, and satisfaction results matched.
+
+Changing the high value bit, a `g_d` representation bit, a Pedersen lookup
+witness, an `rcm` bit, a fixed-base lookup witness, or the final randomized
+commitment coordinate yields the same failed row indices as Bellman.
+Missing, malformed, foreign, unassigned, inconsistent, and out-of-range
+inputs reject before the note-commitment helper changes the target system.
+The focused note-commitment differential suite passed **3 tests / 18,092
+subtests**. The combined isolated reference-port, Sapling gadget, Spend
+circuit, and compatibility-manifest regressions passed **105 tests / 57,286
+subtests**. Ruff, Python syntax checks, Rust formatting/build, and
+`git diff --check` passed. The full Sapling suite was not run because it
+includes the prohibited synthetic-setup regression.
+
+This verifies the isolated note-commitment computation and tested inputs only.
+It does not establish full Spend matrix alignment, upstream Bellman
+full-circuit matrix equivalence, or official parameter compatibility.
+Parameter-to-circuit binding and ceremony validity remain separately
+unverified.

@@ -16,6 +16,7 @@ from src.jubjub import (
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, LinearCombination, R1CSError, Variable
+from src.sapling_gadgets import sapling_fixed_base_generator
 
 SpendBoolean: TypeAlias = Variable | bool
 
@@ -64,6 +65,16 @@ class SignedLookupWitness:
 class PedersenHashResult:
     variables: EdwardsPointWitnessVariables
     witness: Point
+
+
+@dataclass(frozen=True)
+class NoteCommitmentResult:
+    value_bits: tuple[Variable, ...]
+    note_contents: tuple[Variable, ...]
+    note_hash: PedersenHashResult
+    randomization_variables: EdwardsPointWitnessVariables
+    commitment_variables: EdwardsPointWitnessVariables
+    commitment_witness: Point
 
 
 def spend_edwards_to_montgomery_coordinates(
@@ -502,6 +513,87 @@ def constrain_spend_pedersen_hash(
         raise R1CSError("Pedersen hash produced no segment result")
     return PedersenHashResult(
         edwards_accumulator_variables, edwards_accumulator_witness
+    )
+
+
+def constrain_spend_note_commitment(
+    system: R1CS,
+    value: int,
+    g_d_variables: EdwardsPointWitnessVariables,
+    g_d_witness: Point,
+    pk_d_variables: EdwardsPointWitnessVariables,
+    pk_d_witness: Point,
+    rcm: int,
+) -> NoteCommitmentResult:
+    """Port Spend's note-content hash and commitment-randomness addition."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if type(value) is not int or not 0 <= value < 1 << 64:
+        raise R1CSError("note value must be an assigned u64")
+    if type(rcm) is not int or not 0 <= rcm < _JUBJUB_SCALAR_MODULUS:
+        raise R1CSError("note commitment randomness is missing or out of range")
+    _validate_point_assignment(system, g_d_variables, g_d_witness)
+    _validate_point_assignment(system, pk_d_variables, pk_d_witness)
+
+    value_bit_variables: list[Variable] = []
+    for index in range(64):
+        bit = system.alloc_private(
+            f"value commitment/value/bit {index}/boolean", (value >> index) & 1
+        )
+        system.enforce(
+            1 - bit.lc(),
+            bit,
+            0,
+            f"value commitment/value/bit {index}/boolean constraint",
+        )
+        value_bit_variables.append(bit)
+    value_bits = tuple(value_bit_variables)
+
+    g_d_bits = constrain_spend_edwards_point_repr(
+        system, g_d_variables, g_d_witness, "representation of g_d"
+    )
+    pk_d_bits = constrain_spend_edwards_point_repr(
+        system, pk_d_variables, pk_d_witness, "representation of pk_d"
+    )
+    note_contents = value_bits + g_d_bits + pk_d_bits
+    if len(note_contents) != 64 + 256 + 256:
+        raise R1CSError("note commitment input must contain exactly 576 bits")
+    note_hash = constrain_spend_pedersen_hash(
+        system, note_contents, "note content hash"
+    )
+
+    rcm_bits = allocate_spend_fixed_base_scalar_bits(
+        system, rcm, 252, "rcm"
+    )
+    randomization_variables = constrain_spend_fixed_base_mul(
+        system,
+        rcm_bits,
+        sapling_fixed_base_generator("note_commitment_randomness"),
+        "computation of commitment randomness",
+    )
+    randomization_witness = Point(
+        system.witness_value(randomization_variables.u),
+        system.witness_value(randomization_variables.v),
+    )
+    commitment_variables = constrain_spend_edwards_point_add(
+        system,
+        note_hash.variables,
+        note_hash.witness,
+        randomization_variables,
+        randomization_witness,
+        "randomization of note commitment",
+    )
+    commitment_witness = Point(
+        system.witness_value(commitment_variables.u),
+        system.witness_value(commitment_variables.v),
+    )
+    return NoteCommitmentResult(
+        value_bits,
+        note_contents,
+        note_hash,
+        randomization_variables,
+        commitment_variables,
+        commitment_witness,
     )
 
 

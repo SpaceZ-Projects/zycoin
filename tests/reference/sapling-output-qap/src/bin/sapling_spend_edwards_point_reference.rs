@@ -44,6 +44,7 @@ struct Export {
     montgomery_cases: Vec<MontgomeryCase>,
     signed_lookup: SignedLookupExport,
     pedersen: PedersenExport,
+    note_commitment: NoteCommitmentExport,
 }
 
 #[derive(Serialize)]
@@ -182,6 +183,32 @@ struct PedersenCase {
     message_bits: Vec<bool>,
     output_u: String,
     output_v: String,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct NoteCommitmentExport {
+    randomness_base: PointRecord,
+    cases: Vec<NoteCommitmentCase>,
+}
+
+#[derive(Serialize)]
+struct NoteCommitmentCase {
+    name: String,
+    value: u64,
+    diversifier: [u8; 11],
+    g_d_u: String,
+    g_d_v: String,
+    pk_d_u: String,
+    pk_d_v: String,
+    rcm_bits: Vec<bool>,
+    note_bit_count: usize,
+    commitment_u: String,
+    commitment_v: String,
+    hash_u: String,
+    hash_v: String,
     satisfied: bool,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
@@ -600,6 +627,181 @@ fn source_pedersen_hash<CS: ConstraintSystem<Scalar>>(
     }
 
     edwards_result.ok_or(SynthesisError::Unsatisfiable)
+}
+
+fn source_note_commitment<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    value: u64,
+    g_d: &SourcePoint,
+    pk_d: &SourcePoint,
+    rcm: jubjub::Fr,
+    pedersen_tables: &[Vec<Vec<(Scalar, Scalar)>>],
+    randomness_table: &[Vec<(Scalar, Scalar)>],
+) -> Result<(SourcePoint, SourcePoint, usize), SynthesisError> {
+    let value_bits = bellman::gadgets::boolean::u64_into_boolean_vec_le(
+        cs.namespace(|| "value commitment/value"),
+        Some(value),
+    )?;
+    let mut note_contents = value_bits.clone();
+    note_contents.extend(source_repr(cs.namespace(|| "representation of g_d"), g_d)?);
+    note_contents.extend(source_repr(
+        cs.namespace(|| "representation of pk_d"),
+        pk_d,
+    )?);
+    let note_bit_count = note_contents.len();
+    let hash = source_pedersen_hash(
+        cs.namespace(|| "note content hash"),
+        &note_contents,
+        pedersen_tables,
+    )?;
+
+    let rcm_bits =
+        bellman::gadgets::boolean::field_into_boolean_vec_le(cs.namespace(|| "rcm"), Some(rcm))?;
+    let randomness = source_fixed_base_multiplication(
+        cs.namespace(|| "computation of commitment randomness"),
+        randomness_table,
+        &rcm_bits,
+    )?;
+    let commitment = source_add(
+        cs.namespace(|| "randomization of note commitment"),
+        &hash,
+        &randomness,
+    )?;
+    Ok((hash, commitment, note_bit_count))
+}
+
+fn source_valid_diversifier(seed: u8) -> ([u8; 11], ExtendedPoint) {
+    for counter in 0..=u8::MAX {
+        let mut diversifier = [seed; 11];
+        diversifier[10] = counter;
+        if let Some(g_d) = sapling_crypto::keys::Diversifier(diversifier).g_d() {
+            return (diversifier, g_d.into());
+        }
+    }
+    panic!("no valid Sapling diversifier found for deterministic fixture seed");
+}
+
+fn build_note_commitment_export() -> Result<NoteCommitmentExport, SynthesisError> {
+    let randomness_generator = sapling_crypto::constants::NOTE_COMMITMENT_RANDOMNESS_GENERATOR;
+    let randomness_affine = ExtendedPoint::from(randomness_generator).to_affine();
+    let randomness_table = source_fixed_base_tables(randomness_generator);
+    let pedersen_tables = source_pedersen_tables();
+    let pk_d = sapling_crypto::constants::PROOF_GENERATION_KEY_GENERATOR;
+    let cases: Vec<(String, u64, u8, ExtendedPoint, jubjub::Fr)> = vec![
+        (
+            "zero_value_zero_rcm".to_owned(),
+            0,
+            0,
+            ExtendedPoint::from(pk_d),
+            jubjub::Fr::ZERO,
+        ),
+        (
+            "one_value_one_rcm".to_owned(),
+            1,
+            1,
+            ExtendedPoint::from(pk_d.double()),
+            jubjub::Fr::ONE,
+        ),
+        (
+            "maximum_value_maximum_rcm".to_owned(),
+            u64::MAX,
+            2,
+            ExtendedPoint::from(-pk_d),
+            -jubjub::Fr::ONE,
+        ),
+        (
+            "middle_value_mixed_rcm".to_owned(),
+            0x0123_4567_89ab_cdef,
+            3,
+            ExtendedPoint::from(pk_d),
+            jubjub::Fr::from(0x5a5a_a5a5_u64),
+        ),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(name, value, diversifier_seed, pk_d, rcm)| {
+            let (diversifier, g_d) = source_valid_diversifier(diversifier_seed);
+            let g_d = g_d.to_affine();
+            let pk_d = pk_d.to_affine();
+            let mut system = TraceConstraintSystem::default();
+            let g_d = source_witness_coordinates(
+                system.namespace(|| "input g_d"),
+                g_d.get_u(),
+                g_d.get_v(),
+            )?;
+            let pk_d = source_witness_coordinates(
+                system.namespace(|| "input pk_d"),
+                pk_d.get_u(),
+                pk_d.get_v(),
+            )?;
+            let (hash, commitment, note_bit_count) = source_note_commitment(
+                &mut system,
+                value,
+                &g_d,
+                &pk_d,
+                rcm,
+                &pedersen_tables,
+                &randomness_table,
+            )?;
+            let rcm_bits = rcm
+                .to_le_bits()
+                .iter()
+                .by_vals()
+                .take(jubjub::Fr::NUM_BITS as usize)
+                .collect();
+            Ok(NoteCommitmentCase {
+                name,
+                value,
+                diversifier,
+                g_d_u: scalar_decimal(g_d.u.get_value().ok_or(SynthesisError::AssignmentMissing)?),
+                g_d_v: scalar_decimal(g_d.v.get_value().ok_or(SynthesisError::AssignmentMissing)?),
+                pk_d_u: scalar_decimal(
+                    pk_d.u
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                pk_d_v: scalar_decimal(
+                    pk_d.v
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                rcm_bits,
+                note_bit_count,
+                commitment_u: scalar_decimal(
+                    commitment
+                        .u
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                commitment_v: scalar_decimal(
+                    commitment
+                        .v
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                hash_u: scalar_decimal(
+                    hash.u
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                hash_v: scalar_decimal(
+                    hash.v
+                        .get_value()
+                        .ok_or(SynthesisError::AssignmentMissing)?,
+                ),
+                satisfied: system.is_satisfied(),
+                variables: system.variables,
+                constraints: system.constraints,
+            })
+        })
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+    Ok(NoteCommitmentExport {
+        randomness_base: PointRecord {
+            u: scalar_decimal(randomness_affine.get_u()),
+            v: scalar_decimal(randomness_affine.get_v()),
+        },
+        cases,
+    })
 }
 
 fn source_montgomery_into_edwards<CS: ConstraintSystem<Scalar>>(
@@ -1847,7 +2049,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v8",
+        format: "bellman-sapling-edwards-point-reference-v9",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -1861,6 +2063,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         montgomery_cases: build_montgomery_cases()?,
         signed_lookup: build_signed_lookup_export()?,
         pedersen: build_pedersen_export()?,
+        note_commitment: build_note_commitment_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

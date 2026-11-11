@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from sapling_spend_reference_port import (
+    EdwardsPointWitnessVariables,
     allocate_spend_fixed_base_scalar_bits,
     allocate_spend_montgomery_point,
     constrain_spend_edwards_point_add,
@@ -18,6 +19,7 @@ from sapling_spend_reference_port import (
     constrain_spend_fixed_base_mul,
     constrain_spend_montgomery_add,
     constrain_spend_montgomery_into_edwards,
+    constrain_spend_note_commitment,
     constrain_spend_pedersen_hash,
     constrain_spend_signed_montgomery_lookup,
     spend_edwards_to_montgomery_coordinates,
@@ -33,7 +35,10 @@ from src.jubjub import (
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, R1CSError, Variable
-from src.sapling_gadgets import _pedersen_montgomery_tables
+from src.sapling_gadgets import (
+    _pedersen_montgomery_tables,
+    sapling_fixed_base_generator,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
@@ -167,7 +172,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v8":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v9":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -204,6 +209,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         }
         cls.pedersen = cls.reference["pedersen"]
         cls.pedersen_cases = {case["name"]: case for case in cls.pedersen["cases"]}
+        cls.note_commitment = cls.reference["note_commitment"]
+        cls.note_commitment_cases = {
+            case["name"]: case for case in cls.note_commitment["cases"]
+        }
 
     def assert_case_matches(
         self, name: str, point: Point, *, expected_satisfied: bool = True
@@ -1306,6 +1315,215 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             lambda: constrain_spend_pedersen_hash(system, (valid,) * (1128 + 1)),
         )
         for call in invalid_arguments:
+            with self.subTest(call=call):
+                before_variables = len(system.variables)
+                before_rows = system.constraint_count
+                with self.assertRaises((R1CSError, TypeError)):
+                    call()
+                self.assertEqual(len(system.variables), before_variables)
+                self.assertEqual(system.constraint_count, before_rows)
+
+    def test_note_commitment_matches_complete_bellman_traces(self) -> None:
+        diversifiers = [
+            tuple(case["diversifier"])
+            for case in self.note_commitment_cases.values()
+        ]
+        self.assertTrue(all(len(diversifier) == 11 for diversifier in diversifiers))
+        self.assertEqual(len(set(diversifiers)), len(diversifiers))
+        randomness_base = sapling_fixed_base_generator(
+            "note_commitment_randomness"
+        )
+        self.assertEqual(
+            (randomness_base.u, randomness_base.v),
+            (
+                int(self.note_commitment["randomness_base"]["u"]),
+                int(self.note_commitment["randomness_base"]["v"]),
+            ),
+        )
+        for name, reference in self.note_commitment_cases.items():
+            with self.subTest(case=name):
+                system = R1CS()
+                g_d_witness = Point(int(reference["g_d_u"]), int(reference["g_d_v"]))
+                pk_d_witness = Point(
+                    int(reference["pk_d_u"]), int(reference["pk_d_v"])
+                )
+                g_d_variables = constrain_spend_edwards_point_witness(
+                    system, g_d_witness, "input g_d"
+                )
+                pk_d_variables = constrain_spend_edwards_point_witness(
+                    system, pk_d_witness, "input pk_d"
+                )
+                rcm = sum(
+                    int(bit) << index
+                    for index, bit in enumerate(reference["rcm_bits"])
+                )
+                result = constrain_spend_note_commitment(
+                    system,
+                    reference["value"],
+                    g_d_variables,
+                    g_d_witness,
+                    pk_d_variables,
+                    pk_d_witness,
+                    rcm,
+                )
+                self.assert_system_matches_reference(name, system, reference)
+                self.assertEqual(reference["note_bit_count"], 576)
+                self.assertEqual(len(result.note_contents), 576)
+                self.assertEqual(
+                    (
+                        system.witness_value(result.note_hash.variables.u),
+                        system.witness_value(result.note_hash.variables.v),
+                    ),
+                    (int(reference["hash_u"]), int(reference["hash_v"])),
+                )
+                self.assertEqual(
+                    (
+                        system.witness_value(result.commitment_variables.u),
+                        system.witness_value(result.commitment_variables.v),
+                    ),
+                    (
+                        int(reference["commitment_u"]),
+                        int(reference["commitment_v"]),
+                    ),
+                )
+                self.assertEqual(
+                    result.commitment_witness,
+                    Point(
+                        int(reference["commitment_u"]),
+                        int(reference["commitment_v"]),
+                    ),
+                )
+                self.assertEqual(
+                    [system.witness_value(bit) for bit in result.value_bits],
+                    [(reference["value"] >> index) & 1 for index in range(64)],
+                )
+
+    def test_note_commitment_altered_inputs_and_witnesses_match_bellman_rows(
+        self,
+    ) -> None:
+        reference = self.note_commitment_cases["maximum_value_maximum_rcm"]
+        system = R1CS()
+        g_d_witness = Point(int(reference["g_d_u"]), int(reference["g_d_v"]))
+        pk_d_witness = Point(int(reference["pk_d_u"]), int(reference["pk_d_v"]))
+        g_d_variables = constrain_spend_edwards_point_witness(
+            system, g_d_witness, "input g_d"
+        )
+        pk_d_variables = constrain_spend_edwards_point_witness(
+            system, pk_d_witness, "input pk_d"
+        )
+        rcm = sum(
+            int(bit) << index for index, bit in enumerate(reference["rcm_bits"])
+        )
+        result = constrain_spend_note_commitment(
+            system,
+            reference["value"],
+            g_d_variables,
+            g_d_witness,
+            pk_d_variables,
+            pk_d_witness,
+            rcm,
+        )
+        self.assert_system_matches_reference(
+            "maximum_value_maximum_rcm", system, reference
+        )
+
+        mutation_annotations = (
+            "value commitment/value/bit 63/boolean",
+            "representation of g_d/unpack u/bit 0/boolean",
+            "note content hash/segment 0, window 0/y/num",
+            "rcm/bit 0/boolean",
+            "computation of commitment randomness/window table lookup 0/x/num",
+            "randomization of note commitment/u3/num",
+        )
+        for annotation in mutation_annotations:
+            variable = next(
+                item for item in system.variables if item.name == annotation
+            )
+            assigned = system.witness_value(variable)
+            self.assertIsNotNone(assigned)
+            replacement = (
+                1 - assigned
+                if assigned in (0, 1)
+                else (assigned + 1) % SCALAR_MODULUS
+            )
+            with self.subTest(variable=annotation):
+                self.assertEqual(
+                    _local_failed_rows(system, variable.index, replacement),
+                    _reference_failed_rows(
+                        reference, variable.index, replacement
+                    ),
+                )
+
+        commitment_v = result.commitment_variables.v
+        commitment_v_value = system.witness_value(commitment_v)
+        self.assertIsNotNone(commitment_v_value)
+        self.assertEqual(
+            _local_failed_rows(
+                system, commitment_v.index, commitment_v_value + 1
+            ),
+            _reference_failed_rows(
+                reference, commitment_v.index, commitment_v_value + 1
+            ),
+        )
+
+    def test_note_commitment_invalid_inputs_reject_before_mutation(self) -> None:
+        system = R1CS()
+        point = Point(
+            int(self.cases["generator"]["u"]),
+            int(self.cases["generator"]["v"]),
+        )
+        variables = constrain_spend_edwards_point_witness(
+            system, point, "valid point"
+        )
+        foreign_system = R1CS()
+        foreign_variables = constrain_spend_edwards_point_witness(
+            foreign_system, point, "foreign point"
+        )
+        unassigned_u = system.alloc_private("unassigned u", None)
+        unassigned_v = system.alloc_private("unassigned v", None)
+        unassigned_variables = EdwardsPointWitnessVariables(
+            unassigned_u, unassigned_v
+        )
+        invalid_calls = (
+            lambda: constrain_spend_note_commitment(
+                system, -1, variables, point, variables, point, 0
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1 << 64, variables, point, variables, point, 0
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, True, variables, point, variables, point, 0
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, variables, point, variables, point, None
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, variables, None, variables, point, 0  # type: ignore[arg-type]
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, variables, point, variables, point, -1
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, variables, point, variables, point,
+                JUBJUB_SCALAR_MODULUS,
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, foreign_variables, point, variables, point, 0
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, variables, point, foreign_variables, point, 0
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, unassigned_variables, point, variables, point, 0
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, variables, Point(point.u + 1, point.v), variables, point, 0
+            ),
+            lambda: constrain_spend_note_commitment(
+                system, 1, object(), point, variables, point, 0  # type: ignore[arg-type]
+            ),
+        )
+        for call in invalid_calls:
             with self.subTest(call=call):
                 before_variables = len(system.variables)
                 before_rows = system.constraint_count
