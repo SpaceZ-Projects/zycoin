@@ -1,0 +1,198 @@
+# Authoritative Sapling Spend reference baseline
+
+## Scope and trust boundary
+
+The source-level reference used by ZyCoin's test-only Bellman tooling is
+`zcash/sapling-crypto` revision
+`88a7946b4a3066787776e11f0a502654167e022d`. Its Spend implementation is
+`sapling-crypto/src/circuit.rs`, `Spend::synthesize`, with the direct circuit
+gadgets in `src/circuit/ecc.rs` and `src/circuit/pedersen_hash.rs`.
+`tests/reference/sapling-output-qap/Cargo.toml` pins Bellman `=0.15.0`;
+`Cargo.lock` records the crates.io checksum
+`973b16549796a1274a63e00159a03250e66e8263e2ac6344b1c9fdfe9b7a8325`.
+The reference export identifies Bellman revision
+`b726862a4ece8a627e7fea486d77b502a6edbb0b`.
+
+The pinned official Spend parameter file has SHA-256
+`8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13`.
+That hash identifies the exact file bytes, not its circuit. Bellman's
+parameter encoding has no circuit identifier. The available transcript lacks
+the required Phase-1 artifact and exact ceremony-era setup evidence.
+Therefore the above commits are the authoritative **reference implementation
+for this audit**, but available evidence does not independently establish that
+the official parameter ceremony used this exact source revision.
+
+## Reference synthesis contract
+
+The pinned export synthesizes **98,777 constraints**, **8 inputs including
+ONE**, and **98,638 auxiliary variables** (98,646 variables total). ZyCoin's
+current ordered matrix is also 98,777 rows by 98,646 columns, but has
+fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+Equal dimensions do not establish equal matrices.
+
+The public input order is `rk.u`, `rk.v`, `cv.u`, `cv.v`, `anchor`,
+`nf[0]`, `nf[1]`; ONE is the implicit column zero. The first four public
+coordinates are inputized during the early key/value-commitment stages,
+`anchor` is inputized after the Merkle path, and the two nullifier chunks
+are inputized last. Bellman numbers public inputs separately from auxiliaries,
+so those inputize calls do not insert input columns among auxiliary columns.
+ZyCoin allocates all seven public inputs at entry, preserving their public
+indices but not the reference's temporal allocation events.
+
+`Spend::synthesize` emits constraints in this stage order:
+
+1. Witness and validate `ak`; check it is not small order.
+2. Decompose `ar`, multiply by the spending-key generator, add to `ak`, and
+   inputize `rk`.
+3. Decompose `nsk`; compute `nk`; serialize `ak` and `nk`; compute/truncate
+   the IVK BLAKE2s output.
+4. Witness/check `g_d`; compute `pk_d = [ivk]g_d`.
+5. Expose the value commitment: allocate 64 little-endian value bits, compute
+   the value-generator multiplication, allocate/decompose `rcv`, compute its
+   fixed-base multiplication, add the points, and inputize `cv`.
+6. Serialize `g_d` and `pk_d`; Pedersen-hash the note contents; decompose
+   `rcm`, compute its fixed-base multiplication, and randomize the note
+   commitment.
+7. For each of 32 path levels, allocate a direction bit and sibling, select
+   ordered left/right inputs, decompose them, and Pedersen-hash the parent.
+8. Allocate the conditional-anchor auxiliary `rt`, enforce
+   `(root - rt) * value = 0`, and inputize `rt` as `anchor`.
+9. Multiply the nullifier-position generator directly by the 32 direction
+   bits; add to the note commitment to obtain `rho`.
+10. Serialize `rho`, compute nullifier BLAKE2s, then multipack its 256 bits
+    into the final two public inputs.
+
+Each Bellman `ConstraintSystem::enforce` call contributes an ordered
+`A * B = C` row. Linear combinations, constants, and factor orientation are
+significant to the ordered matrix even when two rows express the same
+polynomial relation. Witness values are supplied through allocation closures
+and feed later witness construction; they do not choose a different circuit
+branch in the listed synthesis sequence.
+
+The reference witness dependencies are: `ak` and `nsk` from the proof
+generation key; `ar` and `rcm` as scalar openings; the address-derived
+`g_d`/`pk_d`; the value and `rcv` opening; 32 ordered `(sibling, direction)`
+authentication-path entries; and the supplied anchor. `rk`, `cv`, and the
+note commitment are computed from those openings. The path directions feed
+both Merkle left/right selection and the later position-generator
+multiplication. `nk` and serialized `rho` feed nullifier BLAKE2s; the hash
+bits feed the final public chunks. ZyCoin's `_prepare_witness` additionally
+checks the derived keys, commitments, path position, anchor policy, nullifier,
+and public inputs before allocating circuit variables.
+
+### Direct gadget boundary
+
+- Sapling-local: `expose_value_commitment` in `circuit.rs`; `EdwardsPoint`
+  operations in `circuit/ecc.rs`; and `pedersen_hash` in
+  `circuit/pedersen_hash.rs`.
+- Bellman library gadgets called by `Spend::synthesize`: `boolean`
+  (little-endian bit decomposition and Boolean operations), `num`
+  (field variables, serialization and selection), `blake2s`, `multipack`,
+  and lookup gadgets used by fixed-base multiplication and Pedersen hashing.
+- Constants and generator-window tables come from
+  `circuit/constants.rs` and Sapling's circuit constants. The Python port
+  consumes corresponding local constants and point arithmetic; these remain
+  part of the compatibility boundary.
+
+## Function-by-function porting map
+
+“Equivalent” here means the same intended relation and witness semantics; it
+does **not** mean identical allocation order, row order, A/B/C factorization,
+or matrix.
+
+| Reference function or stage | ZyCoin counterpart | Port-map status |
+|---|---|---|
+| `Spend::synthesize`: `ak`, `ar`, `rk` | `_prepare_witness`; `constrain_sapling_spend`; `constrain_sapling_randomized_authorization_key` | **Already equivalent at relation level.** Different public-input allocation timing, event/row order, and low-level factorizations remain. |
+| `nsk`, `nk`, `ak.repr`, `nk.repr`, IVK BLAKE2s | `constrain_fixed_base_jubjub_mul`; `constrain_jubjub_repr`; `constrain_sapling_ivk` | **Already equivalent at relation level.** Source-exact bit allocation and primitive row construction require direct parity evidence. |
+| `g_d`, non-small-order check, `pk_d = [ivk]g_d` | `constrain_jubjub_point`; `constrain_jubjub_not_small_order`; `constrain_jubjub_scalar_mul` | **Different implementation order.** Local serializes `pk_d` before value commitment; the reference does so after `cv` inputization. Relation semantics are covered. |
+| `expose_value_commitment` | `constrain_sapling_value_commitment` and allocations in `constrain_sapling_spend` | **Different implementation order.** Local allocates both bit decompositions before the relation; the reference interleaves value multiplication and `rcv` decomposition/multiplication. Relation semantics are covered. |
+| Note contents, Pedersen note hash, `rcm` randomization | `constrain_note_commitment`; `constrain_pedersen_hash`; fixed-base and point-addition helpers | **Requires further investigation.** Exact Bellman lookup, conversion, allocation, and row factorization parity is not established by relation matching. |
+| Merkle level direction, sibling selection and Pedersen hash | `make_merkle_path_witness`; `constrain_merkle_authentication_path` | **Different implementation.** Local allocates a packed 32-bit position and reconstructs it; Bellman passes direction bits directly. The path relation is represented. |
+| Conditional anchor | `constrain_sapling_conditional_anchor` | **Different implementation.** Bellman allocates `rt`, enforces the root/value row, and binds `rt` to public anchor with another row; ZyCoin directly relates root and public anchor in one row. The projected relation is the same. |
+| `g^position`, `rho`, `rho.repr`, nullifier BLAKE2s | `constrain_sapling_nullifier_rho`; `constrain_jubjub_repr`; `constrain_sapling_nullifier_hash` | **Already equivalent at relation level; requires further investigation for exact layout.** The local-only packed-position representation helper remains. |
+| Nullifier multipacking | `make_sapling_nullifier_multipacking_witness`; `constrain_sapling_nullifier_multipacking` | **Already equivalent at relation level.** 256 digest bits become a 254-bit chunk and a 2-bit chunk; ordered-row parity remains part of the full-matrix gate. |
+| Bellman Boolean/number/lookup/Blake2s primitives | `src/r1cs.py`, `src/blake2s_gadget.py`, and `src/sapling_gadgets.py` helpers | **Requires further investigation.** Functionality exists; identical allocation events and A/B/C rows for every primitive composition are not established. |
+
+No whole Spend relation was found to be missing from the Python implementation.
+The unresolved work is source-exact lowering: allocation events, variable
+positions, constraint sequence, and A/B/C coefficient representation across
+the directly used primitives. This is consistent with the pinned-export
+correspondence: 98,637 of 98,638 auxiliary identities and 98,775 of 98,777
+rows are paired, but 48,546 pairs move; 251 rows swap A/B, 28,351 use
+nontrivial factor normalizations, and 333 match only after expanding
+`A*B-C`. The known helper differences are the local packed-position variable
+and row, and Bellman's conditional-anchor `rt` and its two rows. These facts
+do not establish exact source equivalence or official parameter compatibility.
+**Missing functionality:** none identified at the whole-relation level.
+
+## Safe incremental porting sequence
+
+1. **Start with Edwards point witness/interpretation.** Compare
+   `ecc::EdwardsPoint::witness` plus `interpret` against
+   `allocate_jubjub_point` plus `constrain_jubjub_point` in an isolated
+   test-only harness. Check allocations, assignments, every ordered A/B/C
+   term, and satisfaction for valid and invalid points. It is a bounded unit
+   that avoids hash, scalar-window, and whole-circuit ordering confounders.
+2. Add isolated parity cases for point add/double and non-small-order checks;
+   then strict representation, fixed-base lookup, and variable-base
+   multiplication. Retain the exact source's allocation and enforcement
+   order in each unit rather than normalizing factors.
+3. Verify note/value Pedersen and Merkle hashing (including boundary window
+   lengths), then BLAKE2s and nullifier multipacking, each against Bellman
+   traces and complete ordered rows.
+4. Recompose `Spend::synthesize` in source order. Resolve `rt` inputization
+   and direct position-bit use as their own reviewed changes; do not remove a
+   constraint solely to match a fingerprint.
+5. Accept full alignment only after comparing the complete ordered A/B/C
+   matrices, variable identities and assignments, witness satisfaction, and
+   the exact matrix fingerprint. Recheck official queries only after that
+   gate. Keep parameter-to-circuit binding and ceremony validity separate.
+
+### First isolated unit: Edwards point witness/interpretation
+
+The prescribed first unit is implemented only under `tests/`. The Python
+port follows `EdwardsPoint::witness` and `EdwardsPoint::interpret`, and the
+Rust test harness independently exercises the corresponding allocation,
+`AllocatedNum::square`/`mul`, and final Bellman `enforce` operations using
+Bellman 0.15.0. The source-defined `EDWARDS_D` is exported by the reference
+and checked against ZyCoin's field constant.
+
+For each fixture the comparison checks variable annotation/order and scalar
+assignment, all four ordered A/B/C rows including labels, indices, and
+canonical coefficients, plus satisfaction:
+
+| Fixture | Variables (auxiliary) | Rows | Bellman / Python satisfied |
+|---|---:|---:|---|
+| Identity | 5 | 4 | yes / yes |
+| Jubjub subgroup generator | 5 | 4 | yes / yes |
+| Negative generator | 5 | 4 | yes / yes |
+| Off-curve raw coordinates through `interpret` | 5 | 4 | no / no |
+
+The three valid point fixtures agree exactly in allocation order and
+assignments; all fixtures agree exactly in each ordered A/B/C expression and
+row label. The off-curve case intentionally exercises `interpret` with raw
+coordinates: as in Bellman, synthesis completes but the curve constraint is
+unsatisfied. Missing and malformed Python witnesses are rejected before any
+variable or row is added; mutating an assigned coordinate also makes the
+constraint system unsatisfied. Bellman's `witness` takes a typed
+`ExtendedPoint`, so the off-curve case independently tests its `interpret`
+subroutine, not invalid Jubjub-point construction.
+
+Changed files are test-only:
+
+- `tests/sapling_spend_reference_port.py`
+- `tests/test_sapling_spend_reference_port.py`
+- `tests/reference/sapling-output-qap/src/bin/sapling_spend_edwards_point_reference.rs`
+
+The focused differential suite passed **3 tests**; existing Spend circuit
+regressions passed **6 tests**. `cargo fmt --check`, the Rust reference
+build, and Ruff on both changed Python test files passed. The full Sapling
+regression suite passed **209 tests, 1 skipped** in **2,840.438 seconds**.
+Production Spend, Output, parameter files, and proving gates remain unchanged.
+
+Next in the prescribed sequence are Edwards point addition/doubling and the
+non-small-order check. This result is an isolated primitive parity result; it
+does not establish full Spend matrix alignment, QAP or official parameter
+compatibility, parameter-to-circuit binding, or ceremony validity. No proof
+or synthetic parameter setup was generated.

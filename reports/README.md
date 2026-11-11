@@ -27,6 +27,11 @@ and provenance; it is the source record for the focused reports below.
 
 ## Sapling
 
+- [Authoritative Sapling Spend reference baseline](sapling-spend-authoritative-reference.md) —
+  pins the source revisions used by the independent Bellman reference,
+  documents the ordered synthesis contract and Python port map, and
+  distinguishes the reference source pin from unverified official-parameter
+  circuit binding.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
