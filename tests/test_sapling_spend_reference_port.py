@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sapling_spend_reference_port import (
     allocate_spend_fixed_base_scalar_bits,
+    allocate_spend_montgomery_point,
     constrain_spend_edwards_point_add,
     constrain_spend_edwards_point_double,
     constrain_spend_edwards_point_mul,
@@ -15,6 +16,9 @@ from sapling_spend_reference_port import (
     constrain_spend_edwards_point_repr,
     constrain_spend_edwards_point_witness,
     constrain_spend_fixed_base_mul,
+    constrain_spend_montgomery_add,
+    constrain_spend_montgomery_into_edwards,
+    spend_edwards_to_montgomery_coordinates,
     spend_fixed_base_tables,
 )
 
@@ -25,7 +29,7 @@ from src.jubjub import (
     Point,
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
-from src.r1cs import R1CS, R1CSError
+from src.r1cs import R1CS, R1CSError, Variable
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
@@ -157,7 +161,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v5":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v6":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -184,6 +188,9 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.variable_base_cases = {
             case["name"]: case
             for case in cls.reference["variable_base"]["cases"]
+        }
+        cls.montgomery_cases = {
+            case["name"]: case for case in cls.reference["montgomery_cases"]
         }
 
     def assert_case_matches(
@@ -890,6 +897,168 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                     )
                 self.assertEqual(len(system.variables), before_variables)
                 self.assertEqual(system.constraint_count, before_rows)
+
+    def test_edwards_to_montgomery_coordinate_mapping(self) -> None:
+        mappings = {
+            case["name"]: case
+            for case in self.reference["montgomery_mappings"]
+        }
+        for name, expected in mappings.items():
+            point = Point(int(expected["edwards_u"]), int(expected["edwards_v"]))
+            with self.subTest(point=name):
+                mapped = spend_edwards_to_montgomery_coordinates(point)
+                if expected["x"] is None:
+                    self.assertIsNone(mapped)
+                else:
+                    self.assertEqual(
+                        mapped, (int(expected["x"]), int(expected["y"]))
+                    )
+        with self.assertRaises(R1CSError):
+            spend_edwards_to_montgomery_coordinates(Point(1, 1))
+
+    def test_montgomery_operations_match_bellman_ordered_traces(self) -> None:
+        for name, reference in self.montgomery_cases.items():
+            with self.subTest(case=name):
+                system = R1CS()
+                synthesis_succeeded = True
+                synthesis_error = None
+                converted = None
+                try:
+                    point = allocate_spend_montgomery_point(
+                        system,
+                        int(reference["input_x"]),
+                        int(reference["input_y"]),
+                        "montgomery point",
+                    )
+                    if reference["other_x"] is not None:
+                        other = allocate_spend_montgomery_point(
+                            system,
+                            int(reference["other_x"]),
+                            int(reference["other_y"]),
+                            "other point",
+                        )
+                        point = constrain_spend_montgomery_add(
+                            system, point, other, "montgomery addition"
+                        )
+                    if name != "add_boundary_coordinates":
+                        converted = constrain_spend_montgomery_into_edwards(
+                            system, point, "conversion"
+                        )
+                except R1CSError as error:
+                    synthesis_succeeded = False
+                    synthesis_error = str(error)
+                self.assertEqual(
+                    synthesis_succeeded, reference["synthesis_succeeded"]
+                )
+                expected_errors = {
+                    "convert_zero_y": "u conversion",
+                    "convert_x_minus_one": "v conversion",
+                    "add_equal_x_opposites": "equal x coordinates",
+                }
+                if name in expected_errors:
+                    self.assertEqual(reference["synthesis_error"], "DivisionByZero")
+                    self.assertIn(expected_errors[name], synthesis_error)
+                else:
+                    self.assertIsNone(synthesis_error)
+                self.assert_system_matches_reference(
+                    name,
+                    system,
+                    reference,
+                    expected_satisfied=reference["satisfied"],
+                )
+                if reference["synthesis_succeeded"]:
+                    if reference["montgomery_x"] is not None:
+                        self.assertEqual(
+                            system.witness_value(point.x.expression)
+                            if isinstance(point.x.expression, Variable)
+                            else system._evaluate(point.x.expression, system._values),
+                            int(reference["montgomery_x"]),
+                        )
+                        self.assertEqual(
+                            system.witness_value(point.y.expression)
+                            if isinstance(point.y.expression, Variable)
+                            else system._evaluate(point.y.expression, system._values),
+                            int(reference["montgomery_y"]),
+                        )
+                    if converted is not None:
+                        self.assertEqual(
+                            (system.witness_value(converted.u), system.witness_value(converted.v)),
+                            (int(reference["edwards_u"]), int(reference["edwards_v"])),
+                        )
+
+    def test_montgomery_altered_witnesses_and_invalid_inputs(self) -> None:
+        reference = self.montgomery_cases["add_generator_twice_generator"]
+        system = R1CS()
+        left = allocate_spend_montgomery_point(
+            system,
+            int(reference["input_x"]),
+            int(reference["input_y"]),
+            "montgomery point",
+        )
+        right = allocate_spend_montgomery_point(
+            system,
+            int(reference["other_x"]),
+            int(reference["other_y"]),
+            "other point",
+        )
+        result = constrain_spend_montgomery_add(
+            system, left, right, "montgomery addition"
+        )
+        converted = constrain_spend_montgomery_into_edwards(
+            system, result, "conversion"
+        )
+        self.assert_system_matches_reference(
+            "add_generator_twice_generator", system, reference
+        )
+        altered = result.x.expression
+        assert isinstance(altered, Variable)
+        replacement = (system.witness_value(altered) + 1) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, altered.index, replacement),
+            _reference_failed_rows(reference, altered.index, replacement),
+        )
+        altered_u = converted.u
+        replacement_u = (system.witness_value(altered_u) + 1) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, altered_u.index, replacement_u),
+            _reference_failed_rows(reference, altered_u.index, replacement_u),
+        )
+
+        foreign = R1CS()
+        foreign_point = allocate_spend_montgomery_point(foreign, 1, 2)
+        unassigned = system.alloc_private("unassigned Montgomery x", None)
+        unassigned_point = type(left)(
+            type(left.x)(unassigned, 1), left.y
+        )
+        mismatched_point = type(left)(
+            type(left.x)(left.x.expression, (left.x.value + 1) % SCALAR_MODULUS),
+            left.y,
+        )
+        invalid_calls = (
+            lambda: constrain_spend_montgomery_add(
+                system, left, foreign_point
+            ),
+            lambda: constrain_spend_montgomery_into_edwards(
+                system, unassigned_point
+            ),
+            lambda: constrain_spend_montgomery_add(
+                system, mismatched_point, left
+            ),
+            lambda: allocate_spend_montgomery_point(
+                system, SCALAR_MODULUS, 1
+            ),
+            lambda: allocate_spend_montgomery_point(system, None, 1),
+            lambda: constrain_spend_montgomery_add(
+                system, object(), left  # type: ignore[arg-type]
+            ),
+        )
+        for call in invalid_calls:
+            before_variables = len(system.variables)
+            before_rows = system.constraint_count
+            with self.assertRaises((R1CSError, TypeError)):
+                call()
+            self.assertEqual(len(system.variables), before_variables)
+            self.assertEqual(system.constraint_count, before_rows)
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,

@@ -396,3 +396,63 @@ passed. The full Sapling suite was not run because it includes the
 synthetic-setup regression prohibited by this task. Full Spend matrix
 alignment, official parameter compatibility, parameter-to-circuit binding,
 and ceremony validity remain unverified.
+
+### Montgomery operations on the Pedersen dependency path
+
+The pinned call path is `pedersen_hash::pedersen_hash` in
+`sapling-crypto/src/circuit/pedersen_hash.rs`: each signed 3-bit lookup is
+wrapped by `MontgomeryPoint::interpret_unchecked`; windows within one segment
+are accumulated with `MontgomeryPoint::add`; the segment result is converted
+with `MontgomeryPoint::into_edwards`; and segment results are then combined
+with the already ported Edwards addition. The table-coordinate mapping is
+`circuit::constants::to_montgomery_coords`. The relevant constants are
+`MONTGOMERY_A = 40962` and the pinned `MONTGOMERY_SCALE` in
+`circuit/constants.rs`.
+
+The isolated Python port adds only the host-side Edwards-to-Montgomery
+coordinate mapping, unchecked Montgomery coordinate representation, affine
+Montgomery addition, and Montgomery-to-Edwards conversion. It preserves field
+coordinates, the pinned scale, the source allocation order and row
+factorization. `interpret_unchecked` deliberately performs no curve check;
+the host-side table mapper accepts only on-curve Edwards `Point` witnesses,
+as its upstream `ExtendedPoint` input type guarantees. The finite Montgomery
+representation cannot encode the Edwards identity: the pinned mapper returns
+`None`; the order-two point maps to `(0, 0)`, for which `into_edwards` fails
+on its zero `y` denominator.
+
+The Bellman test harness traces source-mirrored Bellman `AllocatedNum`/`Num`
+equations for `MontgomeryPoint::add` and `into_edwards` and compares every
+allocation, assignment, row label, and ordered A/B/C expression. The
+`ecc` module is private in the pinned crate, so the harness reproduces those
+methods from the pinned source rather than invoking the private methods
+directly. The source mapping is independently mirrored for identity,
+generator, negative generator, twice-generator, and order-two fixtures.
+
+All **12 operation fixtures** matched. Successful conversions of the
+generator, negative generator, twice-generator, zero-x boundary, field-edge
+coordinates, and an unchecked off-curve Montgomery pair matched at **4
+auxiliary variables / 2 constraints** each. The two addition-plus-conversion
+fixtures matched at **9 / 5**; boundary-coordinate addition matched at
+**7 / 3**. The exceptional `y = 0` conversion rejected with the same
+`DivisionByZero` stage and retained **2 / 0**; `x = -1` rejected after the
+`u` row and retained **3 / 1**; adding equal-x opposite points rejected
+before its slope allocation and retained **4 / 0**. All retained rows were
+satisfied in both systems. Generator-plus-twice-generator and
+negative-generator-plus-twice-generator conversions matched the corresponding
+Edwards group results. Altered addition and conversion intermediates produced
+the same failing row indices as Bellman.
+
+Missing, malformed, foreign, unassigned, inconsistent, and out-of-range
+coordinate inputs are rejected before the affected operation mutates the
+system. The focused Montgomery differential checks passed **3 tests** with
+**48 subtests**. The complete isolated primitive suite passed **19 tests**
+with **30,300 subtests**; Spend circuit regressions passed **6 tests / 76
+subtests**, and Sapling gadget regressions passed **52 tests / 273 subtests**.
+Ruff, Python syntax checks, Rust formatting/build, and `git diff --check`
+passed. No complete Sapling suite was run.
+
+This result verifies these Montgomery primitives only. It does not establish
+Pedersen lookup parity, complete Pedersen hash parity, full Spend matrix
+alignment, or official Spend parameter compatibility. Signed lookup
+integration and the complete Pedersen/note-commitment relation remain
+unverified.

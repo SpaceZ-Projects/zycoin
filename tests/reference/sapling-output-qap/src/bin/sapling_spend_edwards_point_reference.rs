@@ -2,7 +2,7 @@ use bellman::gadgets::Assignment;
 use bellman::gadgets::boolean::AllocatedBit;
 use bellman::gadgets::boolean::Boolean;
 use bellman::gadgets::lookup::lookup3_xy;
-use bellman::gadgets::num::AllocatedNum;
+use bellman::gadgets::num::{AllocatedNum, Num};
 use bellman::{ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
 use bls12_381::Scalar;
 use ff::{Field, PrimeField, PrimeFieldBits};
@@ -20,6 +20,13 @@ const EDWARDS_D: Scalar = Scalar::from_raw([
     0xf5fd_9207_e6bd_7fd4,
     0x2a93_18e7_4bfa_2b48,
 ]);
+const MONTGOMERY_A: Scalar = Scalar::from_raw([0xa002, 0, 0, 0]);
+const MONTGOMERY_SCALE: Scalar = Scalar::from_raw([
+    0x8f45_35f7_cf82_b8d9,
+    0xce40_6970_3da8_8abd,
+    0x31de_341e_77d7_64e5,
+    0x2762_de61_e862_645e,
+]);
 
 #[derive(Serialize)]
 struct Export {
@@ -33,6 +40,8 @@ struct Export {
     representations: Vec<RepresentationCase>,
     fixed_base: FixedBaseExport,
     variable_base: VariableBaseExport,
+    montgomery_mappings: Vec<MontgomeryMapping>,
+    montgomery_cases: Vec<MontgomeryCase>,
 }
 
 #[derive(Serialize)]
@@ -114,6 +123,33 @@ struct VariableBaseCase {
 }
 
 #[derive(Serialize)]
+struct MontgomeryMapping {
+    name: &'static str,
+    edwards_u: String,
+    edwards_v: String,
+    x: Option<String>,
+    y: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MontgomeryCase {
+    name: &'static str,
+    input_x: String,
+    input_y: String,
+    other_x: Option<String>,
+    other_y: Option<String>,
+    synthesis_succeeded: bool,
+    synthesis_error: Option<String>,
+    montgomery_x: Option<String>,
+    montgomery_y: Option<String>,
+    edwards_u: Option<String>,
+    edwards_v: Option<String>,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
 struct VariableRecord {
     identity: String,
     annotation: String,
@@ -138,6 +174,11 @@ struct Row {
 struct SourcePoint {
     u: AllocatedNum<Scalar>,
     v: AllocatedNum<Scalar>,
+}
+
+struct SourceMontgomeryPoint {
+    x: Num<Scalar>,
+    y: Num<Scalar>,
 }
 
 #[derive(Default)]
@@ -319,6 +360,171 @@ fn source_witness_coordinates(
     let u = AllocatedNum::alloc(cs.namespace(|| "u"), || Ok(u_value))?;
     let v = AllocatedNum::alloc(cs.namespace(|| "v"), || Ok(v_value))?;
     source_interpret(cs.namespace(|| "point interpretation"), &u, &v)
+}
+
+fn source_montgomery_point<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    x_value: Scalar,
+    y_value: Scalar,
+) -> Result<SourceMontgomeryPoint, SynthesisError> {
+    let x = AllocatedNum::alloc(cs.namespace(|| "x"), || Ok(x_value))?;
+    let y = AllocatedNum::alloc(cs.namespace(|| "y"), || Ok(y_value))?;
+    Ok(SourceMontgomeryPoint {
+        x: x.into(),
+        y: y.into(),
+    })
+}
+
+fn source_montgomery_add<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    point: &SourceMontgomeryPoint,
+    other: &SourceMontgomeryPoint,
+) -> Result<SourceMontgomeryPoint, SynthesisError> {
+    let lambda = AllocatedNum::alloc(cs.namespace(|| "lambda"), || {
+        let numerator = other
+            .y
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?
+            - point
+                .y
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?;
+        let denominator = other
+            .x
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?
+            - point
+                .x
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?;
+        Option::<Scalar>::from(denominator.invert())
+            .map(|inverse| numerator * inverse)
+            .ok_or(SynthesisError::DivisionByZero)
+    })?;
+    cs.enforce(
+        || "evaluate lambda",
+        |lc| lc + &other.x.lc(Scalar::ONE) - &point.x.lc(Scalar::ONE),
+        |lc| lc + lambda.get_variable(),
+        |lc| lc + &other.y.lc(Scalar::ONE) - &point.y.lc(Scalar::ONE),
+    );
+
+    let xprime = AllocatedNum::alloc(cs.namespace(|| "xprime"), || {
+        let mut value = lambda
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?
+            .square();
+        value -= MONTGOMERY_A;
+        value -= point
+            .x
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        value -= other
+            .x
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        Ok(value)
+    })?;
+    let one = CS::one();
+    cs.enforce(
+        || "evaluate xprime",
+        |lc| lc + lambda.get_variable(),
+        |lc| lc + lambda.get_variable(),
+        |lc| {
+            lc + (MONTGOMERY_A, one)
+                + &point.x.lc(Scalar::ONE)
+                + &other.x.lc(Scalar::ONE)
+                + xprime.get_variable()
+        },
+    );
+
+    let yprime = AllocatedNum::alloc(cs.namespace(|| "yprime"), || {
+        let mut value = xprime
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        value -= point
+            .x
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        value *= lambda
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        value += point
+            .y
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        Ok(-value)
+    })?;
+    cs.enforce(
+        || "evaluate yprime",
+        |lc| lc + &point.x.lc(Scalar::ONE) - xprime.get_variable(),
+        |lc| lc + lambda.get_variable(),
+        |lc| lc + yprime.get_variable() + &point.y.lc(Scalar::ONE),
+    );
+    Ok(SourceMontgomeryPoint {
+        x: xprime.into(),
+        y: yprime.into(),
+    })
+}
+
+fn source_montgomery_into_edwards<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    point: &SourceMontgomeryPoint,
+) -> Result<SourcePoint, SynthesisError> {
+    let u = AllocatedNum::alloc(cs.namespace(|| "u"), || {
+        let numerator = point
+            .x
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?
+            * MONTGOMERY_SCALE;
+        let denominator = point
+            .y
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        Option::<Scalar>::from(denominator.invert())
+            .map(|inverse| numerator * inverse)
+            .ok_or(SynthesisError::DivisionByZero)
+    })?;
+    cs.enforce(
+        || "u computation",
+        |lc| lc + &point.y.lc(Scalar::ONE),
+        |lc| lc + u.get_variable(),
+        |lc| lc + &point.x.lc(MONTGOMERY_SCALE),
+    );
+
+    let v = AllocatedNum::alloc(cs.namespace(|| "v"), || {
+        let x = point
+            .x
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        let numerator = x - Scalar::ONE;
+        let denominator = x + Scalar::ONE;
+        Option::<Scalar>::from(denominator.invert())
+            .map(|inverse| numerator * inverse)
+            .ok_or(SynthesisError::DivisionByZero)
+    })?;
+    let one = CS::one();
+    cs.enforce(
+        || "v computation",
+        |lc| lc + &point.x.lc(Scalar::ONE) + one,
+        |lc| lc + v.get_variable(),
+        |lc| lc + &point.x.lc(Scalar::ONE) - one,
+    );
+    Ok(SourcePoint { u, v })
+}
+
+fn source_edwards_to_montgomery(point: ExtendedPoint) -> Option<(Scalar, Scalar)> {
+    let affine = point.to_affine();
+    let u = affine.get_u();
+    let v = affine.get_v();
+    if v == Scalar::ONE {
+        None
+    } else if u == Scalar::ZERO {
+        Some((Scalar::ZERO, Scalar::ZERO))
+    } else {
+        let x = (Scalar::ONE + v) * Option::<Scalar>::from((Scalar::ONE - v).invert())?;
+        let y = x * Option::<Scalar>::from(u.invert())? * MONTGOMERY_SCALE;
+        Some((x, y))
+    }
 }
 
 fn source_conditionally_select<CS: ConstraintSystem<Scalar>>(
@@ -987,6 +1193,177 @@ fn build_variable_base_export() -> Result<VariableBaseExport, SynthesisError> {
     Ok(VariableBaseExport { cases })
 }
 
+fn build_montgomery_case(
+    name: &'static str,
+    point_values: (Scalar, Scalar),
+    other_values: Option<(Scalar, Scalar)>,
+    convert_to_edwards: bool,
+) -> Result<MontgomeryCase, SynthesisError> {
+    let mut system = TraceConstraintSystem::default();
+    let mut montgomery_x = None;
+    let mut montgomery_y = None;
+    let mut edwards_u = None;
+    let mut edwards_v = None;
+    let synthesis = (|| {
+        let point = source_montgomery_point(
+            system.namespace(|| "montgomery point"),
+            point_values.0,
+            point_values.1,
+        )?;
+        let result = if let Some((x, y)) = other_values {
+            let other = source_montgomery_point(system.namespace(|| "other point"), x, y)?;
+            source_montgomery_add(system.namespace(|| "montgomery addition"), &point, &other)?
+        } else {
+            point
+        };
+        montgomery_x = Some(scalar_decimal(
+            result
+                .x
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ));
+        montgomery_y = Some(scalar_decimal(
+            result
+                .y
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ));
+        if convert_to_edwards {
+            let output =
+                source_montgomery_into_edwards(system.namespace(|| "conversion"), &result)?;
+            edwards_u = Some(scalar_decimal(
+                output
+                    .u
+                    .get_value()
+                    .ok_or(SynthesisError::AssignmentMissing)?,
+            ));
+            edwards_v = Some(scalar_decimal(
+                output
+                    .v
+                    .get_value()
+                    .ok_or(SynthesisError::AssignmentMissing)?,
+            ));
+        }
+        Ok::<(), SynthesisError>(())
+    })();
+    Ok(MontgomeryCase {
+        name,
+        input_x: scalar_decimal(point_values.0),
+        input_y: scalar_decimal(point_values.1),
+        other_x: other_values.map(|(x, _)| scalar_decimal(x)),
+        other_y: other_values.map(|(_, y)| scalar_decimal(y)),
+        synthesis_succeeded: synthesis.is_ok(),
+        synthesis_error: synthesis.err().map(|error| format!("{error:?}")),
+        montgomery_x,
+        montgomery_y,
+        edwards_u,
+        edwards_v,
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    })
+}
+
+fn build_montgomery_mappings() -> Vec<MontgomeryMapping> {
+    let generator: ExtendedPoint = sapling_crypto::constants::SPENDING_KEY_GENERATOR.into();
+    let twice_generator = generator + generator;
+    let cases = [
+        ("identity", ExtendedPoint::identity()),
+        ("generator", generator),
+        ("negative_generator", -generator),
+        ("twice_generator", twice_generator),
+        (
+            "order_two",
+            jubjub::AffinePoint::from_raw_unchecked(Scalar::ZERO, -Scalar::ONE).to_extended(),
+        ),
+    ];
+    cases
+        .into_iter()
+        .map(|(name, point)| {
+            let affine = point.to_affine();
+            let coordinates = source_edwards_to_montgomery(point);
+            MontgomeryMapping {
+                name,
+                edwards_u: scalar_decimal(affine.get_u()),
+                edwards_v: scalar_decimal(affine.get_v()),
+                x: coordinates.map(|(x, _)| scalar_decimal(x)),
+                y: coordinates.map(|(_, y)| scalar_decimal(y)),
+            }
+        })
+        .collect()
+}
+
+fn build_montgomery_cases() -> Result<Vec<MontgomeryCase>, SynthesisError> {
+    let generator: ExtendedPoint = sapling_crypto::constants::SPENDING_KEY_GENERATOR.into();
+    let twice_generator = generator + generator;
+    let negative_generator = -generator;
+    let generator_montgomery = source_edwards_to_montgomery(generator).unwrap();
+    let twice_montgomery = source_edwards_to_montgomery(twice_generator).unwrap();
+    let negative_montgomery = source_edwards_to_montgomery(negative_generator).unwrap();
+    let modulus_minus_one = -Scalar::ONE;
+    let modulus_minus_two = modulus_minus_one - Scalar::ONE;
+    let cases = vec![
+        build_montgomery_case("convert_generator", generator_montgomery, None, true)?,
+        build_montgomery_case(
+            "convert_negative_generator",
+            negative_montgomery,
+            None,
+            true,
+        )?,
+        build_montgomery_case("convert_twice_generator", twice_montgomery, None, true)?,
+        build_montgomery_case("convert_zero_x", (Scalar::ZERO, Scalar::ONE), None, true)?,
+        build_montgomery_case(
+            "convert_boundary_coordinates",
+            (modulus_minus_two, modulus_minus_one),
+            None,
+            true,
+        )?,
+        build_montgomery_case(
+            "convert_zero_y",
+            (Scalar::from(7), Scalar::ZERO),
+            None,
+            true,
+        )?,
+        build_montgomery_case(
+            "convert_x_minus_one",
+            (modulus_minus_one, Scalar::from(2)),
+            None,
+            true,
+        )?,
+        build_montgomery_case(
+            "convert_unchecked_off_curve",
+            (Scalar::from(3), Scalar::from(7)),
+            None,
+            true,
+        )?,
+        build_montgomery_case(
+            "add_generator_twice_generator",
+            generator_montgomery,
+            Some(twice_montgomery),
+            true,
+        )?,
+        build_montgomery_case(
+            "add_negative_generator_twice_generator",
+            negative_montgomery,
+            Some(twice_montgomery),
+            true,
+        )?,
+        build_montgomery_case(
+            "add_boundary_coordinates",
+            (Scalar::ZERO, Scalar::ZERO),
+            Some((Scalar::ONE, modulus_minus_one)),
+            false,
+        )?,
+        build_montgomery_case(
+            "add_equal_x_opposites",
+            generator_montgomery,
+            Some(negative_montgomery),
+            true,
+        )?,
+    ];
+    Ok(cases)
+}
+
 fn build_add_case(
     name: &'static str,
     left_point: ExtendedPoint,
@@ -1204,7 +1581,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v5",
+        format: "bellman-sapling-edwards-point-reference-v6",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -1214,6 +1591,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         representations,
         fixed_base: build_fixed_base_export()?,
         variable_base: build_variable_base_export()?,
+        montgomery_mappings: build_montgomery_mappings(),
+        montgomery_cases: build_montgomery_cases()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

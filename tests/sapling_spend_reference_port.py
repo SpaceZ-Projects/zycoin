@@ -14,19 +14,240 @@ from src.jubjub import (
     Point,
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
-from src.r1cs import R1CS, R1CSError, Variable
+from src.r1cs import R1CS, LinearCombination, R1CSError, Variable
 
 SpendBoolean: TypeAlias = Variable | bool
 
 _FIXED_BASE_WINDOW_BITS = 3
 _FIXED_BASE_WINDOW_COUNT = 84
 _JUBJUB_SCALAR_MODULUS = JUBJUB_SCALAR_MODULUS
+_MONTGOMERY_A = 40962
+_MONTGOMERY_SCALE_LIMBS = (
+    0x8F4535F7CF82B8D9,
+    0xCE4069703DA88ABD,
+    0x31DE341E77D764E5,
+    0x2762DE61E862645E,
+)
+_MONTGOMERY_SCALE = sum(
+    limb << (64 * index) for index, limb in enumerate(_MONTGOMERY_SCALE_LIMBS)
+) % SCALAR_MODULUS
 
 
 @dataclass(frozen=True)
 class EdwardsPointWitnessVariables:
     u: Variable
     v: Variable
+
+
+@dataclass(frozen=True)
+class MontgomeryNumberWitness:
+    expression: Variable | LinearCombination
+    value: int
+
+
+@dataclass(frozen=True)
+class MontgomeryPointWitness:
+    x: MontgomeryNumberWitness
+    y: MontgomeryNumberWitness
+
+
+def spend_edwards_to_montgomery_coordinates(
+    point: Point,
+) -> tuple[int, int] | None:
+    """Port the pinned host-side Edwards-to-Montgomery table conversion."""
+    if not isinstance(point, Point):
+        raise TypeError("point must be a Jubjub Point")
+    if not point.is_on_curve():
+        raise R1CSError("Edwards-to-Montgomery conversion requires an on-curve point")
+    if point.v == 1:
+        return None
+    if point.u == 0:
+        return 0, 0
+    modulus = SCALAR_MODULUS
+    x = (1 + point.v) * pow(1 - point.v, modulus - 2, modulus) % modulus
+    y = (
+        x
+        * pow(point.u, modulus - 2, modulus)
+        * _MONTGOMERY_SCALE
+    ) % modulus
+    return x, y
+
+
+def allocate_spend_montgomery_point(
+    system: R1CS,
+    x: int | None,
+    y: int | None,
+    label: str = "montgomery point",
+) -> MontgomeryPointWitness:
+    """Allocate unchecked Montgomery coordinates, as Pedersen lookup does."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if type(x) is not int or type(y) is not int:
+        raise R1CSError("Montgomery coordinates must be assigned integers")
+    if not 0 <= x < SCALAR_MODULUS or not 0 <= y < SCALAR_MODULUS:
+        raise R1CSError("Montgomery coordinates must be canonical field elements")
+    x_variable = system.alloc_private(f"{label}/x/num", x)
+    y_variable = system.alloc_private(f"{label}/y/num", y)
+    return MontgomeryPointWitness(
+        MontgomeryNumberWitness(x_variable, x),
+        MontgomeryNumberWitness(y_variable, y),
+    )
+
+
+def _validate_montgomery_number(
+    system: R1CS, number: MontgomeryNumberWitness
+) -> None:
+    if not isinstance(number, MontgomeryNumberWitness):
+        raise TypeError("Montgomery coordinate must be a Montgomery number witness")
+    if type(number.value) is not int or not 0 <= number.value < SCALAR_MODULUS:
+        raise R1CSError("Montgomery coordinate witness is out of range")
+    expression = number.expression
+    if isinstance(expression, Variable):
+        system.require_owned(expression)
+        actual = system.witness_value(expression)
+        if actual is None:
+            raise R1CSError("Montgomery coordinate witness is unassigned")
+    elif isinstance(expression, LinearCombination):
+        if expression._owner is not system._owner:
+            raise R1CSError("Montgomery coordinate expression belongs to another system")
+        for index, _ in expression.terms:
+            if index >= len(system.variables):
+                raise R1CSError("Montgomery coordinate expression has an invalid variable")
+            if system.witness_value(system.variables[index]) is None:
+                raise R1CSError("Montgomery coordinate expression is unassigned")
+        actual = system._evaluate(expression, system._values)
+    else:
+        raise TypeError("Montgomery coordinate expression is malformed")
+    if actual != number.value:
+        raise R1CSError("Montgomery coordinate does not match its witness")
+
+
+def _montgomery_lc(
+    system: R1CS, number: MontgomeryNumberWitness
+) -> LinearCombination:
+    expression = number.expression
+    if isinstance(expression, Variable):
+        return expression.lc()
+    if isinstance(expression, LinearCombination):
+        return expression
+    raise TypeError("Montgomery coordinate expression is malformed")
+
+
+def constrain_spend_montgomery_add(
+    system: R1CS,
+    point: MontgomeryPointWitness,
+    other: MontgomeryPointWitness,
+    label: str = "montgomery addition",
+) -> MontgomeryPointWitness:
+    """Port pinned `MontgomeryPoint::add` without curve or infinity handling."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if not isinstance(point, MontgomeryPointWitness) or not isinstance(
+        other, MontgomeryPointWitness
+    ):
+        raise TypeError("Montgomery addition requires two Montgomery points")
+    for coordinate in (point.x, point.y, other.x, other.y):
+        _validate_montgomery_number(system, coordinate)
+
+    modulus = SCALAR_MODULUS
+    denominator = (other.x.value - point.x.value) % modulus
+    if denominator == 0:
+        raise R1CSError("Montgomery addition has equal x coordinates")
+    slope = (
+        (other.y.value - point.y.value)
+        * pow(denominator, modulus - 2, modulus)
+    ) % modulus
+    lam = system.alloc_private(f"{label}/lambda/num", slope)
+    system.enforce(
+        _montgomery_lc(system, other.x) - _montgomery_lc(system, point.x),
+        lam,
+        _montgomery_lc(system, other.y) - _montgomery_lc(system, point.y),
+        f"{label}/evaluate lambda",
+    )
+
+    x_value = (
+        slope * slope
+        - _MONTGOMERY_A
+        - point.x.value
+        - other.x.value
+    ) % modulus
+    x_prime = system.alloc_private(f"{label}/xprime/num", x_value)
+    system.enforce(
+        lam,
+        lam,
+        _MONTGOMERY_A
+        + _montgomery_lc(system, point.x)
+        + _montgomery_lc(system, other.x)
+        + x_prime,
+        f"{label}/evaluate xprime",
+    )
+
+    y_value = (
+        -point.y.value - slope * (x_value - point.x.value)
+    ) % modulus
+    y_prime = system.alloc_private(f"{label}/yprime/num", y_value)
+    system.enforce(
+        _montgomery_lc(system, point.x) - x_prime,
+        lam,
+        y_prime + _montgomery_lc(system, point.y),
+        f"{label}/evaluate yprime",
+    )
+    return MontgomeryPointWitness(
+        MontgomeryNumberWitness(x_prime, x_value),
+        MontgomeryNumberWitness(y_prime, y_value),
+    )
+
+
+def constrain_spend_montgomery_into_edwards(
+    system: R1CS,
+    point: MontgomeryPointWitness,
+    label: str = "montgomery conversion",
+) -> EdwardsPointWitnessVariables:
+    """Port pinned `MontgomeryPoint::into_edwards` in allocation order."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if not isinstance(point, MontgomeryPointWitness):
+        raise TypeError("conversion requires a Montgomery point")
+    _validate_montgomery_number(system, point.x)
+    _validate_montgomery_number(system, point.y)
+
+    modulus = SCALAR_MODULUS
+    if point.y.value == 0:
+        raise R1CSError("Montgomery-to-Edwards u conversion has a zero denominator")
+    u_value = (
+        point.x.value
+        * _MONTGOMERY_SCALE
+        * pow(point.y.value, modulus - 2, modulus)
+    ) % modulus
+    u = system.alloc_private(f"{label}/u/num", u_value)
+    system.enforce(
+        _montgomery_lc(system, point.y),
+        u,
+        _MONTGOMERY_SCALE * _montgomery_lc(system, point.x),
+        f"{label}/u computation",
+    )
+
+    v_denominator = (point.x.value + 1) % modulus
+    if v_denominator == 0:
+        raise R1CSError("Montgomery-to-Edwards v conversion has a zero denominator")
+    v_value = (
+        (point.x.value - 1)
+        * pow(v_denominator, modulus - 2, modulus)
+    ) % modulus
+    v = system.alloc_private(f"{label}/v/num", v_value)
+    system.enforce(
+        _montgomery_lc(system, point.x) + 1,
+        v,
+        _montgomery_lc(system, point.x) - 1,
+        f"{label}/v computation",
+    )
+    return EdwardsPointWitnessVariables(u, v)
 
 
 def _validate_point_assignment(
