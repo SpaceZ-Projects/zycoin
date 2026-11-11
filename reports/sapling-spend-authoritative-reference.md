@@ -263,7 +263,45 @@ complete Sapling suite was run for this task, avoiding the pre-existing
 synthetic-setup regression. Production Spend and Output, official parameters,
 and proving gates remain unchanged.
 
-The next prescribed isolated unit is strict Edwards point representation
-(`EdwardsPoint::repr`), followed by fixed-base lookup and variable-base
-multiplication. Full Spend matrix alignment, official parameter compatibility,
-parameter-to-circuit binding, and ceremony validity remain unverified.
+### Strict Edwards point representation
+
+The next prescribed unit, `EdwardsPoint::repr` in the pinned
+`sapling-crypto/src/circuit/ecc.rs`, is implemented in the isolated Python
+port. It calls `to_bits_le_strict` for `u` and then `v`, and returns all 255
+little-endian bits of `v` followed by `u[0]`. The port reproduces Bellman
+0.15's strict canonical-field comparator: bit allocations in source order,
+Boolean rows, prefix-AND auxiliaries, and the final zero-times-zero
+reconstruction row. It does not call production Sapling helpers.
+
+Each Bellman/Python differential fixture contains **779 auxiliary variables
+and 780 ordered constraints**, including the point witness and interpretation
+(5 variables, 4 constraints). The representation itself adds **774
+auxiliaries and 776 constraints**: 510 Boolean rows, 264 prefix-AND rows, and
+two reconstruction rows. For the generator, negative generator, identity,
+order-two point `(0, -1)`, twice-generator, and off-curve `(1, 1)`, variable
+annotations/order, every assignment, all A/B/C coefficients, row labels,
+representation-bit identities and values, and satisfaction results match
+Bellman exactly. The off-curve fixture completes representation synthesis but
+is unsatisfied at the original point-interpretation curve row.
+
+Changing an output bit or source coordinate, and forcing the returned `v`
+bits to encode the noncanonical integer equal to the field modulus, produce
+the same failing row indices as the independent Bellman matrices. Missing,
+malformed, foreign, and assignment-inconsistent point inputs reject before
+the Python representation port mutates the system. `Point` normalizes
+out-of-range integer aliases at construction; a distinct noncanonical field
+element is not representable. The strict bit constraints reject an attempted
+out-of-range bit encoding.
+
+The focused reference-port suite passed **10 tests**; existing Spend circuit
+regressions passed **6 tests**, and Sapling gadget regressions passed **52
+tests**. Ruff, Python syntax checks, Rust formatting/build, and
+`git diff --check` passed. The full Sapling suite was not run because it
+includes the existing synthetic-setup regression, which conflicts with this
+task's prohibition on running synthetic setup. Production Spend and Output,
+official parameters, and proving gates remain unchanged.
+
+The next prescribed isolated unit is **fixed-base lookup**, followed by
+variable-base multiplication. Full Spend matrix alignment, official parameter
+compatibility, parameter-to-circuit binding, and ceremony validity remain
+unverified.

@@ -10,6 +10,7 @@ from sapling_spend_reference_port import (
     constrain_spend_edwards_point_add,
     constrain_spend_edwards_point_double,
     constrain_spend_edwards_point_not_small_order,
+    constrain_spend_edwards_point_repr,
     constrain_spend_edwards_point_witness,
 )
 
@@ -73,11 +74,20 @@ def _canonical_terms(terms: list[dict]) -> tuple[tuple[int, int], ...]:
 def _reference_failed_rows(
     reference: dict, variable_index: int, replacement: int
 ) -> tuple[int, ...]:
+    return _reference_failed_rows_with_assignments(
+        reference, {variable_index: replacement}
+    )
+
+
+def _reference_failed_rows_with_assignments(
+    reference: dict, replacements: dict[int, int]
+) -> tuple[int, ...]:
     assignments = [1] + [
         int.from_bytes(bytes.fromhex(record["assignment"]), "little")
         for record in reference["variables"]
     ]
-    assignments[variable_index] = replacement % SCALAR_MODULUS
+    for variable_index, replacement in replacements.items():
+        assignments[variable_index] = replacement % SCALAR_MODULUS
 
     def evaluate(terms: list[dict]) -> int:
         return sum(
@@ -99,8 +109,17 @@ def _reference_failed_rows(
 def _local_failed_rows(
     system: R1CS, variable_index: int, replacement: int
 ) -> tuple[int, ...]:
+    return _local_failed_rows_with_assignments(
+        system, {variable_index: replacement}
+    )
+
+
+def _local_failed_rows_with_assignments(
+    system: R1CS, replacements: dict[int, int]
+) -> tuple[int, ...]:
     assignments = list(system._values)
-    assignments[variable_index] = replacement % SCALAR_MODULUS
+    for variable_index, replacement in replacements.items():
+        assignments[variable_index] = replacement % SCALAR_MODULUS
     return tuple(
         index
         for index, row in enumerate(system.constraints)
@@ -115,7 +134,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v2":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v3":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -131,6 +150,9 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.non_small_order_cases = {
             case["name"]: case
             for case in cls.reference["non_small_order_cases"]
+        }
+        cls.representation_cases = {
+            case["name"]: case for case in cls.reference["representations"]
         }
 
     def assert_case_matches(
@@ -445,6 +467,134 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             _reference_failed_rows(reference, inverse.index, inverse_replacement),
         )
         self.assertEqual(result.v.index + 1, inverse.index)
+
+    def test_exact_strict_point_representation_parity(self) -> None:
+        generator = Point(*self._generator_coordinates())
+        cases = (
+            ("generator", generator),
+            (
+                "negative_generator",
+                Point(*self._negative_generator_coordinates()),
+            ),
+            ("identity", IDENTITY),
+            ("order_two", Point(0, SCALAR_MODULUS - 1)),
+            ("twice_generator", generator + generator),
+            ("off_curve", Point(1, 1)),
+        )
+        for name, point in cases:
+            with self.subTest(case=name):
+                reference = self.representation_cases[name]
+                system = R1CS()
+                point_variables = constrain_spend_edwards_point_witness(
+                    system, point
+                )
+                bits = constrain_spend_edwards_point_repr(
+                    system, point_variables, point
+                )
+                expected_bits = tuple(
+                    (point.v >> index) & 1
+                    for index in range(SCALAR_MODULUS.bit_length())
+                ) + (point.u & 1,)
+                self.assertEqual(len(bits), 256)
+                self.assertEqual(
+                    tuple(system.witness_value(bit) for bit in bits),
+                    expected_bits,
+                )
+                self.assertTrue(all(value < 2 for value in expected_bits))
+                self.assertEqual(
+                    len(system.variables) - 1,
+                    len(reference["variables"]),
+                )
+                self.assert_system_matches_reference(
+                    name, system, reference, reference["satisfied"]
+                )
+                self.assertEqual(
+                    [bit.index for bit in bits],
+                    [
+                        _reference_index(bit["identity"])
+                        for bit in reference["bits"]
+                    ],
+                )
+                self.assertEqual(
+                    [system.witness_value(bit) for bit in bits],
+                    [int(bit["value"]) for bit in reference["bits"]],
+                )
+                self.assertEqual(len(reference["bits"]), 256)
+
+    def test_strict_representation_rejects_bad_inputs_and_detects_bit_changes(
+        self,
+    ) -> None:
+        generator = Point(*self._generator_coordinates())
+        system = R1CS()
+        variables = constrain_spend_edwards_point_witness(system, generator)
+        foreign = R1CS()
+        foreign_variables = constrain_spend_edwards_point_witness(
+            foreign, generator
+        )
+        for point_variables, point_witness in (
+            (foreign_variables, generator),
+            (variables, Point(generator.u + 1, generator.v)),
+            (variables, None),
+            (variables, object()),
+        ):
+            before_variables = len(system.variables)
+            before_rows = system.constraint_count
+            with self.assertRaises((R1CSError, TypeError)):
+                constrain_spend_edwards_point_repr(
+                    system,
+                    point_variables,
+                    point_witness,  # type: ignore[arg-type]
+                )
+            self.assertEqual(len(system.variables), before_variables)
+            self.assertEqual(system.constraint_count, before_rows)
+
+        reference = self.representation_cases["generator"]
+        bits = constrain_spend_edwards_point_repr(system, variables, generator)
+        changed_bit = bits[0]
+        changed_value = 1 - system.witness_value(changed_bit)
+        self.assertEqual(
+            _local_failed_rows(system, changed_bit.index, changed_value),
+            _reference_failed_rows(reference, changed_bit.index, changed_value),
+        )
+        field_coordinate = variables.u
+        replacement = (system.witness_value(field_coordinate) + 1) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, field_coordinate.index, replacement),
+            _reference_failed_rows(reference, field_coordinate.index, replacement),
+        )
+        noncanonical_alias = Point(
+            generator.u + SCALAR_MODULUS, generator.v
+        )
+        self.assertEqual(noncanonical_alias, generator)
+        alias_system = R1CS()
+        alias_variables = constrain_spend_edwards_point_witness(
+            alias_system, noncanonical_alias
+        )
+        alias_bits = constrain_spend_edwards_point_repr(
+            alias_system, alias_variables, noncanonical_alias
+        )
+        self.assertEqual(
+            [alias_system.witness_value(bit) for bit in alias_bits],
+            [int(bit["value"]) for bit in reference["bits"]],
+        )
+        self.assert_system_matches_reference(
+            "generator",
+            alias_system,
+            reference,
+        )
+
+        noncanonical_field_bits = {
+            bit.index: (SCALAR_MODULUS >> index) & 1
+            for index, bit in enumerate(bits[: SCALAR_MODULUS.bit_length()])
+        }
+        self.assertFalse(system.is_satisfied(noncanonical_field_bits))
+        self.assertEqual(
+            _local_failed_rows_with_assignments(system, noncanonical_field_bits),
+            _reference_failed_rows_with_assignments(
+                reference, noncanonical_field_bits
+            ),
+        )
+        self.assertEqual(len(bits), 256)
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,

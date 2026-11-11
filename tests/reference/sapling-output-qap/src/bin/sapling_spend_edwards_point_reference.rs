@@ -1,3 +1,4 @@
+use bellman::gadgets::boolean::Boolean;
 use bellman::gadgets::num::AllocatedNum;
 use bellman::{ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
 use bls12_381::Scalar;
@@ -26,6 +27,7 @@ struct Export {
     curve_d: String,
     cases: Vec<Case>,
     non_small_order_cases: Vec<NonSmallOrderCase>,
+    representations: Vec<RepresentationCase>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +48,21 @@ struct NonSmallOrderCase {
     satisfied: bool,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct RepresentationCase {
+    name: &'static str,
+    bits: Vec<BitRecord>,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct BitRecord {
+    identity: String,
+    value: bool,
 }
 
 #[derive(Serialize)]
@@ -403,6 +420,45 @@ fn source_assert_not_small_order<CS: ConstraintSystem<Scalar>>(
     third.u.assert_nonzero(cs.namespace(|| "check u != 0"))
 }
 
+fn source_repr<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    point: &SourcePoint,
+) -> Result<Vec<Boolean>, SynthesisError> {
+    let mut bits = Vec::new();
+    let u_bits = point.u.to_bits_le_strict(cs.namespace(|| "unpack u"))?;
+    let v_bits = point.v.to_bits_le_strict(cs.namespace(|| "unpack v"))?;
+    bits.extend(v_bits);
+    bits.push(u_bits[0].clone());
+    Ok(bits)
+}
+
+fn build_representation_case(
+    name: &'static str,
+    u_value: Scalar,
+    v_value: Scalar,
+) -> Result<RepresentationCase, SynthesisError> {
+    let mut system = TraceConstraintSystem::default();
+    let point = source_witness_coordinates(system.namespace(|| "point"), u_value, v_value)?;
+    let bits = source_repr(system.namespace(|| "representation"), &point)?;
+    let bits = bits
+        .iter()
+        .map(|bit| match bit {
+            Boolean::Is(bit) => Ok(BitRecord {
+                identity: TraceConstraintSystem::identity(bit.get_variable()),
+                value: bit.get_value().ok_or(SynthesisError::AssignmentMissing)?,
+            }),
+            _ => Err(SynthesisError::Unsatisfiable),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RepresentationCase {
+        name,
+        bits,
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    })
+}
+
 fn build_non_small_order_case(
     name: &'static str,
     u_value: Scalar,
@@ -709,14 +765,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_non_small_order_case("order_two", Scalar::ZERO, -Scalar::ONE),
         build_non_small_order_case("off_curve", Scalar::ONE, Scalar::ONE),
     ];
+    let representations = vec![
+        build_representation_case(
+            "generator",
+            generator.to_affine().get_u(),
+            generator.to_affine().get_v(),
+        )?,
+        build_representation_case(
+            "negative_generator",
+            (-generator).to_affine().get_u(),
+            (-generator).to_affine().get_v(),
+        )?,
+        build_representation_case("identity", Scalar::ZERO, Scalar::ONE)?,
+        build_representation_case("order_two", Scalar::ZERO, -Scalar::ONE)?,
+        build_representation_case(
+            "twice_generator",
+            twice_generator.to_affine().get_u(),
+            twice_generator.to_affine().get_v(),
+        )?,
+        build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
+    ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v2",
+        format: "bellman-sapling-edwards-point-reference-v3",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
         curve_d: scalar_hex(EDWARDS_D),
         cases,
         non_small_order_cases,
+        representations,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

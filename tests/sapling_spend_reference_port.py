@@ -299,3 +299,122 @@ def constrain_spend_edwards_point_not_small_order(
         f"{label}/check u != 0/nonzero assertion constraint",
     )
     return current_variables
+
+
+def constrain_spend_edwards_point_repr(
+    system: R1CS,
+    point_variables: EdwardsPointWitnessVariables,
+    point_witness: Point,
+    label: str = "representation",
+) -> tuple[Variable, ...]:
+    """Port `EdwardsPoint::repr` and Bellman's strict field-bit unpacking."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    _validate_point_assignment(system, point_variables, point_witness)
+
+    u_bits = _constrain_spend_strict_field_bits(
+        system, point_variables.u, f"{label}/unpack u"
+    )
+    v_bits = _constrain_spend_strict_field_bits(
+        system, point_variables.v, f"{label}/unpack v"
+    )
+    return v_bits + (u_bits[0],)
+
+
+def _constrain_spend_strict_field_bits(
+    system: R1CS, value: Variable, label: str
+) -> tuple[Variable, ...]:
+    system.require_owned(value)
+    field_modulus = SCALAR_MODULUS
+    bit_length = field_modulus.bit_length()
+    assigned_value = system.witness_value(value)
+    if assigned_value is None:
+        raise R1CSError("strict field-bit witness is unassigned")
+
+    result: list[Variable] = []
+    current_run: list[Variable] = []
+    last_run: Variable | None = None
+    found_one = False
+    bit_index = 0
+
+    for field_bit_index in range(bit_length - 1, -1, -1):
+        bound_bit = ((field_modulus - 1) >> field_bit_index) & 1
+        witness_bit = (assigned_value >> field_bit_index) & 1
+        found_one = found_one or bool(bound_bit)
+        if not found_one:
+            if witness_bit:
+                raise R1CSError("strict field-bit witness exceeds field width")
+            continue
+
+        bit_label = f"{label}/bit {bit_index}"
+        if bound_bit:
+            bit = system.alloc_private(f"{bit_label}/boolean", witness_bit)
+            system.enforce(
+                1 - bit.lc(),
+                bit,
+                0,
+                f"{bit_label}/boolean constraint",
+            )
+            current_run.append(bit)
+        else:
+            if current_run:
+                conjunction = current_run + (
+                    [] if last_run is None else [last_run]
+                )
+                previous = conjunction[0]
+                for and_index, right in enumerate(conjunction[1:], start=1):
+                    and_label = (
+                        f"{label}/run ending at {bit_index}/and {and_index}"
+                    )
+                    left_value = system.witness_value(previous)
+                    right_value = system.witness_value(right)
+                    if left_value is None or right_value is None:
+                        raise R1CSError("strict field-bit witness is unassigned")
+                    result_value = left_value * right_value % field_modulus
+                    combined = system.alloc_private(
+                        f"{and_label}/and result", result_value
+                    )
+                    system.enforce(
+                        previous,
+                        right,
+                        combined,
+                        f"{and_label}/and constraint",
+                    )
+                    previous = combined
+                last_run = previous
+                current_run.clear()
+
+            bit = system.alloc_private(f"{bit_label}/boolean", witness_bit)
+            if last_run is None:
+                system.enforce(
+                    1 - bit.lc(),
+                    bit,
+                    0,
+                    f"{bit_label}/boolean constraint",
+                )
+            else:
+                system.enforce(
+                    1 - last_run.lc() - bit.lc(),
+                    bit,
+                    0,
+                    f"{bit_label}/boolean constraint",
+                )
+        result.append(bit)
+        bit_index += 1
+
+    if current_run:
+        raise R1CSError("strict field-bit comparator ended with an open prefix")
+
+    little_endian = tuple(reversed(result))
+    reconstruction = system.linear_combination(
+        tuple((bit, 1 << index) for index, bit in enumerate(little_endian))
+    )
+    system.enforce(
+        0,
+        0,
+        reconstruction - value.lc(),
+        f"{label}/unpacking constraint",
+    )
+    return little_endian
