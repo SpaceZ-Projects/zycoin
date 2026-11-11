@@ -256,3 +256,46 @@ def constrain_spend_edwards_point_add(
         f"{label}/v3 computation",
     )
     return EdwardsPointWitnessVariables(u3, v3)
+
+
+def constrain_spend_edwards_point_not_small_order(
+    system: R1CS,
+    point_variables: EdwardsPointWitnessVariables,
+    point_witness: Point,
+    label: str = "non-small-order",
+) -> EdwardsPointWitnessVariables:
+    """Port `EdwardsPoint::assert_not_small_order` in pinned source order."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    _validate_point_assignment(system, point_variables, point_witness)
+
+    current_variables = point_variables
+    current_witness = point_witness
+    for name in ("first doubling", "second doubling", "third doubling"):
+        doubled_witness = current_witness + current_witness
+        current_variables = constrain_spend_edwards_point_double(
+            system,
+            current_variables,
+            current_witness,
+            f"{label}/{name}",
+        )
+        current_witness = doubled_witness
+
+    u_value = system.witness_value(current_variables.u)
+    if u_value is None:
+        raise R1CSError("small-order check input is unassigned")
+    if u_value == 0:
+        raise R1CSError("small-order check rejected a zero u coordinate")
+    inverse = pow(u_value, SCALAR_MODULUS - 2, SCALAR_MODULUS)
+    inverse_variable = system.alloc_private(
+        f"{label}/check u != 0/ephemeral inverse", inverse
+    )
+    system.enforce(
+        current_variables.u,
+        inverse_variable,
+        1,
+        f"{label}/check u != 0/nonzero assertion constraint",
+    )
+    return current_variables

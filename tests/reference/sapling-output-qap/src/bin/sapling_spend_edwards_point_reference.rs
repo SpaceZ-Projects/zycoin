@@ -25,6 +25,7 @@ struct Export {
     bellman_crate_version: &'static str,
     curve_d: String,
     cases: Vec<Case>,
+    non_small_order_cases: Vec<NonSmallOrderCase>,
 }
 
 #[derive(Serialize)]
@@ -32,6 +33,16 @@ struct Case {
     name: &'static str,
     u: String,
     v: String,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct NonSmallOrderCase {
+    name: &'static str,
+    synthesis_succeeded: bool,
+    synthesis_error: Option<String>,
     satisfied: bool,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
@@ -382,6 +393,38 @@ fn source_double<CS: ConstraintSystem<Scalar>>(
     Ok(SourcePoint { u: u3, v: v3 })
 }
 
+fn source_assert_not_small_order<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    point: &SourcePoint,
+) -> Result<(), SynthesisError> {
+    let first = source_double(cs.namespace(|| "first doubling"), point)?;
+    let second = source_double(cs.namespace(|| "second doubling"), &first)?;
+    let third = source_double(cs.namespace(|| "third doubling"), &second)?;
+    third.u.assert_nonzero(cs.namespace(|| "check u != 0"))
+}
+
+fn build_non_small_order_case(
+    name: &'static str,
+    u_value: Scalar,
+    v_value: Scalar,
+) -> NonSmallOrderCase {
+    let mut system = TraceConstraintSystem::default();
+    let result = source_witness_coordinates(system.namespace(|| "point"), u_value, v_value);
+    let synthesis = match result {
+        Ok(point) => source_assert_not_small_order(system.namespace(|| "non-small-order"), &point),
+        Err(error) => Err(error),
+    };
+    let synthesis_error = synthesis.as_ref().err().map(|error| format!("{error:?}"));
+    NonSmallOrderCase {
+        name,
+        synthesis_succeeded: synthesis.is_ok(),
+        synthesis_error,
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    }
+}
+
 fn source_add<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     left: &SourcePoint,
@@ -646,13 +689,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_double_case("negative_generator_double", -generator)?,
         build_off_curve_add_case(generator)?,
     ];
+    let non_small_order_cases = vec![
+        build_non_small_order_case(
+            "generator",
+            generator.to_affine().get_u(),
+            generator.to_affine().get_v(),
+        ),
+        build_non_small_order_case(
+            "negative_generator",
+            (-generator).to_affine().get_u(),
+            (-generator).to_affine().get_v(),
+        ),
+        build_non_small_order_case(
+            "twice_generator",
+            twice_generator.to_affine().get_u(),
+            twice_generator.to_affine().get_v(),
+        ),
+        build_non_small_order_case("identity", Scalar::ZERO, Scalar::ONE),
+        build_non_small_order_case("order_two", Scalar::ZERO, -Scalar::ONE),
+        build_non_small_order_case("off_curve", Scalar::ONE, Scalar::ONE),
+    ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v1",
+        format: "bellman-sapling-edwards-point-reference-v2",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
         curve_d: scalar_hex(EDWARDS_D),
         cases,
+        non_small_order_cases,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

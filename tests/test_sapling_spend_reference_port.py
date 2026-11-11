@@ -9,6 +9,7 @@ from pathlib import Path
 from sapling_spend_reference_port import (
     constrain_spend_edwards_point_add,
     constrain_spend_edwards_point_double,
+    constrain_spend_edwards_point_not_small_order,
     constrain_spend_edwards_point_witness,
 )
 
@@ -114,7 +115,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v1":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v2":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -127,6 +128,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         if cls.reference["bellman_crate_version"] != "0.15.0":
             raise AssertionError("unexpected Bellman crate version")
         cls.cases = {case["name"]: case for case in cls.reference["cases"]}
+        cls.non_small_order_cases = {
+            case["name"]: case
+            for case in cls.reference["non_small_order_cases"]
+        }
 
     def assert_case_matches(
         self, name: str, point: Point, *, expected_satisfied: bool = True
@@ -330,6 +335,116 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             (result.u.index, result.v.index),
             (changed_variable.index + 1, changed_variable.index + 2),
         )
+
+    def test_exact_non_small_order_check_parity(self) -> None:
+        generator = Point(*self._generator_coordinates())
+        cases = (
+            ("generator", generator),
+            (
+                "negative_generator",
+                Point(*self._negative_generator_coordinates()),
+            ),
+            ("twice_generator", generator + generator),
+            ("identity", IDENTITY),
+            ("order_two", Point(0, SCALAR_MODULUS - 1)),
+            ("off_curve", Point(1, 1)),
+        )
+        for name, point in cases:
+            with self.subTest(case=name):
+                reference = self.non_small_order_cases[name]
+                system = R1CS()
+                point_variables = constrain_spend_edwards_point_witness(
+                    system, point
+                )
+                if reference["synthesis_succeeded"]:
+                    result_variables = constrain_spend_edwards_point_not_small_order(
+                        system, point_variables, point
+                    )
+                    expected = point
+                    for _ in range(3):
+                        expected = expected + expected
+                    self.assertEqual(
+                        system.witness_value(result_variables.u), expected.u
+                    )
+                    self.assertEqual(
+                        system.witness_value(result_variables.v), expected.v
+                    )
+                    self.assertEqual(len(system.variables) - 1, 21)
+                    self.assertEqual(system.constraint_count, 20)
+                else:
+                    with self.assertRaises(R1CSError):
+                        constrain_spend_edwards_point_not_small_order(
+                            system, point_variables, point
+                        )
+                    self.assertEqual(len(system.variables) - 1, 20)
+                    self.assertEqual(system.constraint_count, 19)
+                    self.assertEqual(
+                        reference["synthesis_error"], "DivisionByZero"
+                    )
+                self.assertEqual(
+                    reference["synthesis_succeeded"],
+                    any(
+                        variable.name
+                        == "non-small-order/check u != 0/ephemeral inverse"
+                        for variable in system.variables
+                    ),
+                )
+                self.assert_system_matches_reference(
+                    name, system, reference, reference["satisfied"]
+                )
+
+    def test_non_small_order_input_validation_and_intermediate_failures(self) -> None:
+        generator = Point(*self._generator_coordinates())
+        system = R1CS()
+        variables = constrain_spend_edwards_point_witness(system, generator)
+        foreign = R1CS()
+        foreign_variables = constrain_spend_edwards_point_witness(
+            foreign, generator
+        )
+        for point_variables, point_witness in (
+            (foreign_variables, generator),
+            (variables, Point(generator.u + 1, generator.v)),
+            (variables, None),
+            (variables, object()),
+        ):
+            before_variables = len(system.variables)
+            before_rows = system.constraint_count
+            with self.assertRaises((R1CSError, TypeError)):
+                constrain_spend_edwards_point_not_small_order(
+                    system, point_variables, point_witness  # type: ignore[arg-type]
+                )
+            self.assertEqual(len(system.variables), before_variables)
+            self.assertEqual(system.constraint_count, before_rows)
+
+        reference = self.non_small_order_cases["generator"]
+        result = constrain_spend_edwards_point_not_small_order(
+            system, variables, generator
+        )
+        changed = next(
+            variable for variable in system.variables
+            if variable.name == "non-small-order/second doubling/C/num"
+        )
+        replacement = (
+            system.witness_value(changed) + 1
+        ) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, changed.index, replacement),
+            _reference_failed_rows(reference, changed.index, replacement),
+        )
+
+        inverse = next(
+            variable for variable in system.variables
+            if variable.name
+            == "non-small-order/check u != 0/ephemeral inverse"
+        )
+        inverse_replacement = (
+            system.witness_value(inverse) + 1
+        ) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, inverse.index, inverse_replacement),
+            _reference_failed_rows(reference, inverse.index, inverse_replacement),
+        )
+        self.assertEqual(result.v.index + 1, inverse.index)
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,

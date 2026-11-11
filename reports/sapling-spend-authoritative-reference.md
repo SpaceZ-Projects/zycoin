@@ -228,7 +228,42 @@ parameters during suite execution. This was an unintended consequence of
 running the complete suite despite this task's synthetic-setup restriction;
 the isolated port itself does not use or create parameters, and no synthetic
 parameter code or fixture was changed. Production Spend and Output, official
-parameters, and proving gates remain unchanged. The next prescribed unit is
-the **non-small-order check**; full Spend matrix alignment, official
-parameter compatibility, parameter-to-circuit binding, and ceremony validity
-remain unverified.
+parameters, and proving gates remain unchanged.
+
+### Non-small-order check
+
+The next prescribed unit, `EdwardsPoint::assert_not_small_order` from the
+pinned `sapling-crypto/src/circuit/ecc.rs`, is implemented only in the isolated
+test port. It performs the source-ordered `"first doubling"`, `"second
+doubling"`, and `"third doubling"` calls, then `AllocatedNum::assert_nonzero`
+under `"check u != 0"`. Bellman 0.15 `AllocatedNum::assert_nonzero` allocates
+`"ephemeral inverse"` and enforces the ordered row
+`u * inverse = 1` (`"nonzero assertion constraint"`). The Python port
+preserves these labels, intermediate assignments, and row order.
+
+The independent Bellman comparison covers the subgroup generator, its
+negative, twice the generator, identity, order-two point `(0, -1)`, and
+off-curve `(1, 1)`. Each of the three prime-order point syntheses succeeds
+with **21 auxiliary variables and 20 constraints**; the matrices, all ordered
+assignments, labels, A/B/C terms, and satisfaction results match.
+Identity and the order-two point each perform all three doublings, then both
+references reject synthesis with `DivisionByZero` while allocating no inverse:
+**20 auxiliary variables and 19 constraints** remain, and those prefix rows
+are satisfied. The off-curve point completes synthesis with the same **21 /
+20** shape but is unsatisfied in both systems at the original curve-check
+row. Altering a second-doubling intermediate and, separately, the final
+inverse produces the same failing row indices in the Bellman and Python
+matrices.
+
+Missing, malformed, foreign, and assignment-inconsistent point inputs reject
+before this port mutates the system. The focused differential suite passed
+**8 tests**; existing Spend circuit regressions passed **6 tests**. Rust
+formatting and reference build, Ruff, and `git diff --check` passed. No
+complete Sapling suite was run for this task, avoiding the pre-existing
+synthetic-setup regression. Production Spend and Output, official parameters,
+and proving gates remain unchanged.
+
+The next prescribed isolated unit is strict Edwards point representation
+(`EdwardsPoint::repr`), followed by fixed-base lookup and variable-base
+multiplication. Full Spend matrix alignment, official parameter compatibility,
+parameter-to-circuit binding, and ceremony validity remain unverified.
