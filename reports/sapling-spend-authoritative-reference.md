@@ -346,8 +346,53 @@ contains the existing synthetic-setup regression prohibited by this task.
 Production Spend and Output, official parameters, and proving gates remain
 unchanged.
 
-The next dependency in the Spend port is **variable-base Edwards scalar
-multiplication**, including conditional point selection and repeated
-doubling/addition. Pedersen/Montgomery lookup remains a separate subsystem.
-Full Spend matrix alignment, official parameter compatibility,
-parameter-to-circuit binding, and ceremony validity remain unverified.
+### Variable-base Edwards scalar multiplication
+
+The pinned implementation is `EdwardsPoint::mul` and
+`EdwardsPoint::conditionally_select` in
+`sapling-crypto/src/circuit/ecc.rs`. The API consumes a little-endian slice of
+Boolean bits. For each bit, it reuses the input point at index zero or doubles
+the preceding magnitude, conditionally selects that magnitude or the Edwards
+identity, then either initializes the result or adds the selected point to the
+running result. An empty slice reaches the source `result.get()?` and returns
+`AssignmentMissing`; the isolated Python entry point rejects it before any
+mutation.
+
+Selection allocates `u'` then `v'`, with the source-ordered rows
+`self.u * condition = u'` and
+`self.v * condition = v' - (1 - condition)`. Subsequent iterations preserve
+the source `double`, selection, and `add` order and labels. The isolated
+implementation composes only the previously verified point witness,
+doubling, and addition primitives; it does not call production multiplication
+helpers or change production Spend/Output.
+
+The Bellman 0.15 harness calls the pinned Sapling source multiplication
+algorithm and exports all allocations, assignments, labels, ordered A/B/C
+rows, and result coordinates. Differential cases cover scalar 0, 1, 13,
+31/32, 63/64, the maximum Jubjub scalar, a 252-bit all-zero vector, and a
+252-bit all-one vector. The last two exercise both conditional-selection
+branches at every bit position. Identity and negative-generator bases are
+also covered with mixed bit patterns.
+
+Every full trace matched exactly: the 252-bit cases each contain **3,522
+auxiliary variables and 3,521 ordered constraints** (including base
+interpretation and bit Boolean constraints); the 4-bit case contains **50
+auxiliary variables and 49 constraints**. Output coordinates matched the
+independent Jubjub group operation for all fixtures. The 11,066 ordered-row
+subtests compared labels and complete A/B/C terms; variable annotations,
+indices, and assignments were compared for each fixture. Mutating a scalar
+Boolean to 2 and altering a selected-point intermediate produced exactly the
+same failed row indices as Bellman.
+
+Empty, malformed, foreign, unassigned, and non-Boolean scalar inputs, as well
+as foreign or inconsistent point witnesses, reject before the Python
+multiplication helper allocates variables or rows. The focused variable-base
+differential tests passed **3 tests** with **11,066 subtests**. The complete
+isolated Spend primitive suite passed **16 tests** with **30,252 subtests**;
+existing Spend circuit regressions passed **6 tests** with **76 subtests**;
+Sapling gadget regressions passed **52 tests** with **273 subtests**. Ruff,
+Python syntax checks, Rust formatting/build checks, and `git diff --check`
+passed. The full Sapling suite was not run because it includes the
+synthetic-setup regression prohibited by this task. Full Spend matrix
+alignment, official parameter compatibility, parameter-to-circuit binding,
+and ceremony validity remain unverified.

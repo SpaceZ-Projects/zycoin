@@ -1,3 +1,4 @@
+use bellman::gadgets::Assignment;
 use bellman::gadgets::boolean::AllocatedBit;
 use bellman::gadgets::boolean::Boolean;
 use bellman::gadgets::lookup::lookup3_xy;
@@ -31,6 +32,7 @@ struct Export {
     non_small_order_cases: Vec<NonSmallOrderCase>,
     representations: Vec<RepresentationCase>,
     fixed_base: FixedBaseExport,
+    variable_base: VariableBaseExport,
 }
 
 #[derive(Serialize)]
@@ -88,6 +90,24 @@ struct FixedBaseCase {
     output_u: String,
     output_v: String,
     selectors: Vec<BitRecord>,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct VariableBaseExport {
+    cases: Vec<VariableBaseCase>,
+}
+
+#[derive(Serialize)]
+struct VariableBaseCase {
+    name: String,
+    base_u: String,
+    base_v: String,
+    scalar_bits: Vec<BitRecord>,
+    output_u: String,
+    output_v: String,
     satisfied: bool,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
@@ -299,6 +319,81 @@ fn source_witness_coordinates(
     let u = AllocatedNum::alloc(cs.namespace(|| "u"), || Ok(u_value))?;
     let v = AllocatedNum::alloc(cs.namespace(|| "v"), || Ok(v_value))?;
     source_interpret(cs.namespace(|| "point interpretation"), &u, &v)
+}
+
+fn source_conditionally_select<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    point: &SourcePoint,
+    condition: &Boolean,
+) -> Result<SourcePoint, SynthesisError> {
+    let one = CS::one();
+    let u_prime = AllocatedNum::alloc(cs.namespace(|| "u'"), || {
+        if *condition.get_value().get()? {
+            Ok(*point.u.get_value().get()?)
+        } else {
+            Ok(Scalar::ZERO)
+        }
+    })?;
+    cs.enforce(
+        || "u' computation",
+        |lc| lc + point.u.get_variable(),
+        |_| condition.lc(one, Scalar::ONE),
+        |lc| lc + u_prime.get_variable(),
+    );
+
+    let v_prime = AllocatedNum::alloc(cs.namespace(|| "v'"), || {
+        if *condition.get_value().get()? {
+            Ok(*point.v.get_value().get()?)
+        } else {
+            Ok(Scalar::ONE)
+        }
+    })?;
+    cs.enforce(
+        || "v' computation",
+        |lc| lc + point.v.get_variable(),
+        |_| condition.lc(one, Scalar::ONE),
+        |lc| lc + v_prime.get_variable() - &condition.not().lc(one, Scalar::ONE),
+    );
+    Ok(SourcePoint {
+        u: u_prime,
+        v: v_prime,
+    })
+}
+
+fn source_variable_base_multiplication<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    point: &SourcePoint,
+    by: &[Boolean],
+) -> Result<SourcePoint, SynthesisError> {
+    let mut current_base: Option<SourcePoint> = None;
+    let mut result: Option<SourcePoint> = None;
+    for (index, bit) in by.iter().enumerate() {
+        current_base = Some(match current_base {
+            None => SourcePoint {
+                u: point.u.clone(),
+                v: point.v.clone(),
+            },
+            Some(previous) => {
+                source_double(cs.namespace(|| format!("doubling {index}")), &previous)?
+            }
+        });
+        let selected = source_conditionally_select(
+            cs.namespace(|| format!("selection {index}")),
+            current_base
+                .as_ref()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+            bit,
+        )?;
+        result = Some(match result {
+            None => selected,
+            Some(accumulator) => source_add(
+                cs.namespace(|| format!("addition {index}")),
+                &accumulator,
+                &selected,
+            )?,
+        });
+    }
+    result.ok_or(SynthesisError::AssignmentMissing)
 }
 
 fn build_case(name: &'static str, point: ExtendedPoint) -> Result<Case, SynthesisError> {
@@ -779,6 +874,119 @@ fn build_fixed_base_export() -> Result<FixedBaseExport, SynthesisError> {
     })
 }
 
+fn build_variable_base_case(
+    name: String,
+    base: ExtendedPoint,
+    values: Vec<bool>,
+) -> Result<VariableBaseCase, SynthesisError> {
+    let mut system = TraceConstraintSystem::default();
+    let base_affine = base.to_affine();
+    let point = source_witness(system.namespace(|| "base"), base)?;
+    let bits = allocate_source_bits(system.namespace(|| "scalar bits"), &values)?;
+    let output = source_variable_base_multiplication(
+        system.namespace(|| "variable base multiplication"),
+        &point,
+        &bits,
+    )?;
+    let scalar_bits = bits
+        .iter()
+        .map(|bit| match bit {
+            Boolean::Is(bit) => Ok(BitRecord {
+                identity: TraceConstraintSystem::identity(bit.get_variable()),
+                value: bit.get_value().ok_or(SynthesisError::AssignmentMissing)?,
+            }),
+            _ => Err(SynthesisError::Unsatisfiable),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(VariableBaseCase {
+        name,
+        base_u: scalar_decimal(base_affine.get_u()),
+        base_v: scalar_decimal(base_affine.get_v()),
+        scalar_bits,
+        output_u: scalar_decimal(
+            output
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        output_v: scalar_decimal(
+            output
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    })
+}
+
+fn build_variable_base_export() -> Result<VariableBaseExport, SynthesisError> {
+    let generator = sapling_crypto::constants::SPENDING_KEY_GENERATOR.into();
+    let cases: Vec<(String, ExtendedPoint, Vec<bool>)> = vec![
+        ("generator_zero".to_owned(), generator, vec![false]),
+        ("generator_one".to_owned(), generator, vec![true]),
+        (
+            "generator_small".to_owned(),
+            generator,
+            vec![true, false, true, true],
+        ),
+        (
+            "generator_boundary_31".to_owned(),
+            generator,
+            (0..5).map(|i| 31 >> i & 1 != 0).collect(),
+        ),
+        (
+            "generator_boundary_32".to_owned(),
+            generator,
+            (0..6).map(|i| 32 >> i & 1 != 0).collect(),
+        ),
+        (
+            "generator_boundary_63".to_owned(),
+            generator,
+            (0..6).map(|i| 63 >> i & 1 != 0).collect(),
+        ),
+        (
+            "generator_boundary_64".to_owned(),
+            generator,
+            (0..7).map(|i| 64 >> i & 1 != 0).collect(),
+        ),
+        ("generator_maximum_scalar".to_owned(), generator, {
+            (-jubjub::Fr::ONE)
+                .to_le_bits()
+                .iter()
+                .by_vals()
+                .take(jubjub::Fr::NUM_BITS as usize)
+                .collect()
+        }),
+        (
+            "identity_mixed".to_owned(),
+            ExtendedPoint::identity(),
+            vec![true, false, true, true],
+        ),
+        (
+            "negative_generator_mixed".to_owned(),
+            -generator,
+            vec![true, true, false, true, false],
+        ),
+        (
+            "generator_all_zero_252".to_owned(),
+            generator,
+            vec![false; 252],
+        ),
+        (
+            "generator_all_one_252".to_owned(),
+            generator,
+            vec![true; 252],
+        ),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(name, base, bits)| build_variable_base_case(name, base, bits))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(VariableBaseExport { cases })
+}
+
 fn build_add_case(
     name: &'static str,
     left_point: ExtendedPoint,
@@ -996,7 +1204,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v4",
+        format: "bellman-sapling-edwards-point-reference-v5",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -1005,6 +1213,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         non_small_order_cases,
         representations,
         fixed_base: build_fixed_base_export()?,
+        variable_base: build_variable_base_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

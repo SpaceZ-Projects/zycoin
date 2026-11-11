@@ -657,3 +657,119 @@ def _spend_boolean_and(
     )
     system.enforce(left, right, result, f"{label}/and constraint")
     return result
+
+
+def constrain_spend_edwards_point_mul(
+    system: R1CS,
+    point_variables: EdwardsPointWitnessVariables,
+    point_witness: Point,
+    bits_le: tuple[SpendBoolean, ...] | list[SpendBoolean],
+    label: str = "variable base multiplication",
+) -> EdwardsPointWitnessVariables:
+    """Port `EdwardsPoint::mul` with source-ordered double/select/add steps."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    _validate_point_assignment(system, point_variables, point_witness)
+    if not bits_le:
+        raise R1CSError("variable-base multiplication requires at least one bit")
+    for bit in bits_le:
+        if isinstance(bit, Variable):
+            system.require_owned(bit)
+            if system.witness_value(bit) not in (0, 1):
+                raise R1CSError(
+                    "variable-base scalar bits must be assigned booleans"
+                )
+        elif type(bit) is not bool:
+            raise TypeError("variable-base scalar bits must be variables or booleans")
+
+    current_base_variables: EdwardsPointWitnessVariables | None = None
+    current_base_witness: Point | None = None
+    result_variables: EdwardsPointWitnessVariables | None = None
+    result_witness: Point | None = None
+
+    for index, bit in enumerate(bits_le):
+        if current_base_variables is None:
+            current_base_variables = point_variables
+            current_base_witness = point_witness
+        else:
+            assert current_base_witness is not None
+            previous_base_witness = current_base_witness
+            current_base_witness = previous_base_witness + previous_base_witness
+            doubled_variables = constrain_spend_edwards_point_double(
+                system,
+                current_base_variables,
+                previous_base_witness,
+                f"{label}/doubling {index}",
+            )
+            current_base_variables = doubled_variables
+
+        assert current_base_witness is not None
+        selected_witness = (
+            current_base_witness if _spend_boolean_value(system, bit) else IDENTITY
+        )
+        selected_variables = _constrain_spend_edwards_point_select(
+            system,
+            current_base_variables,
+            current_base_witness,
+            bit,
+            selected_witness,
+            f"{label}/selection {index}",
+        )
+        if result_variables is None:
+            result_variables = selected_variables
+            result_witness = selected_witness
+        else:
+            assert result_witness is not None
+            result_witness = result_witness + selected_witness
+            result_variables = constrain_spend_edwards_point_add(
+                system,
+                result_variables,
+                Point(
+                    system.witness_value(result_variables.u),
+                    system.witness_value(result_variables.v),
+                ),
+                selected_variables,
+                selected_witness,
+                f"{label}/addition {index}",
+            )
+
+    assert result_variables is not None
+    return result_variables
+
+
+def _constrain_spend_edwards_point_select(
+    system: R1CS,
+    point_variables: EdwardsPointWitnessVariables,
+    point_witness: Point,
+    condition: SpendBoolean,
+    result_witness: Point,
+    label: str,
+) -> EdwardsPointWitnessVariables:
+    _validate_point_assignment(system, point_variables, point_witness)
+    condition_value = _spend_boolean_value(system, condition)
+    expected = point_witness if condition_value else IDENTITY
+    if result_witness != expected:
+        raise R1CSError("conditional-selection witness does not match selector")
+    u_prime = system.alloc_private(f"{label}/u'/num", result_witness.u)
+    system.enforce(
+        point_variables.u,
+        _spend_boolean_lc(system, condition),
+        u_prime,
+        f"{label}/u' computation",
+    )
+
+    v_prime = system.alloc_private(f"{label}/v'/num", result_witness.v)
+    not_condition = (
+        1 - condition.lc()
+        if isinstance(condition, Variable)
+        else int(not condition)
+    )
+    system.enforce(
+        point_variables.v,
+        _spend_boolean_lc(system, condition),
+        v_prime.lc() - not_condition,
+        f"{label}/v' computation",
+    )
+    return EdwardsPointWitnessVariables(u_prime, v_prime)

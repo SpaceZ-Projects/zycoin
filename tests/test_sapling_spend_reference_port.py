@@ -10,6 +10,7 @@ from sapling_spend_reference_port import (
     allocate_spend_fixed_base_scalar_bits,
     constrain_spend_edwards_point_add,
     constrain_spend_edwards_point_double,
+    constrain_spend_edwards_point_mul,
     constrain_spend_edwards_point_not_small_order,
     constrain_spend_edwards_point_repr,
     constrain_spend_edwards_point_witness,
@@ -138,11 +139,25 @@ def _local_failed_rows_with_assignments(
     )
 
 
+def _allocate_boolean_bits(system: R1CS, values: list[bool]) -> tuple:
+    bits = []
+    for index, value in enumerate(values):
+        bit = system.alloc_private(f"scalar bits/bit {index}/boolean", int(value))
+        system.enforce(
+            1 - bit.lc(),
+            bit,
+            0,
+            f"scalar bits/bit {index}/boolean constraint",
+        )
+        bits.append(bit)
+    return tuple(bits)
+
+
 class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v4":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v5":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -165,6 +180,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.fixed_base = cls.reference["fixed_base"]
         cls.fixed_base_cases = {
             case["name"]: case for case in cls.fixed_base["cases"]
+        }
+        cls.variable_base_cases = {
+            case["name"]: case
+            for case in cls.reference["variable_base"]["cases"]
         }
 
     def assert_case_matches(
@@ -764,6 +783,113 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                     )
                 self.assertEqual(len(target.variables), 1)
                 self.assertEqual(target.constraint_count, 0)
+
+    def test_variable_base_multiplication_matches_bellman_ordered_traces(self) -> None:
+        expected_scalars = {
+            "generator_zero": 0,
+            "generator_one": 1,
+            "generator_small": 13,
+            "generator_boundary_31": 31,
+            "generator_boundary_32": 32,
+            "generator_boundary_63": 63,
+            "generator_boundary_64": 64,
+            "generator_maximum_scalar": JUBJUB_SCALAR_MODULUS - 1,
+            "identity_mixed": 13,
+            "negative_generator_mixed": 11,
+            "generator_all_zero_252": 0,
+            "generator_all_one_252": (1 << 252) - 1,
+        }
+        for name, scalar in expected_scalars.items():
+            with self.subTest(case=name):
+                reference = self.variable_base_cases[name]
+                base = Point(int(reference["base_u"]), int(reference["base_v"]))
+                bits_values = [bool(bit["value"]) for bit in reference["scalar_bits"]]
+                system = R1CS()
+                base_variables = constrain_spend_edwards_point_witness(
+                    system, base, "base"
+                )
+                bits = _allocate_boolean_bits(system, bits_values)
+                result = constrain_spend_edwards_point_mul(
+                    system, base_variables, base, bits
+                )
+                expected = base.multiply(scalar)
+                self.assertEqual(
+                    (system.witness_value(result.u), system.witness_value(result.v)),
+                    (expected.u, expected.v),
+                )
+                self.assertEqual(
+                    (expected.u, expected.v),
+                    (int(reference["output_u"]), int(reference["output_v"])),
+                )
+                self.assert_system_matches_reference(name, system, reference)
+                self.assertEqual(
+                    [system.witness_value(bit) for bit in bits],
+                    [int(bit["value"]) for bit in reference["scalar_bits"]],
+                )
+
+    def test_variable_base_invalid_bits_and_altered_witnesses_match_bellman(self) -> None:
+        name = "generator_small"
+        reference = self.variable_base_cases[name]
+        base = Point(int(reference["base_u"]), int(reference["base_v"]))
+        system = R1CS()
+        base_variables = constrain_spend_edwards_point_witness(
+            system, base, "base"
+        )
+        bits = _allocate_boolean_bits(
+            system, [bool(bit["value"]) for bit in reference["scalar_bits"]]
+        )
+        constrain_spend_edwards_point_mul(system, base_variables, base, bits)
+        self.assertEqual(
+            _local_failed_rows(system, bits[0].index, 2),
+            _reference_failed_rows(reference, bits[0].index, 2),
+        )
+        altered_selection = next(
+            variable for variable in system.variables
+            if variable.name
+            == "variable base multiplication/selection 1/u'/num"
+        )
+        changed_value = (
+            system.witness_value(altered_selection) + 1
+        ) % SCALAR_MODULUS
+        self.assertEqual(
+            _local_failed_rows(system, altered_selection.index, changed_value),
+            _reference_failed_rows(
+                reference, altered_selection.index, changed_value
+            ),
+        )
+
+    def test_variable_base_rejects_bad_inputs_before_mutation(self) -> None:
+        base = Point(*self._generator_coordinates())
+        system = R1CS()
+        base_variables = constrain_spend_edwards_point_witness(system, base, "base")
+        foreign = R1CS()
+        foreign_bit = _allocate_boolean_bits(foreign, [True])[0]
+        unassigned = system.alloc_private("unassigned bit", None)
+        out_of_range = system.alloc_private("out of range bit", 2)
+
+        invalid_inputs = (
+            ([], base_variables, base),
+            ([foreign_bit], base_variables, base),
+            ([None], base_variables, base),
+            ([object()], base_variables, base),
+            ([unassigned], base_variables, base),
+            ([out_of_range], base_variables, base),
+            ([True], object(), base),
+            ([True], base_variables, IDENTITY),
+        )
+        for bad_bits, bad_point, witness in invalid_inputs:
+            with self.subTest(bad_bits=bad_bits, bad_point=bad_point):
+                before_variables = len(system.variables)
+                before_rows = system.constraint_count
+                with self.assertRaises((R1CSError, TypeError)):
+                    constrain_spend_edwards_point_mul(
+                        system,
+                        bad_point,  # type: ignore[arg-type]
+                        witness,
+                        bad_bits,  # type: ignore[arg-type]
+                    )
+                self.assertEqual(len(system.variables), before_variables)
+                self.assertEqual(system.constraint_count, before_rows)
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,
