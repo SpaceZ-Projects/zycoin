@@ -86,6 +86,15 @@ class MerkleAuthenticationResult:
     root_value: int
 
 
+@dataclass(frozen=True)
+class ConditionalAnchorResult:
+    root_variable: Variable
+    value_variable: Variable
+    anchor_variable: Variable
+    conditional_anchor_variable: Variable
+    anchor_value: int
+
+
 def spend_edwards_to_montgomery_coordinates(
     point: Point,
 ) -> tuple[int, int] | None:
@@ -636,6 +645,64 @@ def constrain_spend_merkle_authentication_path(
         tuple(path_nodes),
         current_variable,
         current_value,
+    )
+
+
+def constrain_spend_conditional_anchor(
+    system: R1CS,
+    root_variable: Variable,
+    root_value: int,
+    value_variable: Variable,
+    note_value: int,
+    anchor_variable: Variable,
+    anchor_value: int,
+) -> ConditionalAnchorResult:
+    """Port Spend's conditional root check and subsequent anchor inputization."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    variables = (root_variable, value_variable, anchor_variable)
+    if any(not isinstance(variable, Variable) for variable in variables):
+        raise TypeError("root, value, and anchor must be allocated variables")
+    values = (root_value, note_value, anchor_value)
+    if any(
+        type(value) is not int or not 0 <= value < SCALAR_MODULUS
+        for value in values
+    ):
+        raise R1CSError("conditional-anchor witnesses must be canonical field elements")
+    for variable in variables:
+        system.require_owned(variable)
+    if root_variable.kind != "private" or value_variable.kind != "private":
+        raise R1CSError("Merkle root and note value must be private variables")
+    if anchor_variable.kind != "public":
+        raise R1CSError("anchor must occupy a public-input position")
+    if system.witness_value(root_variable) != root_value:
+        raise R1CSError("Merkle root witness does not match its assigned variable")
+    if system.witness_value(value_variable) != note_value:
+        raise R1CSError("note-value witness does not match its assigned variable")
+    if system.witness_value(anchor_variable) != anchor_value:
+        raise R1CSError("anchor witness does not match its assigned public input")
+
+    conditional_anchor = system.alloc_private(
+        "conditional anchor/num", anchor_value
+    )
+    system.enforce(
+        root_variable.lc() - conditional_anchor.lc(),
+        value_variable.lc(),
+        0,
+        "conditionally enforce correct root",
+    )
+    system.enforce(
+        anchor_variable.lc(),
+        system.one.lc(),
+        conditional_anchor.lc(),
+        "anchor/enforce input is correct",
+    )
+    return ConditionalAnchorResult(
+        root_variable,
+        value_variable,
+        anchor_variable,
+        conditional_anchor,
+        anchor_value,
     )
 
 

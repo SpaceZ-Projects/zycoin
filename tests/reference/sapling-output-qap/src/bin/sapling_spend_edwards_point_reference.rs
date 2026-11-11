@@ -46,6 +46,7 @@ struct Export {
     pedersen: PedersenExport,
     note_commitment: NoteCommitmentExport,
     merkle_authentication: MerkleAuthenticationExport,
+    conditional_anchor: ConditionalAnchorExport,
 }
 
 #[derive(Serialize)]
@@ -233,6 +234,24 @@ struct MerkleAuthenticationCase {
 }
 
 #[derive(Serialize)]
+struct ConditionalAnchorExport {
+    cases: Vec<ConditionalAnchorCase>,
+}
+
+#[derive(Serialize)]
+struct ConditionalAnchorCase {
+    name: String,
+    root: String,
+    value: String,
+    anchor: String,
+    anchor_position: usize,
+    satisfied: bool,
+    inputs: Vec<VariableRecord>,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
 struct VariableRecord {
     identity: String,
     annotation: String,
@@ -267,6 +286,7 @@ struct SourceMontgomeryPoint {
 #[derive(Default)]
 struct TraceConstraintSystem {
     namespaces: Vec<String>,
+    inputs: Vec<VariableRecord>,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
 }
@@ -300,7 +320,10 @@ impl TraceConstraintSystem {
     fn assignment(&self, variable: Variable) -> Option<Scalar> {
         match variable.get_unchecked() {
             Index::Input(0) => Some(Scalar::ONE),
-            Index::Input(_) => None,
+            Index::Input(index) => self
+                .inputs
+                .get(index - 1)
+                .and_then(|record| decode_scalar(&record.assignment)),
             Index::Aux(index) => self
                 .variables
                 .get(index)
@@ -362,9 +385,15 @@ impl ConstraintSystem<Scalar> for TraceConstraintSystem {
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
-        let _ = annotation();
-        let _ = assignment()?;
-        Err(SynthesisError::Unsatisfiable)
+        let index = self.inputs.len() + 1;
+        let value = assignment()?;
+        let label = annotation().into();
+        self.inputs.push(VariableRecord {
+            identity: format!("Input({index})"),
+            annotation: self.full_name(label),
+            assignment: scalar_hex(value),
+        });
+        Ok(Variable::new_unchecked(Index::Input(index)))
     }
 
     fn enforce<A, AR, LA, LB, LC>(&mut self, annotation: A, a: LA, b: LB, c: LC)
@@ -920,6 +949,90 @@ fn build_merkle_authentication_export() -> Result<MerkleAuthenticationExport, Sy
         })
         .collect::<Result<Vec<_>, SynthesisError>>()?;
     Ok(MerkleAuthenticationExport { cases })
+}
+
+fn source_conditional_anchor<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    root: &AllocatedNum<Scalar>,
+    value: &AllocatedNum<Scalar>,
+    anchor: Scalar,
+) -> Result<AllocatedNum<Scalar>, SynthesisError> {
+    let rt = AllocatedNum::alloc(cs.namespace(|| "conditional anchor"), || Ok(anchor))?;
+    cs.enforce(
+        || "conditionally enforce correct root",
+        |lc| lc + root.get_variable() - rt.get_variable(),
+        |lc| lc + value.get_variable(),
+        |lc| lc,
+    );
+    rt.inputize(cs.namespace(|| "anchor"))?;
+    Ok(rt)
+}
+
+fn build_conditional_anchor_export() -> Result<ConditionalAnchorExport, SynthesisError> {
+    let modulus_minus_one = -Scalar::ONE;
+    let cases: Vec<(&str, Scalar, Scalar, Scalar)> = vec![
+        (
+            "nonzero_matching_anchor",
+            Scalar::from(42),
+            Scalar::ONE,
+            Scalar::from(42),
+        ),
+        (
+            "nonzero_mismatching_anchor",
+            Scalar::from(42),
+            Scalar::ONE,
+            Scalar::from(43),
+        ),
+        (
+            "zero_mismatching_anchor",
+            Scalar::from(42),
+            Scalar::ZERO,
+            Scalar::from(43),
+        ),
+        (
+            "zero_matching_anchor",
+            Scalar::ZERO,
+            Scalar::ZERO,
+            Scalar::ZERO,
+        ),
+        (
+            "maximum_field_boundary",
+            modulus_minus_one,
+            modulus_minus_one,
+            modulus_minus_one,
+        ),
+        (
+            "invalid_merkle_root_boundary",
+            modulus_minus_one,
+            Scalar::ONE,
+            Scalar::ZERO,
+        ),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(name, root_value, note_value, anchor_value)| {
+            let mut system = TraceConstraintSystem::default();
+            for input_name in ["rk.u", "rk.v", "cv.u", "cv.v"] {
+                system.alloc_input(|| input_name, || Ok(Scalar::ONE))?;
+            }
+            let value = AllocatedNum::alloc(system.namespace(|| "note value"), || Ok(note_value))?;
+            let root = AllocatedNum::alloc(system.namespace(|| "merkle root"), || Ok(root_value))?;
+            let _rt = source_conditional_anchor(&mut system, &root, &value, anchor_value)?;
+            let anchor_position = system.inputs.len();
+            Ok(ConditionalAnchorCase {
+                name: name.to_owned(),
+                root: scalar_decimal(root_value),
+                value: scalar_decimal(note_value),
+                anchor: scalar_decimal(anchor_value),
+                anchor_position,
+                satisfied: system.is_satisfied(),
+                inputs: system.inputs,
+                variables: system.variables,
+                constraints: system.constraints,
+            })
+        })
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+    Ok(ConditionalAnchorExport { cases })
 }
 
 fn source_montgomery_into_edwards<CS: ConstraintSystem<Scalar>>(
@@ -2168,7 +2281,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v10",
+        format: "bellman-sapling-edwards-point-reference-v11",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -2184,6 +2297,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         pedersen: build_pedersen_export()?,
         note_commitment: build_note_commitment_export()?,
         merkle_authentication: build_merkle_authentication_export()?,
+        conditional_anchor: build_conditional_anchor_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

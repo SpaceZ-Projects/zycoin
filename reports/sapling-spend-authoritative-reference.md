@@ -686,3 +686,55 @@ authentication-path comparison only. The production packed-position path
 was not changed; the conditional anchor stage and full Spend synthesis are not
 included. Full Spend matrix alignment, upstream Bellman full-circuit matrix
 equivalence, and official parameter compatibility remain **Unverified**.
+
+### Source-faithful conditional anchor
+
+At the pinned `sapling-crypto/src/circuit.rs` Spend anchor stage, Sapling
+allocates `rt` under `conditional anchor` from the supplied anchor witness.
+It then enforces the ordered row
+`(cur - rt) * value_num = 0`, labeled `conditionally enforce correct root`.
+Finally, `rt.inputize(cs.namespace(|| "anchor"))` allocates the public anchor
+input and emits a second row labeled `anchor/enforce input is correct`:
+`anchor_input * ONE = rt`. Both rows are required; the second is not folded
+into the root relation.
+
+The anchor is the fifth non-ONE public input: Bellman `Input(5)` (with
+`Input(0)` reserved for ONE), following `rk.u`, `rk.v`, `cv.u`, and `cv.v`.
+In ZyCoin's local R1CS layout this is public-input position 5 and index 4 in
+`public_inputs()`. The local R1CS requires public inputs to be reserved before
+private allocations, whereas Bellman can inputize `rt` after allocating it.
+The isolated helper therefore receives the pre-reserved anchor variable from
+its caller, but performs the same `rt` allocation and emits the same two
+ordered equations, labels, assignments, and matrix indices. Bellman's input
+and auxiliary namespaces are compared separately and mapped to the same
+columns.
+
+`constrain_spend_conditional_anchor` in
+`tests/sapling_spend_reference_port.py` accepts the already allocated root
+from the Merkle helper, note-value variable, and public anchor variable. It
+checks ownership, private/public roles, canonical witness values, and
+assignment consistency before allocating `conditional anchor/num`. This
+preserves the root/value witness dependency and does not add a root
+decomposition or alter the Merkle helper. The test-only Rust trace now supports
+late input allocation and calls Bellman's actual `AllocatedNum::inputize`.
+
+Six Bellman fixtures cover nonzero matching and mismatching anchors, zero
+matching and mismatching anchors, the maximum field-element boundary, and a
+nonzero note with a mismatching maximum-field Merkle root. All six have five
+public inputs, three auxiliary allocations in the isolated context (value,
+root, and `rt`), and two constraints. Python matched every ordered allocation
+and assignment, input position, label, A/B/C expression, and satisfaction
+result. Mutating the root, note value, public anchor, or intermediate `rt`
+produced the same failure rows as Bellman. Missing/malformed, foreign,
+unassigned, and out-of-range witnesses reject before system mutation.
+
+The complete isolated reference-port suite passed **34 tests / 322,337
+subtests**. The Sapling gadget, Spend circuit, and compatibility-manifest
+regressions passed **77 tests / 354 subtests**. Conditional-anchor targeted
+tests passed again after the final invalid-input test adjustment (**3 tests /
+36 subtests**). Ruff, Python syntax, Rust formatting/build, and
+`git diff --check` passed. The full Sapling suite was not run because it
+includes the prohibited synthetic-setup regression. The production Spend and
+Output circuits were not changed. This does not establish complete Spend
+matrix alignment, upstream Bellman full-circuit matrix equivalence, or
+official parameter compatibility; all remain **Unverified**.

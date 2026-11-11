@@ -10,6 +10,7 @@ from sapling_spend_reference_port import (
     EdwardsPointWitnessVariables,
     allocate_spend_fixed_base_scalar_bits,
     allocate_spend_montgomery_point,
+    constrain_spend_conditional_anchor,
     constrain_spend_edwards_point_add,
     constrain_spend_edwards_point_double,
     constrain_spend_edwards_point_mul,
@@ -153,6 +154,65 @@ def _local_failed_rows_with_assignments(
     )
 
 
+def _conditional_anchor_reference_index(identity: str, input_count: int) -> int:
+    if identity.startswith("Input(") and identity.endswith(")"):
+        return int(identity[6:-1])
+    if identity.startswith("Aux(") and identity.endswith(")"):
+        return input_count + int(identity[4:-1])
+    raise AssertionError(f"unexpected anchor reference variable {identity!r}")
+
+
+def _conditional_anchor_terms(
+    terms: list[dict], input_count: int
+) -> tuple[tuple[int, int], ...]:
+    combined: dict[int, int] = {}
+    for term in terms:
+        index = _conditional_anchor_reference_index(
+            term["identity"], input_count
+        )
+        coefficient = int.from_bytes(
+            bytes.fromhex(term["coefficient_hex"]), "little"
+        )
+        combined[index] = (combined.get(index, 0) + coefficient) % SCALAR_MODULUS
+    return tuple(
+        (index, coefficient)
+        for index, coefficient in sorted(combined.items())
+        if coefficient
+    )
+
+
+def _conditional_anchor_failed_rows(
+    reference: dict, replacements: dict[int, int]
+) -> tuple[int, ...]:
+    assignments = [1] + [
+        int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+        for record in reference["inputs"]
+    ] + [
+        int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+        for record in reference["variables"]
+    ]
+    for variable_index, replacement in replacements.items():
+        assignments[variable_index] = replacement % SCALAR_MODULUS
+
+    def evaluate(terms: list[dict]) -> int:
+        return sum(
+            int.from_bytes(bytes.fromhex(term["coefficient_hex"]), "little")
+            * assignments[
+                _conditional_anchor_reference_index(
+                    term["identity"], len(reference["inputs"]) + 1
+                )
+            ]
+            for term in terms
+        ) % SCALAR_MODULUS
+
+    return tuple(
+        row["index"]
+        for row in reference["constraints"]
+        if evaluate(row["a"]) * evaluate(row["b"]) % SCALAR_MODULUS
+        != evaluate(row["c"])
+    )
+
+
 def _allocate_boolean_bits(
     system: R1CS, values: list[bool], label: str = "scalar bits"
 ) -> tuple:
@@ -173,7 +233,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v10":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v11":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -218,6 +278,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.merkle_authentication_cases = {
             case["name"]: case
             for case in cls.merkle_authentication["cases"]
+        }
+        cls.conditional_anchor_cases = {
+            case["name"]: case
+            for case in cls.reference["conditional_anchor"]["cases"]
         }
 
     def assert_case_matches(
@@ -1697,6 +1761,222 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         self.assertEqual(empty_path.root_value, 5)
         self.assertEqual(system.witness_value(empty_path.root_variable), 5)
+
+    def _anchor_fixture(self, reference: dict) -> tuple[R1CS, Variable, Variable, Variable]:
+        system = R1CS()
+        for name in ("rk.u", "rk.v", "cv.u", "cv.v"):
+            system.alloc_public(name, 1)
+        anchor = system.alloc_public("anchor/input variable", int(reference["anchor"]))
+        value = system.alloc_private("note value/num", int(reference["value"]))
+        root = system.alloc_private("merkle root/num", int(reference["root"]))
+        return system, root, value, anchor
+
+    def test_conditional_anchor_matches_bellman_ordered_traces(self) -> None:
+        for name, reference in self.conditional_anchor_cases.items():
+            with self.subTest(case=name):
+                system, root, value, anchor = self._anchor_fixture(reference)
+                result = constrain_spend_conditional_anchor(
+                    system,
+                    root,
+                    int(reference["root"]),
+                    value,
+                    int(reference["value"]),
+                    anchor,
+                    int(reference["anchor"]),
+                )
+                input_count = len(reference["inputs"]) + 1
+                expected_variables = reference["inputs"] + reference["variables"]
+                self.assertEqual(
+                    [
+                        (variable.name, variable.index)
+                        for variable in system.variables[1:]
+                    ],
+                    [
+                        (
+                            record["annotation"],
+                            _conditional_anchor_reference_index(
+                                record["identity"], input_count
+                            ),
+                        )
+                        for record in expected_variables
+                    ],
+                )
+                self.assertEqual(
+                    [
+                        system.witness_value(variable)
+                        for variable in system.variables[1:]
+                    ],
+                    [
+                        int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+                        for record in expected_variables
+                    ],
+                )
+                self.assertEqual(
+                    system.public_input_position(anchor),
+                    reference["anchor_position"],
+                )
+                self.assertEqual(
+                    system.public_inputs(),
+                    tuple(
+                        int.from_bytes(
+                            bytes.fromhex(record["assignment"]), "little"
+                        )
+                        for record in reference["inputs"]
+                    ),
+                )
+                self.assertEqual(system.constraint_count, len(reference["constraints"]))
+                for local_row, reference_row in zip(
+                    system.constraints, reference["constraints"], strict=True
+                ):
+                    with self.subTest(case=name, row=reference_row["index"]):
+                        self.assertEqual(
+                            local_row.label, reference_row["annotation"]
+                        )
+                        self.assertEqual(
+                            local_row.left.terms,
+                            _conditional_anchor_terms(
+                                reference_row["a"], input_count
+                            ),
+                        )
+                        self.assertEqual(
+                            local_row.right.terms,
+                            _conditional_anchor_terms(
+                                reference_row["b"], input_count
+                            ),
+                        )
+                        self.assertEqual(
+                            local_row.output.terms,
+                            _conditional_anchor_terms(
+                                reference_row["c"], input_count
+                            ),
+                        )
+                self.assertEqual(system.is_satisfied(), reference["satisfied"])
+                self.assertEqual(result.conditional_anchor_variable.name, "conditional anchor/num")
+                self.assertEqual(
+                    system.witness_value(result.conditional_anchor_variable),
+                    int(reference["anchor"]),
+                )
+
+    def test_conditional_anchor_witness_mutations_match_bellman(self) -> None:
+        reference = self.conditional_anchor_cases["nonzero_mismatching_anchor"]
+        system, root, value, anchor = self._anchor_fixture(reference)
+        result = constrain_spend_conditional_anchor(
+            system,
+            root,
+            int(reference["root"]),
+            value,
+            int(reference["value"]),
+            anchor,
+            int(reference["anchor"]),
+        )
+        for variable in (
+            root,
+            value,
+            anchor,
+            result.conditional_anchor_variable,
+        ):
+            assigned = system.witness_value(variable)
+            self.assertIsNotNone(assigned)
+            replacement = (assigned + 1) % SCALAR_MODULUS
+            with self.subTest(variable=variable.name):
+                self.assertEqual(
+                    _local_failed_rows(system, variable.index, replacement),
+                    _conditional_anchor_failed_rows(
+                        reference, {variable.index: replacement}
+                    ),
+                )
+
+    def test_conditional_anchor_invalid_inputs_reject_before_mutation(self) -> None:
+        system = R1CS()
+        prior_inputs = [
+            system.alloc_public(f"prior/{index}", 1) for index in range(4)
+        ]
+        anchor = system.alloc_public("anchor", 7)
+        value = system.alloc_private("value", 3)
+        root = system.alloc_private("root", 5)
+        unassigned_root = system.alloc_private("unassigned root", None)
+        unassigned_value = system.alloc_private("unassigned value", None)
+        unassigned_anchor_system = R1CS()
+        for index in range(4):
+            unassigned_anchor_system.alloc_public(f"prior/{index}", 1)
+        unassigned_anchor = unassigned_anchor_system.alloc_public("anchor", None)
+        unassigned_anchor_value = unassigned_anchor_system.alloc_private("value", 3)
+        unassigned_anchor_root = unassigned_anchor_system.alloc_private("root", 5)
+        foreign_system = R1CS()
+        for index in range(6):
+            foreign_system.alloc_public(f"foreign prior/{index}", 1)
+        foreign_anchor = foreign_system.variables[-1]
+        foreign_root = foreign_system.alloc_private("foreign root", 5)
+        foreign_value = foreign_system.alloc_private("foreign value", 3)
+        calls = (
+            lambda: constrain_spend_conditional_anchor(
+                system, None, 5, value, 3, anchor, 7  # type: ignore[arg-type]
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, foreign_root, 5, value, 3, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, foreign_value, 3, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, value, 3, foreign_anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, unassigned_root, 5, value, 3, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, unassigned_value, 3, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, SCALAR_MODULUS, value, 3, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, value, -1, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, value, 3, anchor, SCALAR_MODULUS
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 6, value, 3, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, value, 4, anchor, 7
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, value, 3, anchor, 8
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, 5, value, 3, root, 5
+            ),
+            lambda: constrain_spend_conditional_anchor(
+                system, root, True, value, 3, anchor, 7  # type: ignore[arg-type]
+            ),
+        )
+        for call in calls:
+            with self.subTest(call=call):
+                before_variables = len(system.variables)
+                before_rows = system.constraint_count
+                with self.assertRaises((R1CSError, TypeError)):
+                    call()
+                self.assertEqual(len(system.variables), before_variables)
+                self.assertEqual(system.constraint_count, before_rows)
+        before_variables = len(unassigned_anchor_system.variables)
+        before_rows = unassigned_anchor_system.constraint_count
+        with self.assertRaises(R1CSError):
+            constrain_spend_conditional_anchor(
+                unassigned_anchor_system,
+                unassigned_anchor_root,
+                5,
+                unassigned_anchor_value,
+                3,
+                unassigned_anchor,
+                7,
+            )
+        self.assertEqual(len(unassigned_anchor_system.variables), before_variables)
+        self.assertEqual(
+            unassigned_anchor_system.constraint_count, before_rows
+        )
+        self.assertEqual(prior_inputs[-1].kind, "public")
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,
