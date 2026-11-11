@@ -5,6 +5,7 @@ use ff::{Field, PrimeField};
 use group::{Curve, Group};
 use jubjub::ExtendedPoint;
 use serde::Serialize;
+use std::ops::{AddAssign, MulAssign, SubAssign};
 
 const SAPLING_REVISION: &str = "88a7946b4a3066787776e11f0a502654167e022d";
 const BELLMAN_REVISION: &str = "b726862a4ece8a627e7fea486d77b502a6edbb0b";
@@ -56,6 +57,11 @@ struct Row {
     a: Vec<Term>,
     b: Vec<Term>,
     c: Vec<Term>,
+}
+
+struct SourcePoint {
+    u: AllocatedNum<Scalar>,
+    v: AllocatedNum<Scalar>,
 }
 
 #[derive(Default)]
@@ -200,7 +206,7 @@ fn source_interpret<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     u: &AllocatedNum<Scalar>,
     v: &AllocatedNum<Scalar>,
-) -> Result<(), SynthesisError> {
+) -> Result<SourcePoint, SynthesisError> {
     let u_squared = u.square(cs.namespace(|| "u^2"))?;
     let v_squared = v.square(cs.namespace(|| "v^2"))?;
     let product = u_squared.mul(cs.namespace(|| "u^2 v^2"), &v_squared)?;
@@ -213,39 +219,50 @@ fn source_interpret<CS: ConstraintSystem<Scalar>>(
         |lc| lc + one + (EDWARDS_D, product.get_variable()),
     );
 
-    Ok(())
+    Ok(SourcePoint {
+        u: u.clone(),
+        v: v.clone(),
+    })
 }
 
 fn source_witness(
     cs: impl ConstraintSystem<Scalar>,
     point: ExtendedPoint,
-) -> Result<(Scalar, Scalar), SynthesisError> {
+) -> Result<SourcePoint, SynthesisError> {
     let affine = point.to_affine();
     let u = affine.get_u();
     let v = affine.get_v();
-    source_witness_coordinates(cs, u, v)?;
-    Ok((u, v))
+    source_witness_coordinates(cs, u, v)
 }
 
 fn source_witness_coordinates(
     mut cs: impl ConstraintSystem<Scalar>,
     u_value: Scalar,
     v_value: Scalar,
-) -> Result<(), SynthesisError> {
+) -> Result<SourcePoint, SynthesisError> {
     let u = AllocatedNum::alloc(cs.namespace(|| "u"), || Ok(u_value))?;
     let v = AllocatedNum::alloc(cs.namespace(|| "v"), || Ok(v_value))?;
-    source_interpret(cs.namespace(|| "point interpretation"), &u, &v)?;
-    Ok(())
+    source_interpret(cs.namespace(|| "point interpretation"), &u, &v)
 }
 
 fn build_case(name: &'static str, point: ExtendedPoint) -> Result<Case, SynthesisError> {
     let mut system = TraceConstraintSystem::default();
-    let (u, v) = source_witness(system.namespace(|| "point"), point)?;
+    let result = source_witness(system.namespace(|| "point"), point)?;
     let satisfied = system.is_satisfied();
     Ok(Case {
         name,
-        u: scalar_decimal(u),
-        v: scalar_decimal(v),
+        u: scalar_decimal(
+            result
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        v: scalar_decimal(
+            result
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
         satisfied,
         variables: system.variables,
         constraints: system.constraints,
@@ -256,13 +273,277 @@ fn build_off_curve_case() -> Result<Case, SynthesisError> {
     let mut system = TraceConstraintSystem::default();
     let u_value = Scalar::ONE;
     let v_value = Scalar::ONE;
-    source_witness_coordinates(system.namespace(|| "point"), u_value, v_value)?;
+    let result = source_witness_coordinates(system.namespace(|| "point"), u_value, v_value)?;
     let satisfied = system.is_satisfied();
     Ok(Case {
         name: "off_curve",
-        u: scalar_decimal(u_value),
-        v: scalar_decimal(v_value),
+        u: scalar_decimal(
+            result
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        v: scalar_decimal(
+            result
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
         satisfied,
+        variables: system.variables,
+        constraints: system.constraints,
+    })
+}
+
+fn source_double<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    point: &SourcePoint,
+) -> Result<SourcePoint, SynthesisError> {
+    let t = AllocatedNum::alloc(cs.namespace(|| "T"), || {
+        let mut value = point
+            .u
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        value.add_assign(
+            point
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        );
+        let mut other = point
+            .u
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        other.add_assign(
+            point
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        );
+        value.mul_assign(&other);
+        Ok(value)
+    })?;
+    cs.enforce(
+        || "T computation",
+        |lc| lc + point.u.get_variable() + point.v.get_variable(),
+        |lc| lc + point.u.get_variable() + point.v.get_variable(),
+        |lc| lc + t.get_variable(),
+    );
+
+    let a = point.u.mul(cs.namespace(|| "A computation"), &point.v)?;
+    let c = AllocatedNum::alloc(cs.namespace(|| "C"), || {
+        let mut value = a
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?
+            .square();
+        value.mul_assign(&EDWARDS_D);
+        Ok(value)
+    })?;
+    cs.enforce(
+        || "C computation",
+        |lc| lc + (EDWARDS_D, a.get_variable()),
+        |lc| lc + a.get_variable(),
+        |lc| lc + c.get_variable(),
+    );
+
+    let u3 = AllocatedNum::alloc(cs.namespace(|| "u3"), || {
+        let mut numerator = a.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        numerator = numerator.double();
+        let mut denominator = Scalar::ONE;
+        denominator.add_assign(c.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        Option::<Scalar>::from(denominator.invert())
+            .map(|inverse| numerator * inverse)
+            .ok_or(SynthesisError::DivisionByZero)
+    })?;
+    let one = CS::one();
+    cs.enforce(
+        || "u3 computation",
+        |lc| lc + one + c.get_variable(),
+        |lc| lc + u3.get_variable(),
+        |lc| lc + a.get_variable() + a.get_variable(),
+    );
+
+    let v3 = AllocatedNum::alloc(cs.namespace(|| "v3"), || {
+        let mut numerator = a.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        numerator = numerator.double().neg();
+        numerator.add_assign(t.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        let mut denominator = Scalar::ONE;
+        denominator.sub_assign(c.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        Option::<Scalar>::from(denominator.invert())
+            .map(|inverse| numerator * inverse)
+            .ok_or(SynthesisError::DivisionByZero)
+    })?;
+    cs.enforce(
+        || "v3 computation",
+        |lc| lc + one - c.get_variable(),
+        |lc| lc + v3.get_variable(),
+        |lc| lc + t.get_variable() - a.get_variable() - a.get_variable(),
+    );
+    Ok(SourcePoint { u: u3, v: v3 })
+}
+
+fn source_add<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    left: &SourcePoint,
+    right: &SourcePoint,
+) -> Result<SourcePoint, SynthesisError> {
+    let uppercase_u = AllocatedNum::alloc(cs.namespace(|| "U"), || {
+        let mut left_sum = left
+            .u
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        left_sum.add_assign(
+            left.v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        );
+        let mut right_sum = right
+            .u
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        right_sum.add_assign(
+            right
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        );
+        left_sum.mul_assign(&right_sum);
+        Ok(left_sum)
+    })?;
+    cs.enforce(
+        || "U computation",
+        |lc| lc + left.u.get_variable() + left.v.get_variable(),
+        |lc| lc + right.u.get_variable() + right.v.get_variable(),
+        |lc| lc + uppercase_u.get_variable(),
+    );
+
+    let a = right.v.mul(cs.namespace(|| "A computation"), &left.u)?;
+    let b = right.u.mul(cs.namespace(|| "B computation"), &left.v)?;
+    let c = AllocatedNum::alloc(cs.namespace(|| "C"), || {
+        let mut value = a.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        value.mul_assign(b.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        value.mul_assign(&EDWARDS_D);
+        Ok(value)
+    })?;
+    cs.enforce(
+        || "C computation",
+        |lc| lc + (EDWARDS_D, a.get_variable()),
+        |lc| lc + b.get_variable(),
+        |lc| lc + c.get_variable(),
+    );
+
+    let u3 = AllocatedNum::alloc(cs.namespace(|| "u3"), || {
+        let mut numerator = a.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        numerator.add_assign(b.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        let mut denominator = Scalar::ONE;
+        denominator.add_assign(c.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        Option::<Scalar>::from(denominator.invert())
+            .map(|inverse| numerator * inverse)
+            .ok_or(SynthesisError::DivisionByZero)
+    })?;
+    let one = CS::one();
+    cs.enforce(
+        || "u3 computation",
+        |lc| lc + one + c.get_variable(),
+        |lc| lc + u3.get_variable(),
+        |lc| lc + a.get_variable() + b.get_variable(),
+    );
+
+    let v3 = AllocatedNum::alloc(cs.namespace(|| "v3"), || {
+        let mut numerator = uppercase_u
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        numerator.sub_assign(a.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        numerator.sub_assign(b.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        let mut denominator = Scalar::ONE;
+        denominator.sub_assign(c.get_value().ok_or(SynthesisError::AssignmentMissing)?);
+        Option::<Scalar>::from(denominator.invert())
+            .map(|inverse| numerator * inverse)
+            .ok_or(SynthesisError::DivisionByZero)
+    })?;
+    cs.enforce(
+        || "v3 computation",
+        |lc| lc + one - c.get_variable(),
+        |lc| lc + v3.get_variable(),
+        |lc| lc + uppercase_u.get_variable() - a.get_variable() - b.get_variable(),
+    );
+    Ok(SourcePoint { u: u3, v: v3 })
+}
+
+fn build_add_case(
+    name: &'static str,
+    left_point: ExtendedPoint,
+    right_point: ExtendedPoint,
+) -> Result<Case, SynthesisError> {
+    let mut system = TraceConstraintSystem::default();
+    let left = source_witness(system.namespace(|| "left"), left_point)?;
+    let right = source_witness(system.namespace(|| "right"), right_point)?;
+    let result = source_add(system.namespace(|| "addition"), &left, &right)?;
+    Ok(Case {
+        name,
+        u: scalar_decimal(
+            result
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        v: scalar_decimal(
+            result
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    })
+}
+
+fn build_double_case(name: &'static str, point: ExtendedPoint) -> Result<Case, SynthesisError> {
+    let mut system = TraceConstraintSystem::default();
+    let input = source_witness(system.namespace(|| "point"), point)?;
+    let result = source_double(system.namespace(|| "doubling"), &input)?;
+    Ok(Case {
+        name,
+        u: scalar_decimal(
+            result
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        v: scalar_decimal(
+            result
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    })
+}
+
+fn build_off_curve_add_case(generator: ExtendedPoint) -> Result<Case, SynthesisError> {
+    let mut system = TraceConstraintSystem::default();
+    let invalid =
+        source_witness_coordinates(system.namespace(|| "left"), Scalar::ONE, Scalar::ONE)?;
+    let right = source_witness(system.namespace(|| "right"), generator)?;
+    let result = source_add(system.namespace(|| "addition"), &invalid, &right)?;
+    Ok(Case {
+        name: "off_curve_addition",
+        u: scalar_decimal(
+            result
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        v: scalar_decimal(
+            result
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        satisfied: system.is_satisfied(),
         variables: system.variables,
         constraints: system.constraints,
     })
@@ -340,11 +621,30 @@ fn parse_variable(identity: &str) -> Option<Variable> {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let generator: ExtendedPoint = jubjub::SubgroupPoint::generator().into();
+    let twice_generator = generator + generator;
     let cases = vec![
         build_case("identity", ExtendedPoint::identity())?,
         build_case("generator", generator)?,
         build_case("negative_generator", -generator)?,
         build_off_curve_case()?,
+        build_add_case(
+            "identity_add_generator",
+            ExtendedPoint::identity(),
+            generator,
+        )?,
+        build_add_case(
+            "generator_add_identity",
+            generator,
+            ExtendedPoint::identity(),
+        )?,
+        build_add_case("negative_generator_add_generator", -generator, generator)?,
+        build_add_case("generator_add_negative_generator", generator, -generator)?,
+        build_add_case("equal_point_addition", generator, generator)?,
+        build_add_case("nontrivial_point_addition", generator, twice_generator)?,
+        build_double_case("identity_double", ExtendedPoint::identity())?,
+        build_double_case("generator_double", generator)?,
+        build_double_case("negative_generator_double", -generator)?,
+        build_off_curve_add_case(generator)?,
     ];
     let output = Export {
         format: "bellman-sapling-edwards-point-reference-v1",

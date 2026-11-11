@@ -6,7 +6,11 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from sapling_spend_reference_port import constrain_spend_edwards_point_witness
+from sapling_spend_reference_port import (
+    constrain_spend_edwards_point_add,
+    constrain_spend_edwards_point_double,
+    constrain_spend_edwards_point_witness,
+)
 
 from src.bls12_381 import SCALAR_MODULUS
 from src.jubjub import CURVE_D, IDENTITY, Point
@@ -65,6 +69,47 @@ def _canonical_terms(terms: list[dict]) -> tuple[tuple[int, int], ...]:
     )
 
 
+def _reference_failed_rows(
+    reference: dict, variable_index: int, replacement: int
+) -> tuple[int, ...]:
+    assignments = [1] + [
+        int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+        for record in reference["variables"]
+    ]
+    assignments[variable_index] = replacement % SCALAR_MODULUS
+
+    def evaluate(terms: list[dict]) -> int:
+        return sum(
+            int.from_bytes(
+                bytes.fromhex(term["coefficient_hex"]), "little"
+            )
+            * assignments[_reference_index(term["identity"])]
+            for term in terms
+        ) % SCALAR_MODULUS
+
+    return tuple(
+        row["index"]
+        for row in reference["constraints"]
+        if evaluate(row["a"]) * evaluate(row["b"]) % SCALAR_MODULUS
+        != evaluate(row["c"])
+    )
+
+
+def _local_failed_rows(
+    system: R1CS, variable_index: int, replacement: int
+) -> tuple[int, ...]:
+    assignments = list(system._values)
+    assignments[variable_index] = replacement % SCALAR_MODULUS
+    return tuple(
+        index
+        for index, row in enumerate(system.constraints)
+        if system._evaluate(row.left, assignments)
+        * system._evaluate(row.right, assignments)
+        % SCALAR_MODULUS
+        != system._evaluate(row.output, assignments)
+    )
+
+
 class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -75,6 +120,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             "88a7946b4a3066787776e11f0a502654167e022d"
         ):
             raise AssertionError("unexpected pinned Sapling source revision")
+        if cls.reference["bellman_revision"] != (
+            "b726862a4ece8a627e7fea486d77b502a6edbb0b"
+        ):
+            raise AssertionError("unexpected Bellman source revision")
         if cls.reference["bellman_crate_version"] != "0.15.0":
             raise AssertionError("unexpected Bellman crate version")
         cls.cases = {case["name"]: case for case in cls.reference["cases"]}
@@ -94,6 +143,18 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
 
         system = R1CS()
         variables = constrain_spend_edwards_point_witness(system, point)
+        self.assert_system_matches_reference(
+            name, system, reference, expected_satisfied
+        )
+        self.assertEqual((variables.u.index, variables.v.index), (1, 2))
+
+    def assert_system_matches_reference(
+        self,
+        name: str,
+        system: R1CS,
+        reference: dict,
+        expected_satisfied: bool = True,
+    ) -> None:
         self.assertEqual(system.public_input_count, 0)
         self.assertEqual(
             [(variable.name, variable.index) for variable in system.variables[1:]],
@@ -122,7 +183,195 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
 
         self.assertEqual(system.is_satisfied(), expected_satisfied)
         self.assertEqual(reference["satisfied"], expected_satisfied)
-        self.assertEqual((variables.u.index, variables.v.index), (1, 2))
+
+    def test_exact_addition_and_doubling_parity(self) -> None:
+        generator = Point(*self._generator_coordinates())
+        negative = Point(*self._negative_generator_coordinates())
+        identity = IDENTITY
+        twice_generator = generator + generator
+        cases = (
+            (
+                "identity_add_generator",
+                "add",
+                identity,
+                generator,
+            ),
+            (
+                "generator_add_identity",
+                "add",
+                generator,
+                identity,
+            ),
+            (
+                "negative_generator_add_generator",
+                "add",
+                negative,
+                generator,
+            ),
+            (
+                "generator_add_negative_generator",
+                "add",
+                generator,
+                negative,
+            ),
+            (
+                "equal_point_addition",
+                "add",
+                generator,
+                generator,
+            ),
+            (
+                "nontrivial_point_addition",
+                "add",
+                generator,
+                twice_generator,
+            ),
+            ("identity_double", "double", identity, None),
+            ("generator_double", "double", generator, None),
+            ("negative_generator_double", "double", negative, None),
+        )
+        for name, operation, left, right in cases:
+            with self.subTest(case=name):
+                system = R1CS()
+                left_variables = constrain_spend_edwards_point_witness(
+                    system, left, "left" if right is not None else "point"
+                )
+                if operation == "add":
+                    assert right is not None
+                    right_variables = constrain_spend_edwards_point_witness(
+                        system, right, "right"
+                    )
+                    result_variables = constrain_spend_edwards_point_add(
+                        system,
+                        left_variables,
+                        left,
+                        right_variables,
+                        right,
+                    )
+                    expected = left + right
+                else:
+                    result_variables = constrain_spend_edwards_point_double(
+                        system, left_variables, left
+                    )
+                    expected = left + left
+                reference = self.cases[name]
+                self.assertEqual(int(reference["u"]), expected.u)
+                self.assertEqual(int(reference["v"]), expected.v)
+                self.assertEqual(
+                    len(system.variables) - 1,
+                    16 if operation == "add" else 10,
+                )
+                self.assertEqual(
+                    system.constraint_count,
+                    14 if operation == "add" else 9,
+                )
+                self.assertEqual(
+                    system.witness_value(result_variables.u), expected.u
+                )
+                self.assertEqual(
+                    system.witness_value(result_variables.v), expected.v
+                )
+                self.assert_system_matches_reference(name, system, reference)
+
+    def test_invalid_operation_input_and_inconsistent_intermediate(self) -> None:
+        generator = Point(*self._generator_coordinates())
+        invalid = Point(1, 1)
+        system = R1CS()
+        invalid_variables = constrain_spend_edwards_point_witness(
+            system, invalid, "left"
+        )
+        generator_variables = constrain_spend_edwards_point_witness(
+            system, generator, "right"
+        )
+        constrain_spend_edwards_point_add(
+            system,
+            invalid_variables,
+            invalid,
+            generator_variables,
+            generator,
+        )
+        self.assert_system_matches_reference(
+            "off_curve_addition", system, self.cases["off_curve_addition"], False
+        )
+
+        valid_system = R1CS()
+        point_variables = constrain_spend_edwards_point_witness(
+            valid_system, generator
+        )
+        result = constrain_spend_edwards_point_double(
+            valid_system, point_variables, generator
+        )
+        self.assertTrue(valid_system.is_satisfied())
+        reference = self.cases["generator_double"]
+        self.assert_system_matches_reference(
+            "generator_double", valid_system, reference
+        )
+        changed_variable = next(
+            variable for variable in valid_system.variables
+            if variable.name == "doubling/C/num"
+        )
+        changed_assignment = (
+            valid_system.witness_value(changed_variable) + 1
+        ) % SCALAR_MODULUS
+        self.assertFalse(
+            valid_system.is_satisfied(
+                {changed_variable.index: changed_assignment}
+            )
+        )
+        self.assertEqual(
+            _local_failed_rows(
+                valid_system, changed_variable.index, changed_assignment
+            ),
+            _reference_failed_rows(
+                reference, changed_variable.index, changed_assignment
+            ),
+        )
+        self.assertEqual(
+            (result.u.index, result.v.index),
+            (changed_variable.index + 1, changed_variable.index + 2),
+        )
+
+    def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
+        self,
+    ) -> None:
+        generator = Point(*self._generator_coordinates())
+        system = R1CS()
+        point_variables = constrain_spend_edwards_point_witness(system, generator)
+        other_system = R1CS()
+        foreign_variables = constrain_spend_edwards_point_witness(
+            other_system, generator
+        )
+        for witness, variables, target in (
+            (None, point_variables, system),
+            (object(), point_variables, system),
+            (generator, foreign_variables, system),
+            (Point(generator.u + 1, generator.v), point_variables, system),
+        ):
+            before_variables = len(system.variables)
+            before_rows = system.constraint_count
+            with self.subTest(witness=type(witness).__name__):
+                with self.assertRaises((R1CSError, TypeError)):
+                    constrain_spend_edwards_point_double(
+                        target, variables, witness  # type: ignore[arg-type]
+                    )
+                self.assertEqual(len(system.variables), before_variables)
+                self.assertEqual(system.constraint_count, before_rows)
+
+        valid_variables = constrain_spend_edwards_point_witness(
+            system, generator, "valid"
+        )
+        before_variables = len(system.variables)
+        before_rows = system.constraint_count
+        with self.assertRaises(R1CSError):
+            constrain_spend_edwards_point_add(
+                system,
+                valid_variables,
+                Point(generator.u + 1, generator.v),
+                valid_variables,
+                generator,
+            )
+        self.assertEqual(len(system.variables), before_variables)
+        self.assertEqual(system.constraint_count, before_rows)
 
     def test_exact_parity_for_identity_and_generator_points(self) -> None:
         self.assert_case_matches("identity", IDENTITY)

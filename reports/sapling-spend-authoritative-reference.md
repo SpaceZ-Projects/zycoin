@@ -191,8 +191,44 @@ build, and Ruff on both changed Python test files passed. The full Sapling
 regression suite passed **209 tests, 1 skipped** in **2,840.438 seconds**.
 Production Spend, Output, parameter files, and proving gates remain unchanged.
 
-Next in the prescribed sequence are Edwards point addition/doubling and the
-non-small-order check. This result is an isolated primitive parity result; it
-does not establish full Spend matrix alignment, QAP or official parameter
-compatibility, parameter-to-circuit binding, or ceremony validity. No proof
-or synthetic parameter setup was generated.
+### Next isolated units: Edwards point addition and doubling
+
+The next step in the same prescribed sequence is implemented in the isolated
+test-only Python port. The test reference uses Bellman 0.15 `AllocatedNum`
+operations and ordered `ConstraintSystem::enforce` rows while following
+`EdwardsPoint::add` and `EdwardsPoint::double` in the pinned Sapling source.
+It preserves the source's intermediate formulas, assignment order, namespace
+labels, and A/B/C factorization; it does not call production Spend helpers.
+
+The differential set covers six additions: identity + generator, generator +
+identity, negative generator + generator, generator + negative generator,
+equal generator addition, and generator + twice-generator. It also covers
+doubling identity, generator, and negative generator, plus an off-curve raw
+point addition. For each regular addition, both witnessed points allocate 10
+auxiliaries and four curve rows apiece; the operation adds six auxiliaries and
+six rows, for **16 auxiliaries and 14 ordered constraints** total. Each
+doubling adds five operation auxiliaries and five rows to one witnessed point,
+for **10 auxiliaries and 9 ordered constraints** total. The invalid addition
+has the same counts, and both reference and Python matrices are unsatisfied
+on the input-point curve row.
+
+All fixture allocations, annotations, ordered assignments, labels, and every
+coefficient in every row match exactly. Output coordinates equal the
+independently computed Jubjub group operation results. Mutating a doubling
+intermediate produces the same failing row indices against both matrices.
+Missing, malformed, foreign, or assignment-inconsistent point inputs reject
+before the addition/doubling port adds any variables or constraints.
+
+The focused isolated suite passed **6 tests**, existing Spend circuit tests
+passed **6 tests**, and the Rust formatting/reference build and Ruff passed.
+The full Sapling regression suite passed **212 tests, 1 skipped** in
+**2,928.896 seconds**. It includes the repository's pre-existing synthetic
+setup regression, which generated and exercised its test-only synthetic
+parameters during suite execution. This was an unintended consequence of
+running the complete suite despite this task's synthetic-setup restriction;
+the isolated port itself does not use or create parameters, and no synthetic
+parameter code or fixture was changed. Production Spend and Output, official
+parameters, and proving gates remain unchanged. The next prescribed unit is
+the **non-small-order check**; full Spend matrix alignment, official
+parameter compatibility, parameter-to-circuit binding, and ceremony validity
+remain unverified.
