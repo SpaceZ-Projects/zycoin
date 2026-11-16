@@ -6,11 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TypeAlias
 
-from src.blake2s_gadget import (
-    CircuitBit,
-    constrain_blake2s,
-    make_blake2s_witness,
-)
+from src.blake2s_gadget import CircuitBit
 from src.bls12_381 import SCALAR_MODULUS
 from src.bls12_381 import SCALAR_MODULUS as CIRCUIT_FIELD_MODULUS
 from src.jubjub import (
@@ -22,6 +18,7 @@ from src.jubjub import (
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, LinearCombination, R1CSError, Variable
 from src.sapling_gadgets import sapling_fixed_base_generator
+from tests.bellman_blake2s_reference import constrain_bellman_blake2s_reference
 
 SpendBoolean: TypeAlias = Variable | bool
 
@@ -733,7 +730,6 @@ def constrain_spend_ivk_blake2s(
     preimage_bits = tuple(ak_repr_bits) + tuple(nk_repr_bits)
     if len(ak_repr_bits) != 256 or len(nk_repr_bits) != 256:
         raise R1CSError("IVK point representations must each contain 256 bits")
-    values: list[int] = []
     for bit in preimage_bits:
         if not isinstance(bit, Variable):
             raise TypeError("IVK representation bits must be allocated variables")
@@ -741,16 +737,12 @@ def constrain_spend_ivk_blake2s(
         value = system.witness_value(bit)
         if value not in (0, 1):
             raise R1CSError("IVK representation bit is unassigned or non-Boolean")
-        values.append(int(value))
 
-    witness = make_blake2s_witness(values, b"Zcashivk")
-    digest_bits = constrain_blake2s(
+    digest_bits = constrain_bellman_blake2s_reference(
         system,
         preimage_bits,
         b"Zcashivk",
-        witness,
-        "computation of ivk",
-        input_bits_preconstrained=True,
+        annotation_prefix="computation of ivk",
     )
     return IvkBlake2sResult(
         preimage_bits,

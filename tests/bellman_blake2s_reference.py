@@ -65,6 +65,7 @@ Word = tuple[Bit, ...]
 @dataclass
 class _MultiEq:
     system: _SynthesisSystem
+    annotation_prefix: str | None = None
     bits_used: int = 0
     left: LinearCombination | None = None
     right: LinearCombination | None = None
@@ -75,21 +76,31 @@ class _MultiEq:
         self.right = self.system.linear_combination(())
 
     def add(
-        self, left: LinearCombination, right: LinearCombination, width: int
+        self,
+        left: LinearCombination,
+        right: LinearCombination,
+        width: int,
+        annotation_prefix: str | None = None,
     ) -> None:
         if self.bits_used + width >= 254:
-            self.flush()
+            self.flush(annotation_prefix)
         coefficient = 1 << self.bits_used
         assert self.left is not None and self.right is not None
         self.left = self.left + left * coefficient
         self.right = self.right + right * coefficient
         self.bits_used += width
 
-    def flush(self) -> None:
+    def flush(self, annotation_prefix: str | None = None) -> None:
         if not self.bits_used:
             return
         assert self.left is not None and self.right is not None
-        self.system.enforce(self.left, 1, self.right, f"Bellman MultiEq {self.batch}")
+        prefix = (
+            annotation_prefix
+            if annotation_prefix is not None
+            else self.annotation_prefix
+        )
+        label = f"{prefix}/multieq {self.batch}" if prefix else f"Bellman MultiEq {self.batch}"
+        self.system.enforce(self.left, 1, self.right, label)
         self.batch += 1
         self.bits_used = 0
         self.left = self.system.linear_combination(())
@@ -112,6 +123,8 @@ def constrain_bellman_blake2s_reference(
     system: _SynthesisSystem,
     input_bits: tuple[Bit, ...],
     personalization: bytes,
+    *,
+    annotation_prefix: str | None = None,
 ) -> tuple[Bit, ...]:
     """Synthesize Bellman's full BLAKE2s hash over already-admitted bits."""
     if len(personalization) != 8 or len(input_bits) % 8:
@@ -139,6 +152,11 @@ def constrain_bellman_blake2s_reference(
             block,
             (block_index + 1) * 64,
             False,
+            annotation_prefix=(
+                f"{annotation_prefix}/block {block_index}"
+                if annotation_prefix is not None
+                else None
+            ),
         )
     h = _compress(
         system,
@@ -146,6 +164,11 @@ def constrain_bellman_blake2s_reference(
         blocks[-1],
         len(input_bits) // 8,
         True,
+        annotation_prefix=(
+            f"{annotation_prefix}/final block"
+            if annotation_prefix is not None
+            else None
+        ),
     )
     return tuple(bit for word in h for bit in word)
 
@@ -161,20 +184,37 @@ def bellman_bits_to_bytes(system: _SynthesisSystem, bits: tuple[Bit, ...]) -> by
 
 
 def _compress(
-    system: _SynthesisSystem, h: list[Word], message: list[Word], counter: int, final: bool
+    system: _SynthesisSystem,
+    h: list[Word],
+    message: list[Word],
+    counter: int,
+    final: bool,
+    *,
+    annotation_prefix: str | None = None,
 ) -> list[Word]:
     state = list(h) + [_constant_word(value) for value in _IV]
-    state[12] = _xor_word(state[12], _constant_word(counter & 0xFFFFFFFF), system)
+    state[12] = _xor_word(
+        state[12],
+        _constant_word(counter & 0xFFFFFFFF),
+        system,
+        _annotation_path(annotation_prefix, "first xor"),
+    )
     state[13] = _xor_word(
-        state[13], _constant_word(counter >> 32), system
+        state[13],
+        _constant_word(counter >> 32),
+        system,
+        _annotation_path(annotation_prefix, "second xor"),
     )
     if final:
         state[14] = _xor_word(
-            state[14], _constant_word(0xFFFFFFFF), system
+            state[14],
+            _constant_word(0xFFFFFFFF),
+            system,
+            _annotation_path(annotation_prefix, "third xor"),
         )
 
-    multieq = _MultiEq(system)
-    for sigma in _SIGMA:
+    multieq = _MultiEq(system, annotation_prefix)
+    for round_index, sigma in enumerate(_SIGMA):
         for indices, first, second in (
             ((0, 4, 8, 12), 0, 1),
             ((1, 5, 9, 13), 2, 3),
@@ -192,17 +232,33 @@ def _compress(
                 message[sigma[first]],
                 message[sigma[second]],
                 multieq,
+                _annotation_path(
+                    annotation_prefix,
+                    f"round {round_index}/mixing invocation {first // 2 + 1}",
+                ),
             )
-    multieq.flush()
+    multieq.flush(annotation_prefix)
 
-    return [
-        _xor_word(
-            _xor_word(h[index], state[index], system),
-            state[index + 8],
-            system,
+    result = []
+    for index in range(8):
+        prefix = _annotation_path(
+            annotation_prefix, f"h[{index}] ^ v[{index}] ^ v[{index} + 8]"
         )
-        for index in range(8)
-    ]
+        first = _xor_word(
+            h[index],
+            state[index],
+            system,
+            _annotation_path(prefix, "first xor"),
+        )
+        result.append(
+            _xor_word(
+                first,
+                state[index + 8],
+                system,
+                _annotation_path(prefix, "second xor"),
+            )
+        )
+    return result
 
 
 def _mix(
@@ -212,19 +268,77 @@ def _mix(
     x: Word,
     y: Word,
     multieq: _MultiEq,
+    annotation_prefix: str | None = None,
 ) -> None:
     a, b, c, d = indices
-    state[a] = _add(system, (state[a], state[b], x), multieq)
-    state[d] = _rotate(_xor_word(state[d], state[a], system), 16)
-    state[c] = _add(system, (state[c], state[d]), multieq)
-    state[b] = _rotate(_xor_word(state[b], state[c], system), 12)
-    state[a] = _add(system, (state[a], state[b], y), multieq)
-    state[d] = _rotate(_xor_word(state[d], state[a], system), 8)
-    state[c] = _add(system, (state[c], state[d]), multieq)
-    state[b] = _rotate(_xor_word(state[b], state[c], system), 7)
+    state[a] = _add(
+        system,
+        (state[a], state[b], x),
+        multieq,
+        _annotation_path(annotation_prefix, "mixing step 1"),
+    )
+    state[d] = _rotate(
+        _xor_word(
+            state[d],
+            state[a],
+            system,
+            _annotation_path(annotation_prefix, "mixing step 2"),
+        ),
+        16,
+    )
+    state[c] = _add(
+        system,
+        (state[c], state[d]),
+        multieq,
+        _annotation_path(annotation_prefix, "mixing step 3"),
+    )
+    state[b] = _rotate(
+        _xor_word(
+            state[b],
+            state[c],
+            system,
+            _annotation_path(annotation_prefix, "mixing step 4"),
+        ),
+        12,
+    )
+    state[a] = _add(
+        system,
+        (state[a], state[b], y),
+        multieq,
+        _annotation_path(annotation_prefix, "mixing step 5"),
+    )
+    state[d] = _rotate(
+        _xor_word(
+            state[d],
+            state[a],
+            system,
+            _annotation_path(annotation_prefix, "mixing step 6"),
+        ),
+        8,
+    )
+    state[c] = _add(
+        system,
+        (state[c], state[d]),
+        multieq,
+        _annotation_path(annotation_prefix, "mixing step 7"),
+    )
+    state[b] = _rotate(
+        _xor_word(
+            state[b],
+            state[c],
+            system,
+            _annotation_path(annotation_prefix, "mixing step 8"),
+        ),
+        7,
+    )
 
 
-def _add(system: _SynthesisSystem, words: tuple[Word, ...], multieq: _MultiEq) -> Word:
+def _add(
+    system: _SynthesisSystem,
+    words: tuple[Word, ...],
+    multieq: _MultiEq,
+    annotation_prefix: str | None = None,
+) -> Word:
     total = sum(_word_value(word, system) for word in words)
     max_value = len(words) * 0xFFFFFFFF
     width = max_value.bit_length()
@@ -233,10 +347,20 @@ def _add(system: _SynthesisSystem, words: tuple[Word, ...], multieq: _MultiEq) -
 
     result: list[Variable] = []
     for index in range(width):
-        bit = system.alloc_private(
-            f"Bellman result bit[{index}]", (total >> index) & 1
+        variable_name = (
+            f"{annotation_prefix}/result bit {index}/boolean"
+            if annotation_prefix is not None
+            else f"Bellman result bit[{index}]"
         )
-        system.enforce(1 - bit.lc(), bit, 0, "Bellman allocated-bit boolean")
+        bit = system.alloc_private(
+            variable_name, (total >> index) & 1
+        )
+        constraint_label = (
+            f"{annotation_prefix}/result bit {index}/boolean constraint"
+            if annotation_prefix is not None
+            else "Bellman allocated-bit boolean"
+        )
+        system.enforce(1 - bit.lc(), bit, 0, constraint_label)
         result.append(bit)
 
     left = _word_lc(system, words[0])
@@ -245,15 +369,33 @@ def _add(system: _SynthesisSystem, words: tuple[Word, ...], multieq: _MultiEq) -
     right = system.linear_combination(
         tuple((bit, 1 << index) for index, bit in enumerate(result))
     )
-    multieq.add(left, right, width)
+    multieq.add(left, right, width, annotation_prefix)
     return tuple(result[:32])
 
 
-def _xor_word(left: Word, right: Word, system: _SynthesisSystem) -> Word:
-    return tuple(_xor_bit(a, b, system) for a, b in zip(left, right))
+def _xor_word(
+    left: Word,
+    right: Word,
+    system: _SynthesisSystem,
+    annotation_prefix: str | None = None,
+) -> Word:
+    return tuple(
+        _xor_bit(
+            a,
+            b,
+            system,
+            _annotation_path(annotation_prefix, f"xor of bit {index}"),
+        )
+        for index, (a, b) in enumerate(zip(left, right))
+    )
 
 
-def _xor_bit(left: Bit, right: Bit, system: _SynthesisSystem) -> Bit:
+def _xor_bit(
+    left: Bit,
+    right: Bit,
+    system: _SynthesisSystem,
+    annotation_prefix: str | None = None,
+) -> Bit:
     left_value = _value(left, system)
     right_value = _value(right, system)
     if _backing(left) is None:
@@ -264,8 +406,19 @@ def _xor_bit(left: Bit, right: Bit, system: _SynthesisSystem) -> Bit:
     left_variable = _backing(left)
     right_variable = _backing(right)
     assert left_variable is not None and right_variable is not None
+    if (
+        annotation_prefix is not None
+        and isinstance(left, _Negated)
+        and not isinstance(right, _Negated)
+    ):
+        left_variable, right_variable = right_variable, left_variable
+    output_name = (
+        f"{annotation_prefix}/xor result"
+        if annotation_prefix is not None
+        else "Bellman XOR result"
+    )
     raw = system.alloc_private(
-        "Bellman XOR result",
+        output_name,
         int(system._witness_value(left_variable))
         ^ int(system._witness_value(right_variable)),
     )
@@ -273,10 +426,20 @@ def _xor_bit(left: Bit, right: Bit, system: _SynthesisSystem) -> Bit:
         left_variable.lc() * 2,
         right_variable,
         left_variable.lc() + right_variable.lc() - raw.lc(),
-        "Bellman XOR",
+        (
+            f"{annotation_prefix}/xor constraint"
+            if annotation_prefix is not None
+            else "Bellman XOR"
+        ),
     )
     negated = isinstance(left, _Negated) != isinstance(right, _Negated)
     return _Negated(raw) if negated else raw
+
+
+def _annotation_path(prefix: str | None, child: str) -> str | None:
+    if prefix is None:
+        return None
+    return f"{prefix}/{child}"
 
 
 def _word_lc(system: _SynthesisSystem, word: Word) -> LinearCombination:

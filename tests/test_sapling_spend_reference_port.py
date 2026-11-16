@@ -47,6 +47,14 @@ from src.sapling_gadgets import (
     _pedersen_montgomery_tables,
     sapling_fixed_base_generator,
 )
+from tests.bellman_blake2s_reference import _add as _bellman_add
+from tests.bellman_blake2s_reference import (
+    _constant_word,
+    constrain_bellman_blake2s_reference,
+)
+from tests.bellman_blake2s_reference import _MultiEq as _BellmanMultiEq
+from tests.bellman_blake2s_reference import _Negated as _BellmanNegated
+from tests.bellman_blake2s_reference import _xor_bit as _bellman_xor_bit
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
@@ -258,11 +266,23 @@ def _ivk_digest_bit_record(system: R1CS, bit) -> dict:
             "value": bool(_read_bit(system, bit)),
             "negated": True,
         }
+    if isinstance(bit, _BellmanNegated):
+        return {
+            "identity": f"Aux({bit.variable.index - 1})",
+            "value": bool(1 - system.witness_value(bit.variable)),
+            "negated": True,
+        }
     return {
         "identity": f"Constant({int(bit)})",
         "value": bool(bit),
         "negated": False,
     }
+
+
+def _ivk_bit_value(system: R1CS, bit) -> int:
+    if isinstance(bit, _BellmanNegated):
+        return 1 - int(system.witness_value(bit.variable))
+    return _read_bit(system, bit)
 
 
 def _ivk_representation_bits(point: Point) -> tuple[int, ...]:
@@ -478,7 +498,36 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                     _canonical_terms(reference_row["c"]),
                 )
                 if actual != expected:
-                    self.fail(f"{name}: ordered A/B/C mismatch at row {row_index}")
+                    differences = []
+                    for side, actual_terms, expected_terms in zip(
+                        ("A", "B", "C"),
+                        actual[1:],
+                        expected[1:],
+                        strict=True,
+                    ):
+                        if actual_terms == expected_terms:
+                            continue
+                        term_index = next(
+                            (
+                                index
+                                for index, (actual_term, expected_term) in enumerate(
+                                    zip(actual_terms, expected_terms)
+                                )
+                                if actual_term != expected_term
+                            ),
+                            min(len(actual_terms), len(expected_terms)),
+                        )
+                        differences.append(
+                            f"{side}[{term_index}] local="
+                            f"{actual_terms[term_index:term_index + 1]!r} "
+                            f"Bellman={expected_terms[term_index:term_index + 1]!r} "
+                            f"lengths={len(actual_terms)}/{len(expected_terms)}"
+                        )
+                    self.fail(
+                        f"{name}: ordered A/B/C mismatch at row {row_index}; "
+                        f"labels local={actual[0]!r}, Bellman={expected[0]!r}; "
+                        + "; ".join(differences)
+                    )
 
         self.assertTrue(system.is_satisfied())
         self.assertTrue(reference["satisfied"])
@@ -2137,8 +2186,8 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_blake2s",
-            wraps=sapling_spend_reference_port.constrain_blake2s,
+            "constrain_bellman_blake2s_reference",
+            wraps=constrain_bellman_blake2s_reference,
         ) as python_syntheses:
             result = constrain_spend_ivk_blake2s(
                 system, ak_repr_bits, nk_repr_bits
@@ -2171,7 +2220,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         ).digest()
         actual_digest = bytes(
             sum(
-                _read_bit(system, result.digest_bits[start + offset]) << offset
+                _ivk_bit_value(system, result.digest_bits[start + offset]) << offset
                 for offset in range(8)
             )
             for start in range(0, 256, 8)
@@ -2181,7 +2230,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             (1 << 251) - 1
         )
         actual_ivk = sum(
-            _read_bit(system, bit) << index
+            _ivk_bit_value(system, bit) << index
             for index, bit in enumerate(result.ivk_bits)
         )
         self.assertEqual(actual_ivk, expected_ivk)
@@ -2190,7 +2239,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         digest_zero = result.digest_bits[0]
         if isinstance(digest_zero, Variable):
             mutation_variables.append(digest_zero)
-        elif isinstance(digest_zero, _NegatedBit):
+        elif isinstance(digest_zero, (_NegatedBit, _BellmanNegated)):
             mutation_variables.append(digest_zero.variable)
         for variable in mutation_variables:
             with self.subTest(variable=variable.name):
@@ -2214,6 +2263,91 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             self.ivk_matrix_fingerprint,
         )
 
+    def test_ivk_first_mixing_result_annotation_matches_bellman_source(self) -> None:
+        system = R1CS()
+        input_word = tuple(
+            system.alloc_private(f"test input bit[{index}]", index & 1)
+            for index in range(32)
+        )
+        multieq = _BellmanMultiEq(system, "computation of ivk/final block")
+        result_word = _bellman_add(
+            system,
+            (_constant_word(0), _constant_word(0), input_word),
+            multieq,
+            (
+                "computation of ivk/final block/round 0/"
+                "mixing invocation 1/mixing step 1"
+            ),
+        )
+        multieq.flush()
+        self.assertEqual(
+            system.variables[33].name,
+            (
+                "computation of ivk/final block/round 0/mixing invocation 1/"
+                "mixing step 1/result bit 0/boolean"
+            ),
+        )
+        self.assertEqual(
+            system.constraints[0].label,
+            (
+                "computation of ivk/final block/round 0/mixing invocation 1/"
+                "mixing step 1/result bit 0/boolean constraint"
+            ),
+        )
+        self.assertEqual(
+            [
+                variable.name
+                for variable in system.variables[33:67]
+            ],
+            [
+                (
+                    "computation of ivk/final block/round 0/"
+                    f"mixing invocation 1/mixing step 1/result bit {index}/boolean"
+                )
+                for index in range(34)
+            ],
+        )
+        self.assertEqual(
+            [
+                system.witness_value(variable)
+                for variable in system.variables[33:67]
+            ],
+            [index & 1 for index in range(32)] + [0, 0],
+        )
+        self.assertEqual(
+            [system.witness_value(bit) for bit in result_word],
+            [index & 1 for index in range(32)],
+        )
+
+    def test_ivk_xor_swaps_negated_left_operand_like_bellman(self) -> None:
+        system = R1CS()
+        left = system.alloc_private("negated left", 1)
+        right = system.alloc_private("right", 0)
+        result = _bellman_xor_bit(
+            _BellmanNegated(left),
+            right,
+            system,
+            (
+                "computation of ivk/final block/round 0/"
+                "mixing invocation 1/mixing step 6/xor of bit 1"
+            ),
+        )
+        self.assertIsInstance(result, _BellmanNegated)
+        row = system.constraints[-1]
+        self.assertEqual(
+            row.label,
+            (
+                "computation of ivk/final block/round 0/mixing invocation 1/"
+                "mixing step 6/xor of bit 1/xor constraint"
+            ),
+        )
+        self.assertEqual(row.left, right.lc() * 2)
+        self.assertEqual(row.right, left.lc())
+        self.assertEqual(
+            row.output,
+            left.lc() + right.lc() - result.variable.lc(),
+        )
+
     def test_ivk_digest_vectors_match_independent_blake2s(self) -> None:
         expected_names = {
             "identity_points",
@@ -2224,7 +2358,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         self.assertEqual(set(self.ivk_blake2s_vectors), expected_names)
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_blake2s",
+            "constrain_bellman_blake2s_reference",
             side_effect=AssertionError("output-vector checks must not synthesize"),
         ):
             for name, reference in self.ivk_blake2s_vectors.items():
@@ -2296,7 +2430,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_blake2s",
+            "constrain_bellman_blake2s_reference",
             side_effect=AssertionError("invalid input reached synthesis"),
         ) as python_syntheses:
             for call in invalid_calls:
