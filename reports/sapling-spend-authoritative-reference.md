@@ -103,28 +103,68 @@ or matrix.
 
 | Reference function or stage | ZyCoin counterpart | Port-map status |
 |---|---|---|
-| `Spend::synthesize`: `ak`, `ar`, `rk` | `_prepare_witness`; `constrain_sapling_spend`; `constrain_sapling_randomized_authorization_key` | **Already equivalent at relation level.** Different public-input allocation timing, event/row order, and low-level factorizations remain. |
-| `nsk`, `nk`, `ak.repr`, `nk.repr`, IVK BLAKE2s | `constrain_fixed_base_jubjub_mul`; `constrain_jubjub_repr`; `constrain_sapling_ivk` | **Already equivalent at relation level.** Source-exact bit allocation and primitive row construction require direct parity evidence. |
-| `g_d`, non-small-order check, `pk_d = [ivk]g_d` | `constrain_jubjub_point`; `constrain_jubjub_not_small_order`; `constrain_jubjub_scalar_mul` | **Different implementation order.** Local serializes `pk_d` before value commitment; the reference does so after `cv` inputization. Relation semantics are covered. |
-| `expose_value_commitment` | `constrain_sapling_value_commitment` and allocations in `constrain_sapling_spend` | **Different implementation order.** Local allocates both bit decompositions before the relation; the reference interleaves value multiplication and `rcv` decomposition/multiplication. Relation semantics are covered. |
-| Note contents, Pedersen note hash, `rcm` randomization | `constrain_note_commitment`; `constrain_pedersen_hash`; fixed-base and point-addition helpers | **Requires further investigation.** Exact Bellman lookup, conversion, allocation, and row factorization parity is not established by relation matching. |
-| Merkle level direction, sibling selection and Pedersen hash | Isolated test-only `constrain_spend_merkle_authentication_path` in `tests/sapling_spend_reference_port.py`; production `make_merkle_path_witness` and `constrain_merkle_authentication_path` remain unchanged | **Isolated path trace matches Bellman for tested depths and witnesses.** The production packed-position implementation remains different and is not changed by this port. |
-| Conditional anchor | `constrain_sapling_conditional_anchor` | **Different implementation.** Bellman allocates `rt`, enforces the root/value row, and binds `rt` to public anchor with another row; ZyCoin directly relates root and public anchor in one row. The projected relation is the same. |
-| `g^position`, `rho`, `rho.repr`, nullifier BLAKE2s | `constrain_sapling_nullifier_rho`; `constrain_jubjub_repr`; `constrain_sapling_nullifier_hash` | **Already equivalent at relation level; requires further investigation for exact layout.** The local-only packed-position representation helper remains. |
-| Nullifier multipacking | `make_sapling_nullifier_multipacking_witness`; `constrain_sapling_nullifier_multipacking` | **Already equivalent at relation level.** 256 digest bits become a 254-bit chunk and a 2-bit chunk; ordered-row parity remains part of the full-matrix gate. |
-| Bellman Boolean/number/lookup/Blake2s primitives | `src/r1cs.py`, `src/blake2s_gadget.py`, and `src/sapling_gadgets.py` helpers | **Requires further investigation.** Functionality exists; identical allocation events and A/B/C rows for every primitive composition are not established. |
+| `Spend::synthesize`: `ak`, `ar`, `rk` | Isolated point witness, non-small-order, fixed-base, and Edwards addition helpers; production `constrain_sapling_spend` | **Not recomposed in the isolated port.** Required upstream ordering and `rk` inputization have no end-to-end Python/Bellman trace. |
+| `nsk`, `nk`, `ak.repr`, `nk.repr`, IVK BLAKE2s | Isolated fixed-base multiplication and representation helpers; production `constrain_sapling_ivk` | **Partial.** The isolated reference port has no IVK BLAKE2s composition or whole-stage trace. |
+| `g_d`, non-small-order check, `pk_d = [ivk]g_d` | Isolated point witness, non-small-order, variable-base multiplication, and representation helpers; production scalar multiplication | **Not recomposed in the isolated port.** Exact IVK-to-scalar-bit and source-order integration remains unverified. |
+| `expose_value_commitment` | Production `constrain_sapling_value_commitment`; isolated fixed-base and Edwards primitives | **Missing from the isolated reference port.** The complete upstream value-opening allocation and enforcement sequence has not been traced against Python. |
+| Note contents, Pedersen note hash, `rcm` randomization | Isolated `constrain_spend_note_commitment` plus verified Edwards/Pedersen helpers | **Standalone note-commitment trace verified** for covered fixtures; not yet integrated in full Spend event order. |
+| Merkle level direction, sibling selection and Pedersen hash | Isolated test-only `constrain_spend_merkle_authentication_path` | **Standalone path trace verified** for depths 1, 31, and 32; full Spend composition remains unverified. |
+| Conditional anchor | Isolated test-only `constrain_spend_conditional_anchor` | **Standalone anchor trace verified** including late Bellman inputization, both ordered rows, and fifth public-input mapping; full Spend composition remains unverified. |
+| `g^position`, `rho`, `rho.repr` | Isolated fixed-base, addition, and representation primitives; production `constrain_sapling_nullifier_rho` | **Not recomposed in the isolated port.** The source directly consumes all path bits; no integrated trace verifies this handoff. |
+| IVK/nullifier BLAKE2s and nullifier multipacking | Production `src/blake2s_gadget.py` and `constrain_sapling_nullifier_multipacking` | **Missing exact isolated Bellman traces.** Existing functionality is not evidence of allocation, label, or ordered-row parity. |
+| Complete synthesis and complete matrix comparison | Production `constrain_sapling_spend`; full pinned Bellman export in `tests/reference/sapling-output-qap/tests/export_spend.rs` | **Not implemented in the isolated reference port.** The full export is available, but no complete isolated Python synthesis result or comparable matrix fingerprint exists. |
 
-No whole Spend relation was found to be missing from the Python implementation.
-The unresolved work is source-exact lowering: allocation events, variable
-positions, constraint sequence, and A/B/C coefficient representation across
-the directly used primitives. This is consistent with the pinned-export
-correspondence: 98,637 of 98,638 auxiliary identities and 98,775 of 98,777
-rows are paired, but 48,546 pairs move; 251 rows swap A/B, 28,351 use
-nontrivial factor normalizations, and 333 match only after expanding
-`A*B-C`. The known helper differences are the local packed-position variable
-and row, and Bellman's conditional-anchor `rt` and its two rows. These facts
-do not establish exact source equivalence or official parameter compatibility.
-**Missing functionality:** none identified at the whole-relation level.
+The existing production `constrain_sapling_spend` is a whole-circuit
+assembler, but it does not satisfy this task's source-faithful integration
+requirement: it allocates public inputs up front, uses the production Merkle
+and anchor paths, and its reported trace correspondence contains unmatched
+and reordered rows. The isolated test-only module currently provides
+standalone parity for several cryptographic units, but lacks source-traced
+IVK/nullifier BLAKE2s, value-commitment synthesis, nullifier multipacking,
+and their source-order composition. Consequently there is no complete
+Python-vs-Bellman assignment, ordered-matrix, fingerprint, or mutation result
+for this task. Reusing the production assembler or merely chaining the
+verified units would not resolve those gaps and could create an unjustified
+appearance of full parity. No complete source-faithful isolated Spend path
+has been produced; full-circuit parity and official parameter compatibility
+remain **Unverified**.
+
+### Recomposition audit and outstanding source stages
+
+The pinned function is `Spend::synthesize` in `sapling-crypto/src/circuit.rs`;
+its `expose_value_commitment` helper is in the same file. In addition to
+previously isolated point/Pedersen/note/Merkle/anchor units, a complete
+recomposition still has to trace all of the following transitions in source
+order:
+
+| Upstream stage | Required synthesis events not yet verified in one Python trace |
+|---|---|
+| `ak` witness and small-order check | Two coordinate allocations, curve interpretation row, and the complete non-small-order sequence in the full context. Standalone primitive parity does not verify the surrounding allocation indices. |
+| `ar` and `rk` | Jubjub field-to-Boolean allocation and Boolean rows; spending-key fixed-base multiplication; Edwards addition; late `rk` input allocation and its input-equality row. |
+| `nsk`, `nk`, and IVK | `nsk` bit allocation; proof-generation fixed-base multiplication; ordered strict representations of `ak`/`nk`; 512-bit IVK BLAKE2s trace; capacity truncation/bit handoff into the next stage. |
+| `g_d` and `pk_d` | `g_d` witness/curve and non-small-order allocations at the source location; variable-base multiplication driven by truncated IVK bits. |
+| Value commitment | In `expose_value_commitment`: 64 value bits and rows, value-generator multiplication, `rcv` bit allocations/rows, randomness-generator multiplication, addition, and the two late `cv` inputizations/equality rows. |
+| Note commitment and authentication path | The isolated note hash/randomization and Merkle path already have unit traces, but their composition must preserve the value bits and ordered `g_d`/`pk_d` representations, note commitment output, 32 direct direction-bit variables, and path allocations without reallocation or substitution. |
+| Conditional anchor | Isolated `rt`/anchor trace is verified. Full context still needs the actual preceding root/value variables and correct temporal public-input position. |
+| Nullifier position and `rho` | Fixed-base multiplication of the original 32 direction bits, Edwards addition to `cm`, and strict `rho` representation in the complete post-anchor context. |
+| Nullifier PRF and packing | 512-bit nullifier-preimage handoff; full BLAKE2s trace with `PRF_NF_PERSONALIZATION`; exact 254+2-bit `pack_into_inputs` allocation and row sequence for `nf[0]`/`nf[1]`. |
+
+These are not all absent as production functionality; several have production
+counterparts and some constituent cryptographic operations have standalone
+reference tests. What is outstanding is their test-only source-ordered
+composition and Bellman trace comparison. The reference integration test
+`tests/reference/sapling-output-qap/tests/export_spend.rs` provides a complete
+satisfying pinned witness and exports the full Bellman allocations and rows,
+but it does not itself synthesize a complete Python counterpart. No
+representative complete Python witness, mutation-row comparison, full matrix
+fingerprint comparison, or complete-circuit parity result is therefore
+claimed here.
+
+**Task status: incomplete.** No new complete synthesis API was added because
+the missing exact traces above make a composed implementation unsafe to label
+source-faithful. No production Spend or Output code, proving gate, setup, or
+official parameter was changed. Complete allocation/witness/matrix parity and
+official parameter compatibility remain **Unverified**.
 
 ## Safe incremental porting sequence
 
@@ -138,12 +178,12 @@ do not establish exact source equivalence or official parameter compatibility.
    then strict representation, fixed-base lookup, and variable-base
    multiplication. Retain the exact source's allocation and enforcement
    order in each unit rather than normalizing factors.
-3. Verify note/value Pedersen and Merkle hashing (including boundary window
-   lengths), then BLAKE2s and nullifier multipacking, each against Bellman
-   traces and complete ordered rows.
-4. Recompose `Spend::synthesize` in source order. Resolve `rt` inputization
-   and direct position-bit use as their own reviewed changes; do not remove a
-   constraint solely to match a fingerprint.
+3. Add source-trace parity for value-commitment synthesis, both BLAKE2s calls,
+   and nullifier multipacking, including outputs and altered-witness failure
+   rows.
+4. Recompose all verified components in `Spend::synthesize` order, preserving
+   inputize events, the direct direction-bit handoff to `g^position`, and the
+   already verified `rt` relation without skipping or duplicating rows.
 5. Accept full alignment only after comparing the complete ordered A/B/C
    matrices, variable identities and assignments, witness satisfaction, and
    the exact matrix fingerprint. Recheck official queries only after that

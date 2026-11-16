@@ -4,8 +4,12 @@ import json
 import os
 import subprocess
 import unittest
+from hashlib import blake2s
 from pathlib import Path
+from typing import cast
+from unittest.mock import patch
 
+import sapling_spend_reference_port
 from sapling_spend_reference_port import (
     EdwardsPointWitnessVariables,
     allocate_spend_fixed_base_scalar_bits,
@@ -18,6 +22,7 @@ from sapling_spend_reference_port import (
     constrain_spend_edwards_point_repr,
     constrain_spend_edwards_point_witness,
     constrain_spend_fixed_base_mul,
+    constrain_spend_ivk_blake2s,
     constrain_spend_merkle_authentication_path,
     constrain_spend_montgomery_add,
     constrain_spend_montgomery_into_edwards,
@@ -29,6 +34,7 @@ from sapling_spend_reference_port import (
     spend_pedersen_montgomery_tables,
 )
 
+from src.blake2s_gadget import _NegatedBit, _read_bit
 from src.bls12_381 import SCALAR_MODULUS
 from src.jubjub import (
     CURVE_D,
@@ -57,6 +63,32 @@ def _reference_cases() -> dict:
         str(REFERENCE_MANIFEST),
         "--bin",
         "sapling_spend_edwards_point_reference",
+    ]
+    environment = os.environ.copy()
+    environment["CARGO_TERM_COLOR"] = "never"
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=environment,
+    )
+    return json.loads(completed.stdout)
+
+
+def _reference_ivk_cases() -> dict:
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--manifest-path",
+        str(REFERENCE_MANIFEST),
+        "--bin",
+        "sapling_spend_edwards_point_reference",
+        "--",
+        "--ivk-only",
     ]
     environment = os.environ.copy()
     environment["CARGO_TERM_COLOR"] = "never"
@@ -213,6 +245,32 @@ def _conditional_anchor_failed_rows(
     )
 
 
+def _ivk_digest_bit_record(system: R1CS, bit) -> dict:
+    if isinstance(bit, Variable):
+        return {
+            "identity": f"Aux({bit.index - 1})",
+            "value": bool(_read_bit(system, bit)),
+            "negated": False,
+        }
+    if isinstance(bit, _NegatedBit):
+        return {
+            "identity": f"Aux({bit.variable.index - 1})",
+            "value": bool(_read_bit(system, bit)),
+            "negated": True,
+        }
+    return {
+        "identity": f"Constant({int(bit)})",
+        "value": bool(bit),
+        "negated": False,
+    }
+
+
+def _ivk_representation_bits(point: Point) -> tuple[int, ...]:
+    return tuple((point.v >> index) & 1 for index in range(255)) + (
+        point.u & 1,
+    )
+
+
 def _allocate_boolean_bits(
     system: R1CS, values: list[bool], label: str = "scalar bits"
 ) -> tuple:
@@ -232,8 +290,37 @@ def _allocate_boolean_bits(
 class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if os.environ.get("SAPLING_IVK_REFERENCE_ONLY") == "1":
+            cls.reference = _reference_ivk_cases()
+            if cls.reference["format"] != (
+                "bellman-sapling-ivk-blake2s-reference-v1"
+            ):
+                raise AssertionError("unexpected Bellman IVK export format")
+            if cls.reference["sapling_crypto_revision"] != (
+                "88a7946b4a3066787776e11f0a502654167e022d"
+            ):
+                raise AssertionError("unexpected pinned Sapling source revision")
+            if cls.reference["bellman_revision"] != (
+                "b726862a4ece8a627e7fea486d77b502a6edbb0b"
+            ):
+                raise AssertionError("unexpected Bellman source revision")
+            if cls.reference["bellman_crate_version"] != "0.15.0":
+                raise AssertionError("unexpected Bellman crate version")
+            if (
+                cls.reference["full_synthesis_count"] != 1
+                or len(cls.reference["cases"]) != 1
+            ):
+                raise AssertionError("IVK exporter must synthesize exactly one trace")
+            cls.ivk_blake2s_cases = {
+                case["name"]: case for case in cls.reference["cases"]
+            }
+            cls.ivk_blake2s_vectors = {
+                vector["name"]: vector for vector in cls.reference["vectors"]
+            }
+            return
+
         cls.reference = _reference_cases()
-        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v11":
+        if cls.reference["format"] != "bellman-sapling-edwards-point-reference-v12":
             raise AssertionError("unexpected Bellman Edwards point export format")
         if cls.reference["sapling_crypto_revision"] != (
             "88a7946b4a3066787776e11f0a502654167e022d"
@@ -282,6 +369,9 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.conditional_anchor_cases = {
             case["name"]: case
             for case in cls.reference["conditional_anchor"]["cases"]
+        }
+        cls.ivk_blake2s_cases = {
+            case["name"]: case for case in cls.reference["ivk_blake2s"]["cases"]
         }
 
     def assert_case_matches(
@@ -339,6 +429,59 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
 
         self.assertEqual(system.is_satisfied(), expected_satisfied)
         self.assertEqual(reference["satisfied"], expected_satisfied)
+
+    def assert_ivk_system_matches_reference(
+        self,
+        name: str,
+        system: R1CS,
+        reference: dict,
+        *,
+        baseline_reference: dict | None = None,
+        baseline_fingerprint: str | None = None,
+    ) -> None:
+        self.assertEqual(system.public_input_count, 0)
+        self.assertEqual(
+            [(variable.name, variable.index) for variable in system.variables[1:]],
+            [
+                (record["annotation"], _reference_index(record["identity"]))
+                for record in reference["variables"]
+            ],
+        )
+        self.assertEqual(
+            [system._witness_value(variable) for variable in system.variables[1:]],
+            [
+                int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+                for record in reference["variables"]
+            ],
+        )
+        self.assertEqual(system.constraint_count, len(reference["constraints"]))
+
+        if baseline_reference is not None:
+            self.assertEqual(
+                reference["constraints"], baseline_reference["constraints"]
+            )
+            self.assertEqual(system.matrix_fingerprint(), baseline_fingerprint)
+        else:
+            for row_index, (local_row, reference_row) in enumerate(
+                zip(system.constraints, reference["constraints"], strict=True)
+            ):
+                actual = (
+                    local_row.label,
+                    local_row.left.terms,
+                    local_row.right.terms,
+                    local_row.output.terms,
+                )
+                expected = (
+                    reference_row["annotation"],
+                    _canonical_terms(reference_row["a"]),
+                    _canonical_terms(reference_row["b"]),
+                    _canonical_terms(reference_row["c"]),
+                )
+                if actual != expected:
+                    self.fail(f"{name}: ordered A/B/C mismatch at row {row_index}")
+
+        self.assertTrue(system.is_satisfied())
+        self.assertTrue(reference["satisfied"])
 
     def test_exact_addition_and_doubling_parity(self) -> None:
         generator = Point(*self._generator_coordinates())
@@ -1977,6 +2120,194 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             unassigned_anchor_system.constraint_count, before_rows
         )
         self.assertEqual(prior_inputs[-1].kind, "public")
+
+    def test_ivk_blake2s_matches_bellman_ordered_traces(self) -> None:
+        name = "generator_pair"
+        reference = self.ivk_blake2s_cases[name]
+        system = R1CS()
+        ak = Point(int(reference["ak_u"]), int(reference["ak_v"]))
+        nk = Point(int(reference["nk_u"]), int(reference["nk_v"]))
+        ak_variables = constrain_spend_edwards_point_witness(system, ak, "ak")
+        nk_variables = constrain_spend_edwards_point_witness(system, nk, "nk")
+        ak_repr_bits = constrain_spend_edwards_point_repr(
+            system, ak_variables, ak, "representation of ak"
+        )
+        nk_repr_bits = constrain_spend_edwards_point_repr(
+            system, nk_variables, nk, "representation of nk"
+        )
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_blake2s",
+            wraps=sapling_spend_reference_port.constrain_blake2s,
+        ) as python_syntheses:
+            result = constrain_spend_ivk_blake2s(
+                system, ak_repr_bits, nk_repr_bits
+            )
+            python_syntheses.assert_called_once()
+        self.assert_ivk_system_matches_reference(name, system, reference)
+        self.assertEqual(
+            [
+                _ivk_digest_bit_record(system, bit)
+                for bit in result.digest_bits
+            ],
+            reference["digest_bits"],
+        )
+        self.assertEqual(
+            [_ivk_digest_bit_record(system, bit) for bit in result.ivk_bits],
+            reference["ivk_bits"],
+        )
+        self.assertEqual(len(result.digest_bits), 256)
+        self.assertEqual(len(result.ivk_bits), 251)
+        message = bytes(
+            sum(
+                system.witness_value(result.preimage_bits[start + offset])
+                << offset
+                for offset in range(8)
+            )
+            for start in range(0, 512, 8)
+        )
+        expected_digest = blake2s(
+            message, digest_size=32, person=b"Zcashivk"
+        ).digest()
+        actual_digest = bytes(
+            sum(
+                _read_bit(system, result.digest_bits[start + offset]) << offset
+                for offset in range(8)
+            )
+            for start in range(0, 256, 8)
+        )
+        self.assertEqual(actual_digest, expected_digest)
+        expected_ivk = int.from_bytes(expected_digest, "little") & (
+            (1 << 251) - 1
+        )
+        actual_ivk = sum(
+            _read_bit(system, bit) << index
+            for index, bit in enumerate(result.ivk_bits)
+        )
+        self.assertEqual(actual_ivk, expected_ivk)
+
+        mutation_variables = [ak_repr_bits[0], nk_repr_bits[255]]
+        digest_zero = result.digest_bits[0]
+        if isinstance(digest_zero, Variable):
+            mutation_variables.append(digest_zero)
+        elif isinstance(digest_zero, _NegatedBit):
+            mutation_variables.append(digest_zero.variable)
+        for variable in mutation_variables:
+            with self.subTest(variable=variable.name):
+                replacement = 1 - int(system.witness_value(variable))
+                local_failures = _local_failed_rows_with_assignments(
+                    system, {variable.index: replacement}
+                )
+                reference_failures = _reference_failed_rows_with_assignments(
+                    reference, {variable.index: replacement}
+                )
+                self.assertTrue(local_failures)
+                self.assertEqual(local_failures, reference_failures)
+
+        self.ivk_matrix_fingerprint = system.matrix_fingerprint()
+        self.ivk_matrix_rows = system.constraint_count
+        self.ivk_matrix_columns = len(system.variables)
+        print(
+            "IVK matrix",
+            self.ivk_matrix_rows,
+            self.ivk_matrix_columns,
+            self.ivk_matrix_fingerprint,
+        )
+
+    def test_ivk_digest_vectors_match_independent_blake2s(self) -> None:
+        expected_names = {
+            "identity_points",
+            "generator_pair",
+            "negative_generator_pair",
+            "raw_half_boundary",
+        }
+        self.assertEqual(set(self.ivk_blake2s_vectors), expected_names)
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_blake2s",
+            side_effect=AssertionError("output-vector checks must not synthesize"),
+        ):
+            for name, reference in self.ivk_blake2s_vectors.items():
+                with self.subTest(case=name):
+                    if reference["raw_half_boundary"]:
+                        self.assertEqual(name, "raw_half_boundary")
+                        bits = (0,) * 256 + (1,) * 256
+                    else:
+                        ak = Point(int(reference["ak_u"]), int(reference["ak_v"]))
+                        nk = Point(int(reference["nk_u"]), int(reference["nk_v"]))
+                        bits = _ivk_representation_bits(ak) + _ivk_representation_bits(nk)
+                    self.assertEqual(len(bits), 512)
+                    message = bytes(
+                        sum(bits[start + offset] << offset for offset in range(8))
+                        for start in range(0, 512, 8)
+                    )
+                    expected_digest = blake2s(
+                        message, digest_size=32, person=b"Zcashivk"
+                    ).digest()
+                    self.assertEqual(
+                        reference["digest_bits"],
+                        [
+                            bool((byte >> bit) & 1)
+                            for byte in expected_digest
+                            for bit in range(8)
+                        ],
+                    )
+                    self.assertEqual(
+                        reference["ivk_bits"],
+                        [
+                            bool(
+                                (int.from_bytes(expected_digest, "little") >> index)
+                                & 1
+                            )
+                            for index in range(251)
+                        ],
+                    )
+
+    def test_ivk_blake2s_rejects_invalid_inputs_before_mutation(self) -> None:
+        system = R1CS()
+        valid = tuple(
+            system.alloc_private(f"valid IVK input[{index}]", index & 1)
+            for index in range(512)
+        )
+        foreign_system = R1CS()
+        foreign = foreign_system.alloc_private("foreign IVK input", 0)
+        unassigned = system.alloc_private("unassigned IVK input", None)
+        non_boolean = system.alloc_private("non-Boolean IVK input", 2)
+        invalid_calls = (
+            lambda: constrain_spend_ivk_blake2s(system, valid[:255], valid[256:]),
+            lambda: constrain_spend_ivk_blake2s(system, valid[:256], valid[256:511]),
+            lambda: constrain_spend_ivk_blake2s(
+                system, cast(tuple[Variable, ...], None), valid[256:]
+            ),
+            lambda: constrain_spend_ivk_blake2s(
+                system,
+                valid[:256],
+                cast(tuple[Variable, ...], tuple(True for _ in range(256))),
+            ),
+            lambda: constrain_spend_ivk_blake2s(
+                system, (foreign,) + valid[1:256], valid[256:]
+            ),
+            lambda: constrain_spend_ivk_blake2s(
+                system, (unassigned,) + valid[1:256], valid[256:]
+            ),
+            lambda: constrain_spend_ivk_blake2s(
+                system, (non_boolean,) + valid[1:256], valid[256:]
+            ),
+        )
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_blake2s",
+            side_effect=AssertionError("invalid input reached synthesis"),
+        ) as python_syntheses:
+            for call in invalid_calls:
+                with self.subTest(call=call):
+                    before_variables = len(system.variables)
+                    before_rows = system.constraint_count
+                    with self.assertRaises((R1CSError, TypeError)):
+                        call()
+                    self.assertEqual(len(system.variables), before_variables)
+                    self.assertEqual(system.constraint_count, before_rows)
+            python_syntheses.assert_not_called()
 
     def test_missing_foreign_and_inconsistent_point_witnesses_reject_before_mutation(
         self,

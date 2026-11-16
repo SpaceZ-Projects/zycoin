@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TypeAlias
 
+from src.blake2s_gadget import (
+    CircuitBit,
+    constrain_blake2s,
+    make_blake2s_witness,
+)
 from src.bls12_381 import SCALAR_MODULUS
 from src.bls12_381 import SCALAR_MODULUS as CIRCUIT_FIELD_MODULUS
 from src.jubjub import (
@@ -93,6 +98,13 @@ class ConditionalAnchorResult:
     anchor_variable: Variable
     conditional_anchor_variable: Variable
     anchor_value: int
+
+
+@dataclass(frozen=True)
+class IvkBlake2sResult:
+    preimage_bits: tuple[Variable, ...]
+    digest_bits: tuple[CircuitBit, ...]
+    ivk_bits: tuple[CircuitBit, ...]
 
 
 def spend_edwards_to_montgomery_coordinates(
@@ -703,6 +715,47 @@ def constrain_spend_conditional_anchor(
         anchor_variable,
         conditional_anchor,
         anchor_value,
+    )
+
+
+def constrain_spend_ivk_blake2s(
+    system: R1CS,
+    ak_repr_bits: tuple[Variable, ...] | list[Variable],
+    nk_repr_bits: tuple[Variable, ...] | list[Variable],
+) -> IvkBlake2sResult:
+    """Port the pinned 512-bit CRH^ivk stage using constrained BLAKE2s."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(ak_repr_bits, (tuple, list)) or not isinstance(
+        nk_repr_bits, (tuple, list)
+    ):
+        raise TypeError("IVK representations must be tuples or lists of variables")
+    preimage_bits = tuple(ak_repr_bits) + tuple(nk_repr_bits)
+    if len(ak_repr_bits) != 256 or len(nk_repr_bits) != 256:
+        raise R1CSError("IVK point representations must each contain 256 bits")
+    values: list[int] = []
+    for bit in preimage_bits:
+        if not isinstance(bit, Variable):
+            raise TypeError("IVK representation bits must be allocated variables")
+        system.require_owned(bit)
+        value = system.witness_value(bit)
+        if value not in (0, 1):
+            raise R1CSError("IVK representation bit is unassigned or non-Boolean")
+        values.append(int(value))
+
+    witness = make_blake2s_witness(values, b"Zcashivk")
+    digest_bits = constrain_blake2s(
+        system,
+        preimage_bits,
+        b"Zcashivk",
+        witness,
+        "computation of ivk",
+        input_bits_preconstrained=True,
+    )
+    return IvkBlake2sResult(
+        preimage_bits,
+        digest_bits,
+        digest_bits[:251],
     )
 
 

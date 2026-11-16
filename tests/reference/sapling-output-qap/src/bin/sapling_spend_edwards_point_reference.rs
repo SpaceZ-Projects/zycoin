@@ -1,4 +1,5 @@
 use bellman::gadgets::Assignment;
+use bellman::gadgets::blake2s;
 use bellman::gadgets::boolean::AllocatedBit;
 use bellman::gadgets::boolean::Boolean;
 use bellman::gadgets::lookup::{lookup3_xy, lookup3_xy_with_conditional_negation};
@@ -47,6 +48,7 @@ struct Export {
     note_commitment: NoteCommitmentExport,
     merkle_authentication: MerkleAuthenticationExport,
     conditional_anchor: ConditionalAnchorExport,
+    ivk_blake2s: IvkBlake2sExport,
 }
 
 #[derive(Serialize)]
@@ -249,6 +251,51 @@ struct ConditionalAnchorCase {
     inputs: Vec<VariableRecord>,
     variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct IvkBlake2sExport {
+    format: &'static str,
+    sapling_crypto_revision: &'static str,
+    bellman_revision: &'static str,
+    bellman_crate_version: &'static str,
+    full_synthesis_count: usize,
+    cases: Vec<IvkBlake2sCase>,
+    vectors: Vec<IvkBlake2sVector>,
+}
+
+#[derive(Serialize)]
+struct IvkBlake2sCase {
+    name: String,
+    ak_u: Option<String>,
+    ak_v: Option<String>,
+    nk_u: Option<String>,
+    nk_v: Option<String>,
+    raw_half_boundary: bool,
+    digest_bits: Vec<DigestBitRecord>,
+    ivk_bits: Vec<DigestBitRecord>,
+    satisfied: bool,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct IvkBlake2sVector {
+    name: String,
+    ak_u: Option<String>,
+    ak_v: Option<String>,
+    nk_u: Option<String>,
+    nk_v: Option<String>,
+    raw_half_boundary: bool,
+    digest_bits: Vec<bool>,
+    ivk_bits: Vec<bool>,
+}
+
+#[derive(Serialize)]
+struct DigestBitRecord {
+    identity: String,
+    value: bool,
+    negated: bool,
 }
 
 #[derive(Serialize)]
@@ -1033,6 +1080,164 @@ fn build_conditional_anchor_export() -> Result<ConditionalAnchorExport, Synthesi
         })
         .collect::<Result<Vec<_>, SynthesisError>>()?;
     Ok(ConditionalAnchorExport { cases })
+}
+
+fn source_digest_bit_record(bit: &Boolean) -> Result<DigestBitRecord, SynthesisError> {
+    let (identity, negated) = match bit {
+        Boolean::Is(allocated) => (
+            TraceConstraintSystem::identity(allocated.get_variable()),
+            false,
+        ),
+        Boolean::Not(allocated) => (
+            TraceConstraintSystem::identity(allocated.get_variable()),
+            true,
+        ),
+        Boolean::Constant(value) => (format!("Constant({value})"), false),
+    };
+    Ok(DigestBitRecord {
+        identity,
+        value: bit.get_value().ok_or(SynthesisError::AssignmentMissing)?,
+        negated,
+    })
+}
+
+fn source_ivk_blake2s<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    preimage: &[Boolean],
+) -> Result<(Vec<Boolean>, Vec<Boolean>), SynthesisError> {
+    let digest = blake2s::blake2s(
+        cs.namespace(|| "computation of ivk"),
+        preimage,
+        sapling_crypto::constants::CRH_IVK_PERSONALIZATION,
+    )?;
+    let ivk_bits = digest[..jubjub::Fr::CAPACITY as usize].to_vec();
+    Ok((digest, ivk_bits))
+}
+
+fn scalar_repr_bits(value: Scalar) -> Vec<bool> {
+    let repr = value.to_repr();
+    let bytes = repr.as_ref();
+    (0..255)
+        .map(|index| (bytes[index / 8] >> (index % 8)) & 1 == 1)
+        .collect()
+}
+
+fn point_repr_bits(point: ExtendedPoint) -> Vec<bool> {
+    let affine = point.to_affine();
+    let mut bits = scalar_repr_bits(affine.get_v());
+    bits.push(scalar_repr_bits(affine.get_u())[0]);
+    bits
+}
+
+fn ivk_digest_vector(
+    name: &str,
+    ak_point: Option<ExtendedPoint>,
+    nk_point: Option<ExtendedPoint>,
+    raw_half_boundary: bool,
+) -> IvkBlake2sVector {
+    let preimage_bits = if raw_half_boundary {
+        (0..512).map(|index| index >= 256).collect::<Vec<_>>()
+    } else {
+        point_repr_bits(ak_point.expect("point vector requires ak"))
+            .into_iter()
+            .chain(point_repr_bits(nk_point.expect("point vector requires nk")))
+            .collect()
+    };
+    let preimage = preimage_bits
+        .chunks_exact(8)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u8, |byte, (index, bit)| byte | (u8::from(*bit) << index))
+        })
+        .collect::<Vec<_>>();
+    let digest = blake2s_simd::Params::new()
+        .hash_length(32)
+        .personal(b"Zcashivk")
+        .hash(&preimage);
+    let digest_bits = digest
+        .as_bytes()
+        .iter()
+        .flat_map(|byte| (0..8).map(move |bit| (byte >> bit) & 1 == 1))
+        .collect::<Vec<_>>();
+    IvkBlake2sVector {
+        name: name.to_owned(),
+        ak_u: ak_point.map(|point| scalar_decimal(point.to_affine().get_u())),
+        ak_v: ak_point.map(|point| scalar_decimal(point.to_affine().get_v())),
+        nk_u: nk_point.map(|point| scalar_decimal(point.to_affine().get_u())),
+        nk_v: nk_point.map(|point| scalar_decimal(point.to_affine().get_v())),
+        raw_half_boundary,
+        ivk_bits: digest_bits[..jubjub::Fr::CAPACITY as usize].to_vec(),
+        digest_bits,
+    }
+}
+
+fn build_ivk_blake2s_export() -> Result<IvkBlake2sExport, SynthesisError> {
+    let generator: ExtendedPoint = jubjub::SubgroupPoint::generator().into();
+    let twice_generator = generator + generator;
+    let negative_generator = -generator;
+    let ak_point = generator;
+    let nk_point = twice_generator;
+    let mut system = TraceConstraintSystem::default();
+    let ak = source_witness(system.namespace(|| "ak"), ak_point)?;
+    let nk = source_witness(system.namespace(|| "nk"), nk_point)?;
+    let ak_repr = source_repr(system.namespace(|| "representation of ak"), &ak)?;
+    let nk_repr = source_repr(system.namespace(|| "representation of nk"), &nk)?;
+    let preimage: Vec<Boolean> = ak_repr.into_iter().chain(nk_repr).collect();
+    let (digest, ivk_bits) = source_ivk_blake2s(&mut system, &preimage)?;
+    let digest_bits = digest
+        .iter()
+        .map(source_digest_bit_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    let ivk_bits = ivk_bits
+        .iter()
+        .map(source_digest_bit_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    let cases = vec![IvkBlake2sCase {
+        name: "generator_pair".to_owned(),
+        ak_u: Some(scalar_decimal(ak_point.to_affine().get_u())),
+        ak_v: Some(scalar_decimal(ak_point.to_affine().get_v())),
+        nk_u: Some(scalar_decimal(nk_point.to_affine().get_u())),
+        nk_v: Some(scalar_decimal(nk_point.to_affine().get_v())),
+        raw_half_boundary: false,
+        digest_bits,
+        ivk_bits,
+        satisfied: system.is_satisfied(),
+        variables: system.variables,
+        constraints: system.constraints,
+    }];
+    let vectors = vec![
+        ivk_digest_vector(
+            "identity_points",
+            Some(ExtendedPoint::identity()),
+            Some(ExtendedPoint::identity()),
+            false,
+        ),
+        ivk_digest_vector(
+            "generator_pair",
+            Some(generator),
+            Some(twice_generator),
+            false,
+        ),
+        ivk_digest_vector(
+            "negative_generator_pair",
+            Some(negative_generator),
+            Some(generator),
+            false,
+        ),
+        ivk_digest_vector("raw_half_boundary", None, None, true),
+    ];
+
+    Ok(IvkBlake2sExport {
+        format: "bellman-sapling-ivk-blake2s-reference-v1",
+        sapling_crypto_revision: SAPLING_REVISION,
+        bellman_revision: BELLMAN_REVISION,
+        bellman_crate_version: BELLMAN_CRATE_VERSION,
+        full_synthesis_count: 1,
+        cases,
+        vectors,
+    })
 }
 
 fn source_montgomery_into_edwards<CS: ConstraintSystem<Scalar>>(
@@ -2214,6 +2419,11 @@ fn parse_variable(identity: &str) -> Option<Variable> {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|argument| argument == "--ivk-only") {
+        println!("{}", serde_json::to_string(&build_ivk_blake2s_export()?)?);
+        return Ok(());
+    }
+
     let generator: ExtendedPoint = jubjub::SubgroupPoint::generator().into();
     let twice_generator = generator + generator;
     let cases = vec![
@@ -2281,7 +2491,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         build_representation_case("off_curve", Scalar::ONE, Scalar::ONE)?,
     ];
     let output = Export {
-        format: "bellman-sapling-edwards-point-reference-v11",
+        format: "bellman-sapling-edwards-point-reference-v12",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -2298,6 +2508,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         note_commitment: build_note_commitment_export()?,
         merkle_authentication: build_merkle_authentication_export()?,
         conditional_anchor: build_conditional_anchor_export()?,
+        ivk_blake2s: build_ivk_blake2s_export()?,
     };
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
