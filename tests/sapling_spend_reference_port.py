@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TypeAlias
@@ -80,6 +81,17 @@ class NoteCommitmentResult:
 
 
 @dataclass(frozen=True)
+class ValueCommitmentResult:
+    value_bits: tuple[Variable, ...]
+    randomness_bits: tuple[Variable, ...]
+    value_variables: EdwardsPointWitnessVariables
+    randomness_variables: EdwardsPointWitnessVariables
+    commitment_variables: EdwardsPointWitnessVariables
+    input_variables: tuple[Variable, Variable]
+    commitment_witness: Point
+
+
+@dataclass(frozen=True)
 class MerkleAuthenticationResult:
     leaf_variable: Variable
     position_bits: tuple[Variable, ...]
@@ -108,6 +120,93 @@ class IvkBlake2sResult:
 class NullifierBlake2sResult:
     preimage_bits: tuple[Variable, ...]
     digest_bits: tuple[CircuitBit, ...]
+
+
+class SpendReferenceR1CS(R1CS):
+    """Test-only R1CS adapter preserving Bellman's late inputization order."""
+
+    supports_temporal_public_inputs = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._temporal_public_variables: list[Variable] = []
+
+    def alloc_public(self, name: str, value: int | None) -> Variable:
+        variable = self._allocate("public", name, value)
+        self._public_input_count += 1
+        self._temporal_public_variables.append(variable)
+        return variable
+
+    def public_input_position(self, variable: Variable) -> int | None:
+        self.require_owned(variable)
+        if variable.kind != "public":
+            return None
+        return self._temporal_public_variables.index(variable) + 1
+
+    def public_inputs(self) -> tuple[int, ...]:
+        values = tuple(
+            self.witness_value(variable)
+            for variable in self._temporal_public_variables
+        )
+        if any(value is None for value in values):
+            raise R1CSError("public inputs contain unassigned values")
+        return tuple(int(value) for value in values)
+
+    def canonical_column(self, variable_index: int) -> int:
+        if variable_index == 0:
+            return 0
+        variable = self._variables[variable_index]
+        if variable.kind == "public":
+            position = self.public_input_position(variable)
+            assert position is not None
+            return position
+        if variable.kind == "private":
+            return self._public_input_count + variable_index
+        raise R1CSError("unexpected variable kind in Spend reference R1CS")
+
+    def serialize_matrix(self) -> bytes:
+        def canonical_terms(terms: tuple[tuple[int, int], ...]) -> list[list[str | int]]:
+            combined: dict[int, int] = {}
+            for variable_index, coefficient in terms:
+                column = self.canonical_column(variable_index)
+                combined[column] = (
+                    combined.get(column, 0) + coefficient
+                ) % SCALAR_MODULUS
+            return [
+                [column, str(coefficient)]
+                for column, coefficient in sorted(combined.items())
+                if coefficient
+            ]
+
+        private_count = sum(
+            variable.kind == "private" for variable in self._variables
+        )
+        document = {
+            "format": "zycoin-r1cs-matrix-v1",
+            "field_modulus": str(SCALAR_MODULUS),
+            "column_count": len(self._variables),
+            "one_column": 0,
+            "public_input_count": self._public_input_count,
+            "auxiliary_variable_count": private_count,
+            "variable_kinds": (
+                ["one"]
+                + ["public"] * self._public_input_count
+                + ["private"] * private_count
+            ),
+            "constraints": [
+                [
+                    canonical_terms(expression.terms)
+                    for expression in (row.left, row.right, row.output)
+                ]
+                for row in self._constraints
+            ],
+        }
+        return json.dumps(
+            document,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
 
 
 def spend_edwards_to_montgomery_coordinates(
@@ -893,6 +992,97 @@ def constrain_spend_note_commitment(
         note_hash,
         randomization_variables,
         commitment_variables,
+        commitment_witness,
+    )
+
+
+def constrain_spend_value_commitment(
+    system: R1CS,
+    value: int,
+    randomness: int,
+    label: str = "value commitment",
+) -> ValueCommitmentResult:
+    """Port Sapling ``expose_value_commitment`` with source-ordered inputs."""
+    if not isinstance(system, SpendReferenceR1CS):
+        raise R1CSError(
+            "value commitment requires the temporal-input Spend reference R1CS"
+        )
+    if type(value) is not int or not 0 <= value < 1 << 64:
+        raise R1CSError("value commitment value must be an assigned u64")
+    if (
+        type(randomness) is not int
+        or not 0 <= randomness < _JUBJUB_SCALAR_MODULUS
+    ):
+        raise R1CSError("value commitment randomness is missing or out of range")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+    if not system.is_fresh:
+        raise R1CSError("isolated value commitment requires a fresh system")
+
+    value_bits = allocate_spend_fixed_base_scalar_bits(
+        system, value, 64, f"{label}/value"
+    )
+    value_variables = constrain_spend_fixed_base_mul(
+        system,
+        value_bits,
+        sapling_fixed_base_generator("value_commitment_value"),
+        f"{label}/compute the value in the exponent",
+    )
+
+    randomness_bits = allocate_spend_fixed_base_scalar_bits(
+        system, randomness, 252, f"{label}/rcv"
+    )
+    randomness_variables = constrain_spend_fixed_base_mul(
+        system,
+        randomness_bits,
+        sapling_fixed_base_generator("value_commitment_randomness"),
+        f"{label}/computation of rcv",
+    )
+    commitment_variables = constrain_spend_edwards_point_add(
+        system,
+        value_variables,
+        Point(
+            system.witness_value(value_variables.u),
+            system.witness_value(value_variables.v),
+        ),
+        randomness_variables,
+        Point(
+            system.witness_value(randomness_variables.u),
+            system.witness_value(randomness_variables.v),
+        ),
+        f"{label}/computation of cv",
+    )
+    commitment_witness = Point(
+        system.witness_value(commitment_variables.u),
+        system.witness_value(commitment_variables.v),
+    )
+
+    input_u = system.alloc_public(
+        f"{label}/commitment point/u/input variable", commitment_witness.u
+    )
+    system.enforce(
+        input_u,
+        1,
+        commitment_variables.u,
+        f"{label}/commitment point/u/enforce input is correct",
+    )
+    input_v = system.alloc_public(
+        f"{label}/commitment point/v/input variable", commitment_witness.v
+    )
+    system.enforce(
+        input_v,
+        1,
+        commitment_variables.v,
+        f"{label}/commitment point/v/enforce input is correct",
+    )
+
+    return ValueCommitmentResult(
+        value_bits,
+        randomness_bits,
+        value_variables,
+        randomness_variables,
+        commitment_variables,
+        (input_u, input_v),
         commitment_witness,
     )
 

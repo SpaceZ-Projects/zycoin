@@ -199,6 +199,41 @@ struct NoteCommitmentExport {
 }
 
 #[derive(Serialize)]
+struct ValueCommitmentExport {
+    format: &'static str,
+    sapling_crypto_revision: &'static str,
+    bellman_revision: &'static str,
+    bellman_crate_version: &'static str,
+    full_synthesis_count: usize,
+    cases: Vec<ValueCommitmentCase>,
+    vectors: Vec<ValueCommitmentVector>,
+}
+
+#[derive(Serialize)]
+struct ValueCommitmentCase {
+    name: String,
+    value: u64,
+    randomness: String,
+    value_bits: Vec<BitRecord>,
+    randomness_bits: Vec<BitRecord>,
+    commitment_u: String,
+    commitment_v: String,
+    satisfied: bool,
+    inputs: Vec<VariableRecord>,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct ValueCommitmentVector {
+    name: &'static str,
+    value: u64,
+    randomness: String,
+    commitment_u: String,
+    commitment_v: String,
+}
+
+#[derive(Serialize)]
 struct NoteCommitmentCase {
     name: String,
     value: u64,
@@ -805,6 +840,134 @@ fn source_note_commitment<CS: ConstraintSystem<Scalar>>(
         &randomness,
     )?;
     Ok((hash, commitment, note_bit_count))
+}
+
+fn source_value_commitment<CS: ConstraintSystem<Scalar>>(
+    mut cs: CS,
+    value: u64,
+    randomness: jubjub::Fr,
+    value_table: &[Vec<(Scalar, Scalar)>],
+    randomness_table: &[Vec<(Scalar, Scalar)>],
+) -> Result<(Vec<Boolean>, Vec<Boolean>, SourcePoint), SynthesisError> {
+    let value_bits =
+        bellman::gadgets::boolean::u64_into_boolean_vec_le(cs.namespace(|| "value"), Some(value))?;
+    let value_point = source_fixed_base_multiplication(
+        cs.namespace(|| "compute the value in the exponent"),
+        value_table,
+        &value_bits,
+    )?;
+
+    let randomness_bits = bellman::gadgets::boolean::field_into_boolean_vec_le::<
+        Scalar,
+        _,
+        jubjub::Fr,
+    >(cs.namespace(|| "rcv"), Some(randomness))?;
+    let randomness_point = source_fixed_base_multiplication(
+        cs.namespace(|| "computation of rcv"),
+        randomness_table,
+        &randomness_bits,
+    )?;
+    let commitment = source_add(
+        cs.namespace(|| "computation of cv"),
+        &value_point,
+        &randomness_point,
+    )?;
+
+    commitment
+        .u
+        .inputize(cs.namespace(|| "commitment point/u"))?;
+    commitment
+        .v
+        .inputize(cs.namespace(|| "commitment point/v"))?;
+
+    Ok((value_bits, randomness_bits, commitment))
+}
+
+fn source_bit_records(bits: &[Boolean]) -> Result<Vec<BitRecord>, SynthesisError> {
+    bits.iter()
+        .map(|bit| match bit {
+            Boolean::Is(bit) => Ok(BitRecord {
+                identity: TraceConstraintSystem::identity(bit.get_variable()),
+                value: bit.get_value().ok_or(SynthesisError::AssignmentMissing)?,
+            }),
+            _ => Err(SynthesisError::Unsatisfiable),
+        })
+        .collect()
+}
+
+fn value_commitment_vector(
+    name: &'static str,
+    value: u64,
+    randomness: jubjub::Fr,
+) -> ValueCommitmentVector {
+    let commitment = (sapling_crypto::constants::VALUE_COMMITMENT_VALUE_GENERATOR
+        * jubjub::Fr::from(value))
+        + (sapling_crypto::constants::VALUE_COMMITMENT_RANDOMNESS_GENERATOR * randomness);
+    let affine = ExtendedPoint::from(commitment).to_affine();
+    ValueCommitmentVector {
+        name,
+        value,
+        randomness: jubjub_scalar_decimal(randomness),
+        commitment_u: scalar_decimal(affine.get_u()),
+        commitment_v: scalar_decimal(affine.get_v()),
+    }
+}
+
+fn build_value_commitment_export() -> Result<ValueCommitmentExport, SynthesisError> {
+    let value = 0x0123_4567_89ab_cdef;
+    let randomness = -jubjub::Fr::from(0x5aa5_96c3_2d71_4ef0_u64);
+    let value_table =
+        source_fixed_base_tables(sapling_crypto::constants::VALUE_COMMITMENT_VALUE_GENERATOR);
+    let randomness_table =
+        source_fixed_base_tables(sapling_crypto::constants::VALUE_COMMITMENT_RANDOMNESS_GENERATOR);
+
+    let mut system = TraceConstraintSystem::default();
+    let (value_bits, randomness_bits, commitment) = source_value_commitment(
+        system.namespace(|| "value commitment"),
+        value,
+        randomness,
+        &value_table,
+        &randomness_table,
+    )?;
+    let case = ValueCommitmentCase {
+        name: "middle_value_high_randomness".to_owned(),
+        value,
+        randomness: jubjub_scalar_decimal(randomness),
+        value_bits: source_bit_records(&value_bits)?,
+        randomness_bits: source_bit_records(&randomness_bits)?,
+        commitment_u: scalar_decimal(
+            commitment
+                .u
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        commitment_v: scalar_decimal(
+            commitment
+                .v
+                .get_value()
+                .ok_or(SynthesisError::AssignmentMissing)?,
+        ),
+        satisfied: system.is_satisfied(),
+        inputs: system.inputs,
+        variables: system.variables,
+        constraints: system.constraints,
+    };
+
+    let vectors = vec![
+        value_commitment_vector("zero_value_zero_randomness", 0, jubjub::Fr::ZERO),
+        value_commitment_vector("maximum_value_zero_randomness", u64::MAX, jubjub::Fr::ZERO),
+        value_commitment_vector("zero_value_maximum_randomness", 0, -jubjub::Fr::ONE),
+    ];
+
+    Ok(ValueCommitmentExport {
+        format: "bellman-sapling-value-commitment-reference-v1",
+        sapling_crypto_revision: SAPLING_REVISION,
+        bellman_revision: BELLMAN_REVISION,
+        bellman_crate_version: BELLMAN_CRATE_VERSION,
+        full_synthesis_count: 1,
+        cases: vec![case],
+        vectors,
+    })
 }
 
 fn source_valid_diversifier(seed: u8) -> ([u8; 11], ExtendedPoint) {
@@ -2499,6 +2662,12 @@ fn scalar_decimal(value: Scalar) -> String {
     scalar_to_decimal(value.to_repr().as_ref())
 }
 
+fn jubjub_scalar_decimal(value: jubjub::Fr) -> String {
+    let circuit_scalar = Option::<Scalar>::from(Scalar::from_repr(value.to_bytes()))
+        .expect("Jubjub and circuit scalars share the same modulus");
+    scalar_decimal(circuit_scalar)
+}
+
 fn scalar_to_decimal(bytes: &[u8]) -> String {
     let mut digits = vec![0u8];
     for byte in bytes.iter().rev() {
@@ -2566,6 +2735,13 @@ fn parse_variable(identity: &str) -> Option<Variable> {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|argument| argument == "--value-commitment-only") {
+        println!(
+            "{}",
+            serde_json::to_string(&build_value_commitment_export()?)?
+        );
+        return Ok(());
+    }
     if std::env::args().any(|argument| argument == "--ivk-only") {
         println!("{}", serde_json::to_string(&build_ivk_blake2s_export()?)?);
         return Ok(());

@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import unittest
-from hashlib import blake2s
+from hashlib import blake2s, sha256
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -12,6 +12,7 @@ from unittest.mock import patch
 import sapling_spend_reference_port
 from sapling_spend_reference_port import (
     EdwardsPointWitnessVariables,
+    SpendReferenceR1CS,
     allocate_spend_fixed_base_scalar_bits,
     allocate_spend_montgomery_point,
     constrain_spend_conditional_anchor,
@@ -30,6 +31,7 @@ from sapling_spend_reference_port import (
     constrain_spend_nullifier_blake2s,
     constrain_spend_pedersen_hash,
     constrain_spend_signed_montgomery_lookup,
+    constrain_spend_value_commitment,
     spend_edwards_to_montgomery_coordinates,
     spend_fixed_base_tables,
     spend_pedersen_montgomery_tables,
@@ -43,7 +45,13 @@ from src.jubjub import (
     Point,
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
-from src.r1cs import R1CS, R1CSError, Variable
+from src.r1cs import (
+    _MATRIX_FINGERPRINT_DOMAIN,
+    _MATRIX_SERIALIZATION_FORMAT,
+    R1CS,
+    R1CSError,
+    Variable,
+)
 from src.sapling_gadgets import (
     _pedersen_montgomery_tables,
     sapling_fixed_base_generator,
@@ -139,12 +147,114 @@ def _reference_nullifier_cases() -> dict:
     return json.loads(completed.stdout)
 
 
+def _reference_value_commitment_cases() -> dict:
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--manifest-path",
+        str(REFERENCE_MANIFEST),
+        "--bin",
+        "sapling_spend_edwards_point_reference",
+        "--",
+        "--value-commitment-only",
+    ]
+    environment = os.environ.copy()
+    environment["CARGO_TERM_COLOR"] = "never"
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=environment,
+    )
+    return json.loads(completed.stdout)
+
+
 def _reference_index(identity: str) -> int:
     if identity == "Input(0)":
         return 0
     if identity.startswith("Aux(") and identity.endswith(")"):
         return int(identity[4:-1]) + 1
     raise AssertionError(f"unexpected isolated reference variable {identity!r}")
+
+
+def _value_reference_column(identity: str, input_count: int) -> int:
+    if identity == "Input(0)":
+        return 0
+    if identity.startswith("Input(") and identity.endswith(")"):
+        return int(identity[6:-1])
+    if identity.startswith("Aux(") and identity.endswith(")"):
+        return input_count + 1 + int(identity[4:-1])
+    raise AssertionError(f"unexpected value-commitment variable {identity!r}")
+
+
+def _canonical_value_reference_terms(
+    terms: list[dict], input_count: int
+) -> list[list[str | int]]:
+    combined: dict[int, int] = {}
+    for term in terms:
+        column = _value_reference_column(term["identity"], input_count)
+        coefficient = int.from_bytes(
+            bytes.fromhex(term["coefficient_hex"]), "little"
+        )
+        combined[column] = (
+            combined.get(column, 0) + coefficient
+        ) % SCALAR_MODULUS
+    return [
+        [column, str(coefficient)]
+        for column, coefficient in sorted(combined.items())
+        if coefficient
+    ]
+
+
+def _value_reference_matrix_fingerprint(reference: dict) -> str:
+    input_count = len(reference["inputs"])
+    auxiliary_count = len(reference["variables"])
+    document = {
+        "format": _MATRIX_SERIALIZATION_FORMAT,
+        "field_modulus": str(SCALAR_MODULUS),
+        "column_count": 1 + input_count + auxiliary_count,
+        "one_column": 0,
+        "public_input_count": input_count,
+        "auxiliary_variable_count": auxiliary_count,
+        "variable_kinds": (
+            ["one"] + ["public"] * input_count + ["private"] * auxiliary_count
+        ),
+        "constraints": [
+            [
+                _canonical_value_reference_terms(row[side], input_count)
+                for side in ("a", "b", "c")
+            ]
+            for row in reference["constraints"]
+        ],
+    }
+    serialized = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    return sha256(_MATRIX_FINGERPRINT_DOMAIN + serialized).hexdigest()
+
+
+def _canonical_local_value_terms(
+    system: SpendReferenceR1CS,
+    terms: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int], ...]:
+    combined: dict[int, int] = {}
+    for variable_index, coefficient in terms:
+        column = system.canonical_column(variable_index)
+        combined[column] = (
+            combined.get(column, 0) + coefficient
+        ) % SCALAR_MODULUS
+    return tuple(
+        (column, coefficient)
+        for column, coefficient in sorted(combined.items())
+        if coefficient
+    )
 
 
 def _canonical_terms(terms: list[dict]) -> tuple[tuple[int, int], ...]:
@@ -337,6 +447,39 @@ def _allocate_boolean_bits(
 class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if os.environ.get("SAPLING_VALUE_COMMITMENT_REFERENCE_ONLY") == "1":
+            cls.reference = _reference_value_commitment_cases()
+            if cls.reference["format"] != (
+                "bellman-sapling-value-commitment-reference-v1"
+            ):
+                raise AssertionError(
+                    "unexpected Bellman value-commitment export format"
+                )
+            if cls.reference["sapling_crypto_revision"] != (
+                "88a7946b4a3066787776e11f0a502654167e022d"
+            ):
+                raise AssertionError("unexpected pinned Sapling source revision")
+            if cls.reference["bellman_revision"] != (
+                "b726862a4ece8a627e7fea486d77b502a6edbb0b"
+            ):
+                raise AssertionError("unexpected Bellman source revision")
+            if cls.reference["bellman_crate_version"] != "0.15.0":
+                raise AssertionError("unexpected Bellman crate version")
+            if (
+                cls.reference["full_synthesis_count"] != 1
+                or len(cls.reference["cases"]) != 1
+            ):
+                raise AssertionError(
+                    "value-commitment exporter must synthesize exactly one trace"
+                )
+            cls.value_commitment_cases = {
+                case["name"]: case for case in cls.reference["cases"]
+            }
+            cls.value_commitment_vectors = {
+                vector["name"]: vector for vector in cls.reference["vectors"]
+            }
+            return
+
         if os.environ.get("SAPLING_NULLIFIER_REFERENCE_ONLY") == "1":
             cls.reference = _reference_nullifier_cases()
             if cls.reference["format"] != (
@@ -1642,6 +1785,271 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                     call()
                 self.assertEqual(len(system.variables), before_variables)
                 self.assertEqual(system.constraint_count, before_rows)
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_VALUE_COMMITMENT_REFERENCE_ONLY") == "1",
+        "requires the isolated Bellman value-commitment fixture",
+    )
+    def test_spend_value_commitment_matches_bellman_ordered_trace(self) -> None:
+        reference = self.value_commitment_cases["middle_value_high_randomness"]
+        system = SpendReferenceR1CS()
+        value = reference["value"]
+        randomness = int(reference["randomness"])
+        with patch(
+            __name__ + ".constrain_spend_value_commitment",
+            wraps=constrain_spend_value_commitment,
+        ) as python_syntheses:
+            result = constrain_spend_value_commitment(
+                system, value, randomness
+            )
+            python_syntheses.assert_called_once()
+
+        private_variables = [
+            variable for variable in system.variables[1:]
+            if variable.kind == "private"
+        ]
+        public_variables = [
+            variable for variable in system.variables[1:]
+            if variable.kind == "public"
+        ]
+        self.assertEqual(len(public_variables), 2)
+        self.assertEqual(system.public_input_count, len(reference["inputs"]))
+        self.assertEqual(
+            [variable.name for variable in private_variables],
+            [record["annotation"] for record in reference["variables"]],
+        )
+        self.assertEqual(
+            [system.witness_value(variable) for variable in private_variables],
+            [
+                int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+                for record in reference["variables"]
+            ],
+        )
+        self.assertEqual(
+            [variable.name for variable in public_variables],
+            [record["annotation"] for record in reference["inputs"]],
+        )
+        self.assertEqual(
+            [system.witness_value(variable) for variable in public_variables],
+            [
+                int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+                for record in reference["inputs"]
+            ],
+        )
+        self.assertEqual(
+            [system.public_input_position(variable) for variable in public_variables],
+            [1, 2],
+        )
+        self.assertEqual(
+            [
+                variable.name
+                for variable in system.variables[1:]
+            ],
+            [record["annotation"] for record in reference["variables"]]
+            + [record["annotation"] for record in reference["inputs"]],
+        )
+
+        self.assertEqual(system.constraint_count, len(reference["constraints"]))
+        for local_row, reference_row in zip(
+            system.constraints, reference["constraints"], strict=True
+        ):
+            with self.subTest(row=reference_row["index"]):
+                self.assertEqual(local_row.label, reference_row["annotation"])
+                self.assertEqual(
+                    _canonical_local_value_terms(system, local_row.left.terms),
+                    tuple(
+                        (column, int(coefficient))
+                        for column, coefficient in _canonical_value_reference_terms(
+                            reference_row["a"], len(reference["inputs"])
+                        )
+                    ),
+                )
+                self.assertEqual(
+                    _canonical_local_value_terms(system, local_row.right.terms),
+                    tuple(
+                        (column, int(coefficient))
+                        for column, coefficient in _canonical_value_reference_terms(
+                            reference_row["b"], len(reference["inputs"])
+                        )
+                    ),
+                )
+                self.assertEqual(
+                    _canonical_local_value_terms(system, local_row.output.terms),
+                    tuple(
+                        (column, int(coefficient))
+                        for column, coefficient in _canonical_value_reference_terms(
+                            reference_row["c"], len(reference["inputs"])
+                        )
+                    ),
+                )
+
+        self.assertTrue(system.is_satisfied())
+        self.assertTrue(reference["satisfied"])
+        self.assertEqual(
+            system.public_inputs(),
+            tuple(
+                int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+                for record in reference["inputs"]
+            ),
+        )
+        self.assertEqual(
+            (
+                system.witness_value(result.commitment_variables.u),
+                system.witness_value(result.commitment_variables.v),
+            ),
+            (int(reference["commitment_u"]), int(reference["commitment_v"])),
+        )
+        self.assertEqual(
+            [
+                system.witness_value(bit)
+                for bit in result.value_bits
+            ],
+            [(value >> index) & 1 for index in range(64)],
+        )
+        self.assertEqual(
+            [
+                system.witness_value(bit)
+                for bit in result.randomness_bits
+            ],
+            [(randomness >> index) & 1 for index in range(252)],
+        )
+        self.assertEqual(
+            [
+                {
+                    "identity": f"Aux({bit.index - 1})",
+                    "value": bool(system.witness_value(bit)),
+                }
+                for bit in result.value_bits
+            ],
+            reference["value_bits"],
+        )
+        self.assertEqual(
+            [
+                {
+                    "identity": f"Aux({bit.index - 1})",
+                    "value": bool(system.witness_value(bit)),
+                }
+                for bit in result.randomness_bits
+            ],
+            reference["randomness_bits"],
+        )
+
+        self.value_commitment_matrix_rows = system.constraint_count
+        self.value_commitment_matrix_columns = (
+            1 + system.public_input_count + len(private_variables)
+        )
+        self.value_commitment_matrix_fingerprint = system.matrix_fingerprint()
+        self.assertEqual(self.value_commitment_matrix_rows, 1265)
+        self.assertEqual(self.value_commitment_matrix_columns, 1266)
+        self.assertEqual(
+            self.value_commitment_matrix_fingerprint,
+            "6b3c7e369962530b0bb495a07876b5745a5f233539557f6d8307bf17d9ebfda7",
+        )
+        self.assertEqual(
+            self.value_commitment_matrix_fingerprint,
+            _value_reference_matrix_fingerprint(reference),
+        )
+        print(
+            "Spend value-commitment matrix",
+            self.value_commitment_matrix_rows,
+            self.value_commitment_matrix_columns,
+            self.value_commitment_matrix_fingerprint,
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_VALUE_COMMITMENT_REFERENCE_ONLY") == "1",
+        "requires isolated Bellman value-commitment vectors",
+    )
+    def test_spend_value_commitment_vectors_without_synthesis(self) -> None:
+        expected_names = {
+            "zero_value_zero_randomness",
+            "maximum_value_zero_randomness",
+            "zero_value_maximum_randomness",
+        }
+        self.assertEqual(set(self.value_commitment_vectors), expected_names)
+        value_generator = sapling_fixed_base_generator(
+            "value_commitment_value"
+        )
+        randomness_generator = sapling_fixed_base_generator(
+            "value_commitment_randomness"
+        )
+        with patch(
+            __name__ + ".constrain_spend_value_commitment",
+            side_effect=AssertionError("vector checks must not synthesize"),
+        ):
+            for name, reference in self.value_commitment_vectors.items():
+                with self.subTest(case=name):
+                    value = reference["value"]
+                    randomness = int(reference["randomness"])
+                    commitment = value_generator.multiply(value) + (
+                        randomness_generator.multiply(randomness)
+                    )
+                    self.assertEqual(
+                        (commitment.u, commitment.v),
+                        (
+                            int(reference["commitment_u"]),
+                            int(reference["commitment_v"]),
+                        ),
+                    )
+        trace_case = self.value_commitment_cases[
+            "middle_value_high_randomness"
+        ]
+        commitment = value_generator.multiply(trace_case["value"]) + (
+            randomness_generator.multiply(int(trace_case["randomness"]))
+        )
+        self.assertEqual(
+            (commitment.u, commitment.v),
+            (int(trace_case["commitment_u"]), int(trace_case["commitment_v"])),
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_VALUE_COMMITMENT_REFERENCE_ONLY") == "1",
+        "requires the isolated value-commitment input",
+    )
+    def test_spend_value_commitment_rejects_invalid_inputs_before_mutation(
+        self,
+    ) -> None:
+        invalid_values = (
+            (-1, 0),
+            (1 << 64, 0),
+            (True, 0),
+            (None, 0),
+            (0, -1),
+            (0, JUBJUB_SCALAR_MODULUS),
+            (0, True),
+            (0, None),
+        )
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_spend_fixed_base_mul",
+            side_effect=AssertionError("invalid input reached synthesis"),
+        ) as fixed_base_syntheses:
+            for value, randomness in invalid_values:
+                system = SpendReferenceR1CS()
+                before_variables = len(system.variables)
+                before_rows = system.constraint_count
+                with self.subTest(value=value, randomness=randomness):
+                    with self.assertRaises((R1CSError, TypeError)):
+                        constrain_spend_value_commitment(
+                            system, value, randomness
+                        )
+                    self.assertEqual(len(system.variables), before_variables)
+                    self.assertEqual(system.constraint_count, before_rows)
+            fixed_base_syntheses.assert_not_called()
+
+        system = R1CS()
+        with self.assertRaises(R1CSError):
+            constrain_spend_value_commitment(system, 1, 1)
+        self.assertEqual(len(system.variables), 1)
+        self.assertEqual(system.constraint_count, 0)
+
+        nonfresh_system = SpendReferenceR1CS()
+        nonfresh_system.alloc_private("prior allocation", 0)
+        before_variables = len(nonfresh_system.variables)
+        with self.assertRaises(R1CSError):
+            constrain_spend_value_commitment(nonfresh_system, 1, 1)
+        self.assertEqual(len(nonfresh_system.variables), before_variables)
+        self.assertEqual(nonfresh_system.constraint_count, 0)
 
     def test_note_commitment_matches_complete_bellman_traces(self) -> None:
         diversifiers = [

@@ -106,7 +106,7 @@ or matrix.
 | `Spend::synthesize`: `ak`, `ar`, `rk` | Isolated point witness, non-small-order, fixed-base, and Edwards addition helpers; production `constrain_sapling_spend` | **Not recomposed in the isolated port.** Required upstream ordering and `rk` inputization have no end-to-end Python/Bellman trace. |
 | `nsk`, `nk`, `ak.repr`, `nk.repr`, IVK BLAKE2s | Isolated fixed-base multiplication, representation, and test-only IVK BLAKE2s helper | **Standalone retained IVK fixture trace verified** for ordered allocations, assignments, labels, and A/B/C rows; full Spend source-order composition remains unverified. |
 | `g_d`, non-small-order check, `pk_d = [ivk]g_d` | Isolated point witness, non-small-order, variable-base multiplication, and representation helpers; production scalar multiplication | **Not recomposed in the isolated port.** Exact IVK-to-scalar-bit and source-order integration remains unverified. |
-| `expose_value_commitment` | Production `constrain_sapling_value_commitment`; isolated fixed-base and Edwards primitives | **Missing from the isolated reference port.** The complete upstream value-opening allocation and enforcement sequence has not been traced against Python. |
+| `expose_value_commitment` | Test-only `constrain_spend_value_commitment` plus verified fixed-base and Edwards primitives | **Standalone retained fixture trace verified** for ordered allocations, assignments, public inputs, labels, and A/B/C rows; full Spend source-order composition remains unverified. |
 | Note contents, Pedersen note hash, `rcm` randomization | Isolated `constrain_spend_note_commitment` plus verified Edwards/Pedersen helpers | **Standalone note-commitment trace verified** for covered fixtures; not yet integrated in full Spend event order. |
 | Merkle level direction, sibling selection and Pedersen hash | Isolated test-only `constrain_spend_merkle_authentication_path` | **Standalone path trace verified** for depths 1, 31, and 32; full Spend composition remains unverified. |
 | Conditional anchor | Isolated test-only `constrain_spend_conditional_anchor` | **Standalone anchor trace verified** including late Bellman inputization, both ordered rows, and fifth public-input mapping; full Spend composition remains unverified. |
@@ -119,9 +119,9 @@ assembler, but it does not satisfy this task's source-faithful integration
 requirement: it allocates public inputs up front, uses the production Merkle
 and anchor paths, and its reported trace correspondence contains unmatched
 and reordered rows. The isolated test-only module currently provides
-standalone parity for several cryptographic units, including retained IVK and
-nullifier BLAKE2s fixtures, but lacks value-commitment synthesis, nullifier
-multipacking, and their source-order composition. Consequently there is no complete
+standalone parity for several cryptographic units, including retained IVK,
+nullifier BLAKE2s, and value-commitment fixtures, but lacks nullifier
+multipacking and full Spend source-order composition. Consequently there is no complete
 Python-vs-Bellman assignment, ordered-matrix, fingerprint, or mutation result
 for this task. Reusing the production assembler or merely chaining the
 verified units would not resolve those gaps and could create an unjustified
@@ -143,7 +143,7 @@ order:
 | `ar` and `rk` | Jubjub field-to-Boolean allocation and Boolean rows; spending-key fixed-base multiplication; Edwards addition; late `rk` input allocation and its input-equality row. |
 | `nsk`, `nk`, and IVK | `nsk` bit allocation; proof-generation fixed-base multiplication; ordered strict representations of `ak`/`nk`; full Spend temporal allocation context and capacity-truncated IVK handoff. The isolated IVK BLAKE2s relation has a retained standalone trace. |
 | `g_d` and `pk_d` | `g_d` witness/curve and non-small-order allocations at the source location; variable-base multiplication driven by truncated IVK bits. |
-| Value commitment | In `expose_value_commitment`: 64 value bits and rows, value-generator multiplication, `rcv` bit allocations/rows, randomness-generator multiplication, addition, and the two late `cv` inputizations/equality rows. |
+| Value commitment | Standalone `expose_value_commitment` trace parity is established. Full Spend temporal allocation context and integration with preceding `rk` inputs and following note-value handoff remain unverified. |
 | Note commitment and authentication path | The isolated note hash/randomization and Merkle path already have unit traces, but their composition must preserve the value bits and ordered `g_d`/`pk_d` representations, note commitment output, 32 direct direction-bit variables, and path allocations without reallocation or substitution. |
 | Conditional anchor | Isolated `rt`/anchor trace is verified. Full context still needs the actual preceding root/value variables and correct temporal public-input position. |
 | Nullifier position and `rho` | Fixed-base multiplication of the original 32 direction bits, Edwards addition to `cm`, and strict `rho` representation in the complete post-anchor context. |
@@ -178,9 +178,9 @@ official parameter compatibility remain **Unverified**.
    then strict representation, fixed-base lookup, and variable-base
    multiplication. Retain the exact source's allocation and enforcement
    order in each unit rather than normalizing factors.
-3. Add source-trace parity for value-commitment synthesis, both BLAKE2s calls,
-   and nullifier multipacking, including outputs and altered-witness failure
-   rows.
+3. Add source-trace parity for nullifier multipacking, including outputs and
+   altered-witness failure rows. Standalone value-commitment and BLAKE2s
+   stages now have retained fixture traces.
 4. Recompose all verified components in `Spend::synthesize` order, preserving
    inputize events, the direct direction-bit handoff to `g^position`, and the
    already verified `rt` relation without skipping or duplicating rows.
@@ -820,3 +820,52 @@ Nullifier multipacking and full Spend source-order composition remain
 unverified. This stage does not establish complete Spend matrix alignment,
 upstream full-circuit Bellman equivalence, or official parameter
 compatibility; those remain **Unverified**.
+
+### Source-faithful Spend value commitment
+
+At Sapling revision `88a7946b4a3066787776e11f0a502654167e022d` and Bellman
+revision `b726862a4ece8a627e7fea486d77b502a6edbb0b` (`0.15.0`), the pinned
+`src/circuit.rs::expose_value_commitment` allocates a 64-bit little-endian
+`value` under `"value"`, computes its
+fixed-base multiplication with `VALUE_COMMITMENT_VALUE_GENERATOR`, allocates
+the Jubjub-field `rcv` bits little-endian under `"rcv"`, computes the
+fixed-base multiplication with `VALUE_COMMITMENT_RANDOMNESS_GENERATOR`, adds
+the two Edwards points, then calls `cv.inputize` under `"commitment point"`.
+The 64-bit decomposition uses Bellman 0.15
+`u64_into_boolean_vec_le`; `rcv` uses `field_into_boolean_vec_le` and its
+252-bit field width. The source does not add a separate canonical-range check
+for `rcv`. The fixed-base paths use the pinned Sapling 3-bit window lookup and
+Edwards-addition sequence. `EdwardsPoint::inputize` allocates `u` then `v`;
+each `AllocatedNum::inputize` enforces its allocated input times ONE equals
+the computed coordinate. In Spend, the parent call is under
+`"value commitment"`, so the reference labels include that namespace.
+
+The test-only `constrain_spend_value_commitment` follows this sequence and
+reuses only the independently verified fixed-base and Edwards helpers. A
+test-only `SpendReferenceR1CS` adapter records the late public input allocations
+after the auxiliary allocations, like Bellman, while mapping matrix columns
+to the canonical ONE/public/auxiliary order used by the local R1CS serializer.
+Thus the trace comparison checks the upstream temporal allocation order,
+public positions, assignments, namespace annotations, and every ordered A/B/C
+row without moving the two inputization constraints.
+
+The retained fixture uses `value = 0x0123456789abcdef` and
+`rcv = -Fr(0x5aa596c32d714ef0)`. Bellman and Python matched exactly:
+**1,265 rows**, **1,266 columns** (ONE, two public inputs, and 1,263
+auxiliaries), with canonical matrix fingerprint
+`6b3c7e369962530b0bb495a07876b5745a5f233539557f6d8307bf17d9ebfda7`.
+The differential suite performs exactly **two full circuit syntheses**: one
+Bellman reference fixture and one Python synthesis. The three focused tests
+passed (**3 tests / 1,276 subtests**, 2.24 seconds). They cover exact ordered
+trace parity, the value and randomness bit mappings, public input positions,
+and satisfaction.
+
+Additional host-only output vectors cover zero value/zero randomness,
+maximum `u64` value/zero randomness, and zero value/maximum Jubjub scalar
+randomness; these checks do not invoke circuit synthesis. Invalid, missing,
+Boolean-as-integer, and out-of-range values/randomness reject before
+allocation or fixed-base synthesis. The isolated API has no caller-supplied
+variables, so foreign-variable ownership validation is not applicable.
+Nullifier multipacking, full Spend event-order integration, complete Spend
+matrix alignment, upstream full-circuit Bellman equivalence, and official
+parameter compatibility remain **Unverified**.
