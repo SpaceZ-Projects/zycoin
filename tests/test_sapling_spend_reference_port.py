@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import unittest
+from contextlib import ExitStack
 from hashlib import blake2s, sha256
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
@@ -13,8 +16,10 @@ import sapling_spend_reference_port
 from sapling_spend_reference_port import (
     EdwardsPointWitnessVariables,
     SpendReferenceR1CS,
+    SpendReferenceWitness,
     allocate_spend_fixed_base_scalar_bits,
     allocate_spend_montgomery_point,
+    constrain_source_faithful_spend,
     constrain_spend_conditional_anchor,
     constrain_spend_edwards_point_add,
     constrain_spend_edwards_point_double,
@@ -70,6 +75,633 @@ ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
     ROOT / "tests" / "reference" / "sapling-output-qap" / "Cargo.toml"
 )
+
+
+class SpendReferenceCompositionBoundaryTests(unittest.TestCase):
+    def test_fixed_base_and_preserves_source_boolean_allocations(self) -> None:
+        system = R1CS()
+        bits = allocate_spend_fixed_base_scalar_bits(system, 0, 3)
+        base = sapling_spend_reference_port.sapling_fixed_base_generator(
+            "spending_key"
+        )
+
+        constrain_spend_fixed_base_mul(system, bits, base)
+
+        self.assertIn(
+            "fixed base multiplication/window table lookup 0/precomp/and result",
+            [variable.name for variable in system.variables],
+        )
+        self.assertIn(
+            "fixed base multiplication/window table lookup 0/precomp/and constraint",
+            [row.label for row in system.constraints],
+        )
+        self.assertTrue(system.is_satisfied())
+
+    def test_fixed_base_and_matches_bellman_negated_boolean_forms(self) -> None:
+        system = R1CS()
+        positive = system.alloc_private("positive bit", 1)
+        first_negated = sapling_spend_reference_port._NegatedBit(positive)
+        not_variable = system.alloc_private("not bit backing", 0)
+        second_negated = sapling_spend_reference_port._NegatedBit(
+            not_variable
+        )
+
+        nor_result = sapling_spend_reference_port._spend_boolean_and(
+            system,
+            first_negated,
+            second_negated,
+            "nor",
+        )
+
+        self.assertIsInstance(nor_result, Variable)
+        self.assertEqual(system.witness_value(nor_result), 0)
+        self.assertEqual(system.variables[-1].name, "nor/nor result")
+        self.assertEqual(system.constraints[-1].label, "nor/nor constraint")
+        self.assertTrue(system.is_satisfied())
+
+    def test_value_commitment_continues_after_prior_public_inputs(self) -> None:
+        system = SpendReferenceR1CS()
+        for name in ("rk/u", "rk/v", "prior/cv/u", "prior/cv/v"):
+            system.alloc_public(name, 0)
+
+        def fake_fixed_base(
+            target: SpendReferenceR1CS,
+            bits: tuple[Variable, ...],
+            base: Point,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            return EdwardsPointWitnessVariables(
+                target.alloc_private(f"{label}/u/num", IDENTITY.u),
+                target.alloc_private(f"{label}/v/num", IDENTITY.v),
+            )
+
+        def fake_add(
+            target: SpendReferenceR1CS,
+            left_variables: EdwardsPointWitnessVariables,
+            left_witness: Point,
+            right_variables: EdwardsPointWitnessVariables,
+            right_witness: Point,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            return EdwardsPointWitnessVariables(
+                target.alloc_private(f"{label}/u3/num", IDENTITY.u),
+                target.alloc_private(f"{label}/v3/num", IDENTITY.v),
+            )
+
+        with (
+            patch.object(
+                sapling_spend_reference_port,
+                "constrain_spend_fixed_base_mul",
+                side_effect=fake_fixed_base,
+            ),
+            patch.object(
+                sapling_spend_reference_port,
+                "constrain_spend_edwards_point_add",
+                side_effect=fake_add,
+            ),
+        ):
+            result = constrain_spend_value_commitment(system, 0, 0)
+
+        self.assertEqual(
+            [system.public_input_position(variable) for variable in result.input_variables],
+            [5, 6],
+        )
+        self.assertEqual(system.public_input_count, 6)
+
+    def test_note_commitment_reuses_preallocated_source_bits(self) -> None:
+        system = SpendReferenceR1CS()
+        g_d_variables = EdwardsPointWitnessVariables(
+            system.alloc_private("g_d/u", IDENTITY.u),
+            system.alloc_private("g_d/v", IDENTITY.v),
+        )
+        pk_d_variables = EdwardsPointWitnessVariables(
+            system.alloc_private("pk_d/u", IDENTITY.u),
+            system.alloc_private("pk_d/v", IDENTITY.v),
+        )
+        value = 5
+        value_bits = tuple(
+            system.alloc_private(
+                f"value commitment/value/bit {index}/boolean",
+                (value >> index) & 1,
+            )
+            for index in range(64)
+        )
+
+        def allocate_repr(label: str) -> tuple[Variable, ...]:
+            expected = (1,) + (0,) * 254 + (0,)
+            return tuple(
+                system.alloc_private(f"{label}/bit {index}", bit)
+                for index, bit in enumerate(expected)
+            )
+
+        g_d_repr_bits = allocate_repr("representation of g_d")
+        pk_d_repr_bits = allocate_repr("representation of pk_d")
+        variables_before_note = len(system.variables)
+        pedersen_inputs: list[tuple] = []
+
+        def fake_pedersen(
+            target: SpendReferenceR1CS,
+            bits: tuple[Variable, ...],
+            label: str,
+            personalization: tuple[bool, ...] = (),
+        ) -> SimpleNamespace:
+            self.assertEqual(len(target.variables), variables_before_note)
+            pedersen_inputs.append(bits)
+            commitment_variables = EdwardsPointWitnessVariables(
+                target.alloc_private("note hash/u", IDENTITY.u),
+                target.alloc_private("note hash/v", IDENTITY.v),
+            )
+            return SimpleNamespace(
+                variables=commitment_variables,
+                witness=IDENTITY,
+            )
+
+        def fake_scalar_bits(
+            target: SpendReferenceR1CS, scalar: int, width: int, label: str
+        ) -> tuple[Variable, ...]:
+            return tuple(
+                target.alloc_private(f"{label}/bit {index}", 0)
+                for index in range(width)
+            )
+
+        def fake_fixed_base(
+            target: SpendReferenceR1CS,
+            bits: tuple[Variable, ...],
+            base: Point,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            return EdwardsPointWitnessVariables(
+                target.alloc_private(f"{label}/u/num", IDENTITY.u),
+                target.alloc_private(f"{label}/v/num", IDENTITY.v),
+            )
+
+        def fake_add(
+            target: SpendReferenceR1CS,
+            left_variables: EdwardsPointWitnessVariables,
+            left_witness: Point,
+            right_variables: EdwardsPointWitnessVariables,
+            right_witness: Point,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            return EdwardsPointWitnessVariables(
+                target.alloc_private(f"{label}/u3/num", IDENTITY.u),
+                target.alloc_private(f"{label}/v3/num", IDENTITY.v),
+            )
+
+        with (
+            patch.object(
+                sapling_spend_reference_port,
+                "constrain_spend_pedersen_hash",
+                side_effect=fake_pedersen,
+            ),
+            patch.object(
+                sapling_spend_reference_port,
+                "allocate_spend_fixed_base_scalar_bits",
+                side_effect=fake_scalar_bits,
+            ),
+            patch.object(
+                sapling_spend_reference_port,
+                "constrain_spend_fixed_base_mul",
+                side_effect=fake_fixed_base,
+            ),
+            patch.object(
+                sapling_spend_reference_port,
+                "constrain_spend_edwards_point_add",
+                side_effect=fake_add,
+            ),
+        ):
+            result = constrain_spend_note_commitment(
+                system,
+                value,
+                g_d_variables,
+                IDENTITY,
+                pk_d_variables,
+                IDENTITY,
+                0,
+                value_bits=value_bits,
+                g_d_repr_bits=g_d_repr_bits,
+                pk_d_repr_bits=pk_d_repr_bits,
+            )
+
+        self.assertEqual(len(pedersen_inputs), 1)
+        self.assertEqual(
+            pedersen_inputs[0],
+            value_bits + g_d_repr_bits + pk_d_repr_bits,
+        )
+        self.assertEqual(
+            result.note_contents,
+            value_bits + g_d_repr_bits + pk_d_repr_bits,
+        )
+        self.assertEqual(
+            len(system.variables),
+            variables_before_note + 2 + 252 + 2 + 2,
+        )
+
+    def test_source_order_anchor_uses_value_linear_combination_and_late_input(
+        self,
+    ) -> None:
+        system = SpendReferenceR1CS()
+        for name in ("rk/u", "rk/v", "cv/u", "cv/v"):
+            system.alloc_public(name, 0)
+        note_value = 5
+        value_bits = tuple(
+            system.alloc_private(
+                f"value bit {index}", (note_value >> index) & 1
+            )
+            for index in range(64)
+        )
+        root_value = 77
+        root = system.alloc_private("merkle root", root_value)
+        variables_before_anchor = len(system.variables)
+
+        result = sapling_spend_reference_port.constrain_spend_source_order_conditional_anchor(
+            system,
+            root,
+            root_value,
+            value_bits,
+            note_value,
+            root_value,
+        )
+
+        expected_value_num = system.linear_combination(
+            tuple((bit, 1 << index) for index, bit in enumerate(value_bits))
+        )
+        self.assertEqual(result.value_num, expected_value_num)
+        self.assertEqual(
+            result.conditional_anchor_variable.index,
+            variables_before_anchor,
+        )
+        self.assertGreater(
+            result.anchor_variable.index,
+            result.conditional_anchor_variable.index,
+        )
+        self.assertEqual(system.public_input_position(result.anchor_variable), 5)
+        self.assertEqual(
+            [row.label for row in system.constraints],
+            [
+                "conditionally enforce correct root",
+                "anchor/enforce input is correct",
+            ],
+        )
+        self.assertEqual(
+            system.constraints[0].left,
+            root.lc() - result.conditional_anchor_variable.lc(),
+        )
+        self.assertEqual(system.constraints[0].right, expected_value_num)
+        self.assertEqual(
+            system.constraints[1].left, result.anchor_variable.lc()
+        )
+        self.assertEqual(system.constraints[1].output, result.conditional_anchor_variable.lc())
+        self.assertTrue(system.is_satisfied())
+
+    def test_variable_base_multiplication_accepts_bellman_negated_ivk_bit(
+        self,
+    ) -> None:
+        system = SpendReferenceR1CS()
+        generator = sapling_fixed_base_generator("proof_generation_key")
+        point_variables = constrain_spend_edwards_point_witness(
+            system, generator, "negated IVK base"
+        )
+        raw_bit = system.alloc_private("negated IVK raw bit", 0)
+        negated_bit = sapling_spend_reference_port._BellmanNegated(raw_bit)
+
+        result = constrain_spend_edwards_point_mul(
+            system,
+            point_variables,
+            generator,
+            (negated_bit,),
+            "negated IVK multiplication",
+        )
+
+        self.assertEqual(
+            (
+                system.witness_value(result.u),
+                system.witness_value(result.v),
+            ),
+            (generator.u, generator.v),
+        )
+        self.assertTrue(system.is_satisfied())
+
+    def test_source_stage_handoffs_without_full_synthesis(self) -> None:
+        system = SpendReferenceR1CS()
+        witness = SpendReferenceWitness(
+            IDENTITY,
+            0,
+            0,
+            IDENTITY,
+            0,
+            0,
+            0,
+            tuple((0, False) for _ in range(32)),
+            0,
+        )
+        events: list[str] = []
+        observed: dict[str, object] = {}
+
+        def allocate_point(
+            target: SpendReferenceR1CS, point: Point, label: str
+        ) -> EdwardsPointWitnessVariables:
+            return EdwardsPointWitnessVariables(
+                target.alloc_private(f"{label}/u/num", point.u),
+                target.alloc_private(f"{label}/v/num", point.v),
+            )
+
+        def fake_point_witness(
+            target: SpendReferenceR1CS, point: Point, label: str
+        ) -> EdwardsPointWitnessVariables:
+            events.append(f"point:{label}")
+            return allocate_point(target, point, label)
+
+        def fake_non_small_order(
+            target: SpendReferenceR1CS,
+            variables: EdwardsPointWitnessVariables,
+            point: Point,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            events.append(f"small-order:{label}")
+            return variables
+
+        def fake_scalar_bits(
+            target: SpendReferenceR1CS, scalar: int, width: int, label: str
+        ) -> tuple[Variable, ...]:
+            events.append(f"bits:{label}")
+            return tuple(
+                target.alloc_private(
+                    f"{label}/bit {index}/boolean", (scalar >> index) & 1
+                )
+                for index in range(width)
+            )
+
+        def fake_fixed_base(
+            target: SpendReferenceR1CS,
+            bits: tuple,
+            base: Point,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            events.append(f"fixed:{label}")
+            if label == "g^position":
+                observed["position_bits"] = bits
+            variables = allocate_point(target, IDENTITY, label)
+            if label == "g^position":
+                observed["position_variables"] = variables
+            return variables
+
+        def fake_add(
+            target: SpendReferenceR1CS,
+            left_variables: EdwardsPointWitnessVariables,
+            left_witness: Point,
+            right_variables: EdwardsPointWitnessVariables,
+            right_witness: Point,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            events.append(f"add:{label}")
+            if label == "faerie gold prevention":
+                observed["rho_left"] = left_variables
+                observed["rho_right"] = right_variables
+            return allocate_point(target, left_witness + right_witness, label)
+
+        def fake_repr(
+            target: SpendReferenceR1CS,
+            variables: EdwardsPointWitnessVariables,
+            point: Point,
+            label: str,
+        ) -> tuple[Variable, ...]:
+            events.append(f"repr:{label}")
+            values = tuple((point.v >> index) & 1 for index in range(255)) + (
+                point.u & 1,
+            )
+            result = tuple(
+                target.alloc_private(f"{label}/bit {index}", value)
+                for index, value in enumerate(values)
+            )
+            if label == "representation of ak":
+                observed["ak_repr"] = result
+            elif label == "representation of nk":
+                observed["nk_repr"] = result
+            elif label == "representation of g_d":
+                observed["g_d_repr"] = result
+            elif label == "representation of pk_d":
+                observed["pk_d_repr"] = result
+            elif label == "representation of rho":
+                observed["rho_repr"] = result
+            return result
+
+        def fake_ivk(
+            target: SpendReferenceR1CS,
+            ak_bits: tuple[Variable, ...],
+            nk_bits: tuple[Variable, ...],
+        ) -> SimpleNamespace:
+            events.append("ivk")
+            raw_bits = tuple(
+                target.alloc_private(f"ivk bit {index}", index & 1)
+                for index in range(251)
+            )
+            ivk_bits = tuple(
+                sapling_spend_reference_port._BellmanNegated(bit)
+                for bit in raw_bits
+            )
+            observed["ivk_bits"] = ivk_bits
+            return SimpleNamespace(ivk_bits=ivk_bits)
+
+        def fake_variable_base(
+            target: SpendReferenceR1CS,
+            variables: EdwardsPointWitnessVariables,
+            point: Point,
+            bits: tuple,
+            label: str,
+        ) -> EdwardsPointWitnessVariables:
+            events.append(f"variable-base:{label}")
+            observed["pk_d_bits"] = bits
+            return allocate_point(target, IDENTITY, label)
+
+        def fake_value_commitment(
+            target: SpendReferenceR1CS, value: int, randomness: int
+        ) -> SimpleNamespace:
+            events.append("value commitment")
+            value_bits = tuple(
+                target.alloc_private(
+                    f"value commitment/value/bit {index}/boolean",
+                    (value >> index) & 1,
+                )
+                for index in range(64)
+            )
+            cv_variables = allocate_point(
+                target, IDENTITY, "value commitment/commitment point"
+            )
+            inputs = sapling_spend_reference_port._inputize_spend_point(
+                target,
+                cv_variables,
+                IDENTITY,
+                "value commitment/commitment point",
+            )
+            observed["value_bits"] = value_bits
+            return SimpleNamespace(
+                value_bits=value_bits,
+                input_variables=inputs,
+                commitment_variables=cv_variables,
+                commitment_witness=IDENTITY,
+            )
+
+        def fake_note_commitment(
+            target: SpendReferenceR1CS,
+            value: int,
+            g_d_variables: EdwardsPointWitnessVariables,
+            g_d_witness: Point,
+            pk_d_variables: EdwardsPointWitnessVariables,
+            pk_d_witness: Point,
+            rcm: int,
+            **kwargs,
+        ) -> SimpleNamespace:
+            events.append("note commitment")
+            observed["note_value_bits"] = kwargs["value_bits"]
+            observed["note_g_d_bits"] = kwargs["g_d_repr_bits"]
+            observed["note_pk_d_bits"] = kwargs["pk_d_repr_bits"]
+            variables = allocate_point(
+                target, IDENTITY, "randomization of note commitment"
+            )
+            return SimpleNamespace(
+                commitment_variables=variables,
+                commitment_witness=IDENTITY,
+            )
+
+        def fake_merkle(
+            target: SpendReferenceR1CS,
+            leaf: Variable,
+            leaf_value: int,
+            authentication_path: tuple[tuple[int, bool], ...],
+        ) -> SimpleNamespace:
+            events.append("merkle")
+            observed["merkle_leaf"] = leaf
+            observed["merkle_path"] = authentication_path
+            position_bits = tuple(
+                target.alloc_private(f"merkle position bit {index}", 0)
+                for index in range(32)
+            )
+            root = target.alloc_private("merkle root", 0)
+            observed["merkle_position_bits"] = position_bits
+            return SimpleNamespace(
+                leaf_variable=leaf,
+                position_bits=position_bits,
+                root_variable=root,
+                root_value=0,
+            )
+
+        def fake_nullifier_hash(
+            target: SpendReferenceR1CS,
+            nk_bits: tuple[Variable, ...],
+            rho_bits: tuple[Variable, ...],
+        ) -> SimpleNamespace:
+            events.append("nullifier hash")
+            observed["nf_nk_bits"] = nk_bits
+            observed["nf_rho_bits"] = rho_bits
+            digest_bits = tuple(False for _ in range(256))
+            observed["digest_bits"] = digest_bits
+            return SimpleNamespace(digest_bits=digest_bits)
+
+        def fake_multipacking(
+            target: SpendReferenceR1CS, digest_bits: tuple[bool, ...]
+        ) -> SimpleNamespace:
+            events.append("multipacking")
+            observed["packing_bits"] = digest_bits
+            inputs = []
+            for index in range(2):
+                variable = target.alloc_public(
+                    f"pack nullifier/input {index}", 0
+                )
+                target.enforce(
+                    target.linear_combination(()),
+                    target.one,
+                    variable,
+                    f"pack nullifier/packing constraint {index}",
+                )
+                inputs.append(variable)
+            return SimpleNamespace(input_variables=tuple(inputs))
+
+        replacements = {
+            "constrain_spend_edwards_point_witness": fake_point_witness,
+            "constrain_spend_edwards_point_not_small_order": fake_non_small_order,
+            "allocate_spend_fixed_base_scalar_bits": fake_scalar_bits,
+            "constrain_spend_fixed_base_mul": fake_fixed_base,
+            "constrain_spend_edwards_point_add": fake_add,
+            "constrain_spend_edwards_point_repr": fake_repr,
+            "constrain_spend_ivk_blake2s": fake_ivk,
+            "constrain_spend_edwards_point_mul": fake_variable_base,
+            "constrain_spend_value_commitment": fake_value_commitment,
+            "constrain_spend_note_commitment": fake_note_commitment,
+            "constrain_spend_merkle_authentication_path": fake_merkle,
+            "constrain_spend_nullifier_blake2s": fake_nullifier_hash,
+            "constrain_spend_nullifier_multipacking": fake_multipacking,
+        }
+        with ExitStack() as stack:
+            for name, replacement in replacements.items():
+                stack.enter_context(
+                    patch.object(
+                        sapling_spend_reference_port,
+                        name,
+                        side_effect=replacement,
+                    )
+                )
+            assembly = constrain_source_faithful_spend(system, witness)
+
+        self.assertEqual(
+            events,
+            [
+                "point:ak",
+                "small-order:ak not small order",
+                "bits:ar",
+                "fixed:computation of randomization for the signing key",
+                "add:computation of rk",
+                "bits:nsk",
+                "fixed:computation of nk",
+                "repr:representation of ak",
+                "repr:representation of nk",
+                "ivk",
+                "point:witness g_d",
+                "small-order:g_d not small order",
+                "variable-base:compute pk_d",
+                "value commitment",
+                "repr:representation of g_d",
+                "repr:representation of pk_d",
+                "note commitment",
+                "merkle",
+                "fixed:g^position",
+                "add:faerie gold prevention",
+                "repr:representation of rho",
+                "nullifier hash",
+                "multipacking",
+            ],
+        )
+        self.assertIs(observed["pk_d_bits"], observed["ivk_bits"])
+        self.assertIs(observed["note_value_bits"], observed["value_bits"])
+        self.assertIs(observed["note_g_d_bits"], observed["g_d_repr"])
+        self.assertIs(observed["note_pk_d_bits"], observed["pk_d_repr"])
+        self.assertIs(assembly.merkle_path.leaf_variable, observed["merkle_leaf"])
+        self.assertIs(observed["merkle_path"], witness.authentication_path)
+        self.assertIs(
+            observed["position_bits"], assembly.merkle_path.position_bits
+        )
+        self.assertIs(observed["rho_left"], assembly.note_commitment.commitment_variables)
+        self.assertIs(observed["rho_right"], observed["position_variables"])
+        self.assertIs(observed["nf_nk_bits"], assembly.nk_repr_bits)
+        self.assertIs(observed["nf_rho_bits"], assembly.rho_repr_bits)
+        self.assertIs(observed["packing_bits"], observed["digest_bits"])
+        self.assertEqual(
+            [system.public_input_position(variable) for variable in assembly.public_inputs],
+            list(range(1, 8)),
+        )
+        self.assertEqual(
+            [variable.name for variable in assembly.public_inputs],
+            [
+                "rk/u/input variable",
+                "rk/v/input variable",
+                "value commitment/commitment point/u/input variable",
+                "value commitment/commitment point/v/input variable",
+                "anchor/input variable",
+                "pack nullifier/input 0",
+                "pack nullifier/input 1",
+            ],
+        )
+        self.assertLess(system.constraint_count, 20)
 
 
 def _reference_cases() -> dict:
@@ -199,6 +831,326 @@ def _reference_value_commitment_cases() -> dict:
     )
     return json.loads(completed.stdout)
 
+
+def _reference_full_spend_trace() -> dict:
+    persisted_trace = os.environ.get("SAPLING_SPEND_REFERENCE_TRACE")
+    if persisted_trace:
+        return json.loads(Path(persisted_trace).read_text(encoding="utf-8"))
+
+    with tempfile.TemporaryDirectory(prefix="sapling-spend-reference-") as directory:
+        trace_path = Path(directory) / "spend-reference.json"
+        command = [
+            "cargo",
+            "test",
+            "--quiet",
+            "--manifest-path",
+            str(REFERENCE_MANIFEST),
+            "--test",
+            "export_spend",
+            "export_pinned_spend_fixture",
+            "--",
+            "--exact",
+        ]
+        environment = os.environ.copy()
+        environment["CARGO_TERM_COLOR"] = "never"
+        environment["SAPLING_SPEND_EXPORT"] = str(trace_path)
+        subprocess.run(
+            command,
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            env=environment,
+        )
+        return json.loads(trace_path.read_text(encoding="utf-8"))
+
+
+def _full_spend_trace_assignment(record: dict) -> int:
+    assignment_hex = record.get("assignment_hex")
+    if not isinstance(assignment_hex, str):
+        raise TypeError(
+            f"Bellman trace variable {record.get('identity')!r} is unassigned"
+        )
+    return int.from_bytes(bytes.fromhex(assignment_hex), "little")
+
+
+def _full_spend_reference_witness(reference: dict) -> SpendReferenceWitness:
+    auxiliary = {
+        record["annotation"]: record for record in reference["auxiliary_variables"]
+    }
+
+    def assigned(annotation: str) -> int:
+        try:
+            record = auxiliary[annotation]
+        except KeyError as error:
+            raise AssertionError(
+                f"missing Bellman witness annotation {annotation!r}"
+            ) from error
+        return _full_spend_trace_assignment(record)
+
+    def bits(prefix: str, width: int) -> int:
+        return sum(
+            assigned(f"{prefix}/bit {index}/boolean") << index
+            for index in range(width)
+        )
+
+    authentication_path = tuple(
+        (
+            assigned(f"merkle tree hash {level}/path element/num"),
+            bool(assigned(f"merkle tree hash {level}/position bit/boolean")),
+        )
+        for level in range(32)
+    )
+    anchor_record = next(
+        record
+        for record in reference["inputs"]
+        if record["annotation"] == "anchor/input variable"
+    )
+    return SpendReferenceWitness(
+        ak=Point(assigned("ak/u/num"), assigned("ak/v/num")),
+        ar=bits("ar", 252),
+        nsk=bits("nsk", 252),
+        g_d=Point(assigned("witness g_d/u/num"), assigned("witness g_d/v/num")),
+        value=bits("value commitment/value", 64),
+        rcv=bits("value commitment/rcv", 252),
+        rcm=bits("rcm", 252),
+        authentication_path=authentication_path,
+        anchor=_full_spend_trace_assignment(anchor_record),
+    )
+
+
+def _full_spend_reference_failed_rows(
+    reference: dict, replacements: dict[str, int]
+) -> tuple[int, ...]:
+    assignments = {
+        record["identity"]: _full_spend_trace_assignment(record)
+        for record in (*reference["inputs"], *reference["auxiliary_variables"])
+    }
+    assignments.update(
+        {
+            identity: value % SCALAR_MODULUS
+            for identity, value in replacements.items()
+        }
+    )
+
+    def evaluate(terms: list[dict]) -> int:
+        return sum(
+            int.from_bytes(
+                bytes.fromhex(term["coefficient_hex"]), "little"
+            )
+            * assignments[term["identity"]]
+            for term in terms
+        ) % SCALAR_MODULUS
+
+    return tuple(
+        row["index"]
+        for row in reference["constraints"]
+        if evaluate(row["a"]) * evaluate(row["b"]) % SCALAR_MODULUS
+        != evaluate(row["c"])
+    )
+
+
+@unittest.skipUnless(
+    os.environ.get("SAPLING_SPEND_FULL_REFERENCE_ONLY") == "1",
+    "requires one complete pinned Bellman Spend trace",
+)
+class SpendFullCompositionReferenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.reference = _reference_full_spend_trace()
+        if cls.reference["format"] != "bellman-sapling-spend-reference-v1":
+            raise AssertionError("unexpected full Spend reference format")
+        if cls.reference["sapling_crypto_revision"] != (
+            "88a7946b4a3066787776e11f0a502654167e022d"
+        ):
+            raise AssertionError("unexpected pinned Sapling source revision")
+        if cls.reference["bellman_revision"] != (
+            "b726862a4ece8a627e7fea486d77b502a6edbb0b"
+        ):
+            raise AssertionError("unexpected pinned Bellman source revision")
+        if cls.reference["upstream_test_asserted_hash"] != (
+            "d37c738e83df5d9b0bb6495ac96abf21bcb2697477e2c15c2c7916ff7a3b6a89"
+        ):
+            raise AssertionError("unexpected upstream Spend matrix hash")
+        if (
+            cls.reference["observed_test_constraint_system_hash"]
+            != cls.reference["upstream_test_asserted_hash"]
+            or cls.reference["num_inputs_including_one"] != 8
+            or cls.reference["num_auxiliary_variables"] != 98_638
+            or cls.reference["num_constraints"] != 98_777
+            or len(cls.reference["inputs"]) != 8
+            or len(cls.reference["auxiliary_variables"]) != 98_638
+            or len(cls.reference["constraints"]) != 98_777
+            or not cls.reference["satisfied"]
+        ):
+            raise AssertionError("Bellman Spend trace failed metadata validation")
+        cls.witness = _full_spend_reference_witness(cls.reference)
+
+    def test_complete_composition_matches_bellman_trace_and_failure_row(
+        self,
+    ) -> None:
+        system = SpendReferenceR1CS()
+        with patch(
+            __name__ + ".constrain_source_faithful_spend",
+            wraps=constrain_source_faithful_spend,
+        ) as python_syntheses:
+            assembly = constrain_source_faithful_spend(system, self.witness)
+            python_syntheses.assert_called_once()
+
+        reference = self.reference
+        self.assertTrue(system.is_satisfied())
+        self.assertEqual(len(system.constraints), reference["num_constraints"])
+        self.assertEqual(
+            len(system.variables),
+            len(reference["inputs"]) + len(reference["auxiliary_variables"]),
+        )
+        self.assertEqual(system.public_input_count, len(reference["inputs"]) - 1)
+        self.assertEqual(
+            system.witness_value(system.variables[0]),
+            _full_spend_trace_assignment(reference["inputs"][0]),
+        )
+
+        auxiliary_records = reference["auxiliary_variables"]
+        public_records = reference["inputs"][1:]
+        public_positions_by_auxiliary_count = {
+            1: 1_029,
+            2: 1_029,
+            3: 29_075,
+            4: 29_075,
+            5: 76_806,
+            6: 98_638,
+            7: 98_638,
+        }
+        auxiliary_index = 0
+        for event_index, actual in enumerate(system.variables[1:]):
+            if actual.kind == "private":
+                expected = auxiliary_records[auxiliary_index]
+                identity = f"Aux({auxiliary_index})"
+                self.assertEqual(expected["identity"], identity)
+                self.assertEqual(
+                    system.auxiliary_index(actual), auxiliary_index
+                )
+                auxiliary_index += 1
+            else:
+                position = system.public_input_position(actual)
+                assert position is not None
+                expected = public_records[position - 1]
+                identity = f"Input({position})"
+                self.assertEqual(expected["identity"], identity)
+                self.assertEqual(
+                    auxiliary_index,
+                    public_positions_by_auxiliary_count[position],
+                    f"public input allocation boundary at event {event_index}",
+                )
+            self.assertEqual(
+                actual.name, expected["annotation"], f"allocation {event_index}"
+            )
+            self.assertEqual(
+                system.witness_value(actual),
+                _full_spend_trace_assignment(expected),
+                f"assignment {event_index} ({identity})",
+            )
+        self.assertEqual(auxiliary_index, len(auxiliary_records))
+
+        if all(
+            "allocation_event_index" in record
+            for record in (*reference["inputs"], *auxiliary_records)
+        ):
+            expected_events = sorted(
+                (
+                    record
+                    for record in (
+                        *reference["inputs"],
+                        *auxiliary_records,
+                    )
+                    if record["identity"] != "Input(0)"
+                ),
+                key=lambda record: record["allocation_event_index"],
+            )
+            actual_identities = []
+            seen_auxiliaries = 0
+            for actual in system.variables[1:]:
+                if actual.kind == "private":
+                    actual_identities.append(f"Aux({seen_auxiliaries})")
+                    seen_auxiliaries += 1
+                else:
+                    position = system.public_input_position(actual)
+                    assert position is not None
+                    actual_identities.append(f"Input({position})")
+            self.assertEqual(
+                actual_identities,
+                [record["identity"] for record in expected_events],
+            )
+
+        expected_public_inputs = reference["inputs"][1:]
+        self.assertEqual(len(assembly.public_inputs), 7)
+        self.assertEqual(
+            [system.public_input_position(variable) for variable in assembly.public_inputs],
+            list(range(1, 8)),
+        )
+        self.assertEqual(
+            [variable.name for variable in assembly.public_inputs],
+            [record["annotation"] for record in expected_public_inputs],
+        )
+        self.assertEqual(
+            system.public_inputs(),
+            tuple(
+                _full_spend_trace_assignment(record)
+                for record in expected_public_inputs
+            ),
+        )
+
+        self.assertEqual(len(system.constraints), len(reference["constraints"]))
+        for row_index, (actual, expected) in enumerate(
+            zip(system.constraints, reference["constraints"], strict=True)
+        ):
+            if expected["index"] != row_index:
+                raise AssertionError(f"Bellman row index changed at {row_index}")
+            if actual.label != expected["annotation"]:
+                raise AssertionError(f"row label differs at {row_index}")
+            for side, local_terms in (
+                ("a", actual.left.terms),
+                ("b", actual.right.terms),
+                ("c", actual.output.terms),
+            ):
+                expected_terms = tuple(
+                    (int(column), int(coefficient))
+                    for column, coefficient in _canonical_reference_terms_with_inputs(
+                        expected[side], len(expected_public_inputs)
+                    )
+                )
+                actual_terms = _canonical_local_terms_with_inputs(
+                    system, local_terms
+                )
+                if actual_terms != expected_terms:
+                    raise AssertionError(
+                        f"ordered {side.upper()} expression differs at row {row_index}"
+                    )
+
+        self.assertEqual(
+            system.matrix_fingerprint(),
+            _reference_matrix_fingerprint_with_inputs(
+                {
+                    "inputs": expected_public_inputs,
+                    "variables": reference["auxiliary_variables"],
+                    "constraints": reference["constraints"],
+                }
+            ),
+        )
+
+        anchor_variable = assembly.conditional_anchor.anchor_variable
+        anchor_value = system.witness_value(anchor_variable)
+        self.assertIsNotNone(anchor_value)
+        replacement = (int(anchor_value) + 1) % SCALAR_MODULUS
+        local_failures = _local_failed_rows_with_assignments(
+            system, {anchor_variable.index: replacement}
+        )
+        reference_failures = _full_spend_reference_failed_rows(
+            reference, {"Input(5)": replacement}
+        )
+        self.assertEqual(local_failures, reference_failures)
+        self.assertEqual(len(local_failures), 1)
 
 def _reference_index(identity: str) -> int:
     if identity == "Input(0)":

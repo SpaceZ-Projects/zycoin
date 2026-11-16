@@ -60,6 +60,14 @@ remain **Unverified**; `phase1radix2m17` and the exact ceremony-era Spend
 circuit/setup source are unavailable. No Spend proof was generated and Spend
 proving remains gated.
 
+**Phase 9.21.40 source-faithful reference-port result:** the isolated test-only
+Python Spend composition matches the pinned Bellman trace for one deterministic
+witness, including all 98,777 ordered rows, 98,646 columns, assignments, labels,
+and public-input positions. This is not the production `constrain_sapling_spend`
+matrix and does not change the QAP or official-parameter findings above.
+Parameter-to-circuit binding, ceremony validity, and production Spend proving
+remain **Unverified**.
+
 The Phase 9.21.38 full-vector check independently accumulated every official
 IC/H/L/A/B_G1/B_G2 section using ZyCoin's complete MSM and a separate Bellman
 0.15 loader. IC, L, A, B_G1, and B_G2 matched; H differed for the deterministic

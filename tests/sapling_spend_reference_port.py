@@ -22,7 +22,7 @@ from src.sapling_gadgets import sapling_fixed_base_generator
 from tests.bellman_blake2s_reference import _Negated as _BellmanNegated
 from tests.bellman_blake2s_reference import constrain_bellman_blake2s_reference
 
-SpendBoolean: TypeAlias = Variable | bool
+SpendBoolean: TypeAlias = Variable | bool | _NegatedBit | _BellmanNegated
 SpendCircuitBit: TypeAlias = CircuitBit | _BellmanNegated
 
 _FIXED_BASE_WINDOW_BITS = 3
@@ -131,6 +131,49 @@ class NullifierMultipackingResult:
     input_variables: tuple[Variable, ...]
 
 
+@dataclass(frozen=True)
+class SpendReferenceWitness:
+    ak: Point
+    ar: int
+    nsk: int
+    g_d: Point
+    value: int
+    rcv: int
+    rcm: int
+    authentication_path: tuple[tuple[int, bool], ...]
+    anchor: int
+
+
+@dataclass(frozen=True)
+class SourceOrderedConditionalAnchorResult:
+    root_variable: Variable
+    value_num: LinearCombination
+    conditional_anchor_variable: Variable
+    anchor_variable: Variable
+    anchor_value: int
+
+
+@dataclass(frozen=True)
+class SpendReferenceAssembly:
+    public_inputs: tuple[Variable, ...]
+    randomized_key: EdwardsPointWitnessVariables
+    nullifier_key: EdwardsPointWitnessVariables
+    ak_repr_bits: tuple[Variable, ...]
+    nk_repr_bits: tuple[Variable, ...]
+    ivk_bits: tuple[SpendCircuitBit, ...]
+    diversifier_base: EdwardsPointWitnessVariables
+    transmission_key: EdwardsPointWitnessVariables
+    transmission_key_repr_bits: tuple[Variable, ...]
+    value_commitment: ValueCommitmentResult
+    note_commitment: NoteCommitmentResult
+    merkle_path: MerkleAuthenticationResult
+    conditional_anchor: SourceOrderedConditionalAnchorResult
+    rho: EdwardsPointWitnessVariables
+    rho_repr_bits: tuple[Variable, ...]
+    nullifier_hash: NullifierBlake2sResult
+    nullifier_multipacking: NullifierMultipackingResult
+
+
 class SpendReferenceR1CS(R1CS):
     """Test-only R1CS adapter preserving Bellman's late inputization order."""
 
@@ -139,30 +182,36 @@ class SpendReferenceR1CS(R1CS):
     def __init__(self) -> None:
         super().__init__()
         self._temporal_public_variables: list[Variable] = []
+        self._public_positions_by_index: dict[int, int] = {}
+        self._auxiliary_indices_by_variable_index: dict[int, int] = {}
+        self._auxiliary_count = 0
 
     def alloc_public(self, name: str, value: int | None) -> Variable:
         variable = self._allocate("public", name, value)
         self._public_input_count += 1
         self._temporal_public_variables.append(variable)
+        self._public_positions_by_index[variable.index] = self._public_input_count
+        return variable
+
+    def alloc_private(self, name: str, value: int | None) -> Variable:
+        variable = super().alloc_private(name, value)
+        self._auxiliary_indices_by_variable_index[variable.index] = (
+            self._auxiliary_count
+        )
+        self._auxiliary_count += 1
         return variable
 
     def public_input_position(self, variable: Variable) -> int | None:
         self.require_owned(variable)
         if variable.kind != "public":
             return None
-        return self._temporal_public_variables.index(variable) + 1
+        return self._public_positions_by_index[variable.index]
 
     def auxiliary_index(self, variable: Variable) -> int:
         self.require_owned(variable)
         if variable.kind != "private":
             raise R1CSError("variable is not an auxiliary variable")
-        return (
-            sum(
-                item.kind == "private"
-                for item in self._variables[1 : variable.index + 1]
-            )
-            - 1
-        )
+        return self._auxiliary_indices_by_variable_index[variable.index]
 
     def public_inputs(self) -> tuple[int, ...]:
         values = tuple(
@@ -178,15 +227,13 @@ class SpendReferenceR1CS(R1CS):
             return 0
         variable = self._variables[variable_index]
         if variable.kind == "public":
-            position = self.public_input_position(variable)
-            assert position is not None
-            return position
+            return self._public_positions_by_index[variable_index]
         if variable.kind == "private":
-            private_ordinal = sum(
-                item.kind == "private"
-                for item in self._variables[1 : variable_index + 1]
+            return (
+                self._public_input_count
+                + self._auxiliary_indices_by_variable_index[variable_index]
+                + 1
             )
-            return self._public_input_count + private_ordinal
         raise R1CSError("unexpected variable kind in Spend reference R1CS")
 
     def serialize_matrix(self) -> bytes:
@@ -845,6 +892,67 @@ def constrain_spend_conditional_anchor(
     )
 
 
+def constrain_spend_source_order_conditional_anchor(
+    system: SpendReferenceR1CS,
+    root_variable: Variable,
+    root_value: int,
+    value_bits: tuple[Variable, ...] | list[Variable],
+    note_value: int,
+    anchor_value: int,
+) -> SourceOrderedConditionalAnchorResult:
+    """Apply the full Spend anchor relation, including late inputization."""
+    if not isinstance(system, SpendReferenceR1CS):
+        raise R1CSError("source-order anchor requires the Spend reference R1CS")
+    if not isinstance(root_variable, Variable):
+        raise TypeError("Merkle root must be an allocated field variable")
+    if (
+        type(root_value) is not int
+        or not 0 <= root_value < SCALAR_MODULUS
+        or type(note_value) is not int
+        or not 0 <= note_value < 1 << 64
+        or type(anchor_value) is not int
+        or not 0 <= anchor_value < SCALAR_MODULUS
+    ):
+        raise R1CSError("conditional-anchor witnesses are outside their ranges")
+    system.require_owned(root_variable)
+    if root_variable.kind != "private":
+        raise R1CSError("Merkle root must be a private variable")
+    if system.witness_value(root_variable) != root_value:
+        raise R1CSError("Merkle root witness does not match its assigned variable")
+
+    expected_value_bits = tuple((note_value >> index) & 1 for index in range(64))
+    checked_value_bits = _reuse_spend_bits(
+        system, value_bits, expected_value_bits, "note value"
+    )
+    value_num = system.linear_combination(
+        tuple((bit, 1 << index) for index, bit in enumerate(checked_value_bits))
+    )
+
+    conditional_anchor = system.alloc_private(
+        "conditional anchor/num", anchor_value
+    )
+    system.enforce(
+        root_variable.lc() - conditional_anchor.lc(),
+        value_num,
+        0,
+        "conditionally enforce correct root",
+    )
+    anchor_variable = system.alloc_public("anchor/input variable", anchor_value)
+    system.enforce(
+        anchor_variable.lc(),
+        system.one.lc(),
+        conditional_anchor.lc(),
+        "anchor/enforce input is correct",
+    )
+    return SourceOrderedConditionalAnchorResult(
+        root_variable,
+        value_num,
+        conditional_anchor,
+        anchor_variable,
+        anchor_value,
+    )
+
+
 def constrain_spend_ivk_blake2s(
     system: R1CS,
     ak_repr_bits: tuple[Variable, ...] | list[Variable],
@@ -1023,6 +1131,10 @@ def constrain_spend_note_commitment(
     pk_d_variables: EdwardsPointWitnessVariables,
     pk_d_witness: Point,
     rcm: int,
+    *,
+    value_bits: tuple[Variable, ...] | list[Variable] | None = None,
+    g_d_repr_bits: tuple[Variable, ...] | list[Variable] | None = None,
+    pk_d_repr_bits: tuple[Variable, ...] | list[Variable] | None = None,
 ) -> NoteCommitmentResult:
     """Port Spend's note-content hash and commitment-randomness addition."""
     if not isinstance(system, R1CS):
@@ -1034,26 +1146,41 @@ def constrain_spend_note_commitment(
     _validate_point_assignment(system, g_d_variables, g_d_witness)
     _validate_point_assignment(system, pk_d_variables, pk_d_witness)
 
-    value_bit_variables: list[Variable] = []
-    for index in range(64):
-        bit = system.alloc_private(
-            f"value commitment/value/bit {index}/boolean", (value >> index) & 1
-        )
-        system.enforce(
-            1 - bit.lc(),
-            bit,
-            0,
-            f"value commitment/value/bit {index}/boolean constraint",
-        )
-        value_bit_variables.append(bit)
-    value_bits = tuple(value_bit_variables)
-
-    g_d_bits = constrain_spend_edwards_point_repr(
-        system, g_d_variables, g_d_witness, "representation of g_d"
+    expected_value_bits = tuple((value >> index) & 1 for index in range(64))
+    value_bits = _reuse_or_allocate_spend_bits(
+        system,
+        value_bits,
+        expected_value_bits,
+        "value commitment/value",
     )
-    pk_d_bits = constrain_spend_edwards_point_repr(
-        system, pk_d_variables, pk_d_witness, "representation of pk_d"
-    )
+    expected_g_d_bits = tuple(
+        (g_d_witness.v >> index) & 1 for index in range(255)
+    ) + (g_d_witness.u & 1,)
+    if g_d_repr_bits is None:
+        g_d_bits = constrain_spend_edwards_point_repr(
+            system, g_d_variables, g_d_witness, "representation of g_d"
+        )
+    else:
+        g_d_bits = _reuse_spend_bits(
+            system,
+            g_d_repr_bits,
+            expected_g_d_bits,
+            "representation of g_d",
+        )
+    expected_pk_d_bits = tuple(
+        (pk_d_witness.v >> index) & 1 for index in range(255)
+    ) + (pk_d_witness.u & 1,)
+    if pk_d_repr_bits is None:
+        pk_d_bits = constrain_spend_edwards_point_repr(
+            system, pk_d_variables, pk_d_witness, "representation of pk_d"
+        )
+    else:
+        pk_d_bits = _reuse_spend_bits(
+            system,
+            pk_d_repr_bits,
+            expected_pk_d_bits,
+            "representation of pk_d",
+        )
     note_contents = value_bits + g_d_bits + pk_d_bits
     if len(note_contents) != 64 + 256 + 256:
         raise R1CSError("note commitment input must contain exactly 576 bits")
@@ -1096,6 +1223,45 @@ def constrain_spend_note_commitment(
     )
 
 
+def _reuse_or_allocate_spend_bits(
+    system: R1CS,
+    bits: tuple[Variable, ...] | list[Variable] | None,
+    expected_values: tuple[int, ...],
+    label: str,
+) -> tuple[Variable, ...]:
+    if bits is not None:
+        return _reuse_spend_bits(system, bits, expected_values, label)
+
+    allocated: list[Variable] = []
+    for index, value in enumerate(expected_values):
+        bit = system.alloc_private(f"{label}/bit {index}/boolean", value)
+        system.enforce(
+            1 - bit.lc(),
+            bit,
+            0,
+            f"{label}/bit {index}/boolean constraint",
+        )
+        allocated.append(bit)
+    return tuple(allocated)
+
+
+def _reuse_spend_bits(
+    system: R1CS,
+    bits: tuple[Variable, ...] | list[Variable],
+    expected_values: tuple[int, ...],
+    label: str,
+) -> tuple[Variable, ...]:
+    if not isinstance(bits, (tuple, list)) or len(bits) != len(expected_values):
+        raise R1CSError(f"{label} must contain exactly {len(expected_values)} bits")
+    for index, (bit, expected) in enumerate(zip(bits, expected_values, strict=True)):
+        if not isinstance(bit, Variable):
+            raise TypeError(f"{label} bit {index} must be an allocated variable")
+        system.require_owned(bit)
+        if system.witness_value(bit) != expected:
+            raise R1CSError(f"{label} bit {index} does not match its witness")
+    return tuple(bits)
+
+
 def constrain_spend_value_commitment(
     system: R1CS,
     value: int,
@@ -1116,8 +1282,6 @@ def constrain_spend_value_commitment(
         raise R1CSError("value commitment randomness is missing or out of range")
     if not isinstance(label, str) or not label:
         raise R1CSError("label must be a non-empty string")
-    if not system.is_fresh:
-        raise R1CSError("isolated value commitment requires a fresh system")
 
     value_bits = allocate_spend_fixed_base_scalar_bits(
         system, value, 64, f"{label}/value"
@@ -1677,8 +1841,12 @@ def constrain_spend_fixed_base_mul(
             value = system.witness_value(bit)
             if value not in (0, 1):
                 raise R1CSError("fixed-base selector must be an assigned boolean")
+        elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+            system.require_owned(bit.variable)
+            if system.witness_value(bit.variable) not in (0, 1):
+                raise R1CSError("fixed-base selector must be an assigned boolean")
         elif type(bit) is not bool:
-            raise TypeError("fixed-base selectors must be variables or booleans")
+            raise TypeError("fixed-base selectors must be circuit booleans")
 
     tables = _spend_fixed_base_tables_cached(base.u, base.v)
     window_count = (len(bits_le) + _FIXED_BASE_WINDOW_BITS - 1) // _FIXED_BASE_WINDOW_BITS
@@ -1730,6 +1898,11 @@ def _spend_boolean_value(system: R1CS, bit: SpendBoolean) -> bool:
         if value not in (0, 1):
             raise R1CSError("fixed-base selector must be an assigned boolean")
         return bool(value)
+    if isinstance(bit, (_NegatedBit, _BellmanNegated)):
+        value = system.witness_value(bit.variable)
+        if value not in (0, 1):
+            raise R1CSError("fixed-base selector must be an assigned boolean")
+        return not bool(value)
     return bit
 
 
@@ -1737,6 +1910,9 @@ def _spend_boolean_lc(system: R1CS, bit: SpendBoolean):
     if isinstance(bit, Variable):
         system.require_owned(bit)
         return bit.lc()
+    if isinstance(bit, (_NegatedBit, _BellmanNegated)):
+        system.require_owned(bit.variable)
+        return 1 - bit.variable.lc()
     return system.linear_combination((), int(bit))
 
 
@@ -1798,22 +1974,50 @@ def _constrain_spend_lookup3_xy(
 def _spend_boolean_and(
     system: R1CS, left: SpendBoolean, right: SpendBoolean, label: str
 ) -> SpendBoolean:
-    if left is False or right is False:
-        return False
-    if left is True:
-        return right
-    if right is True:
-        return left
-    if not isinstance(left, Variable) or not isinstance(right, Variable):
-        raise R1CSError("invalid fixed-base selector")
-    left_value = system.witness_value(left)
-    right_value = system.witness_value(right)
-    if left_value not in (0, 1) or right_value not in (0, 1):
-        raise R1CSError("fixed-base selector must be an assigned boolean")
+    if type(left) is bool:
+        return right if left else False
+    if type(right) is bool:
+        return left if right else False
+
+    left_value = _spend_boolean_value(system, left)
+    right_value = _spend_boolean_value(system, right)
+    left_negated = isinstance(left, (_NegatedBit, _BellmanNegated))
+    right_negated = isinstance(right, (_NegatedBit, _BellmanNegated))
+    if left_negated and right_negated:
+        left_variable = left.variable
+        right_variable = right.variable
+        result_label = "nor result"
+        constraint_label = "nor constraint"
+        left_lc = 1 - left_variable.lc()
+        right_lc = 1 - right_variable.lc()
+    elif left_negated or right_negated:
+        negated = left if left_negated else right
+        positive = right if left_negated else left
+        left_variable = positive
+        right_variable = negated.variable
+        result_label = "and not result"
+        constraint_label = "and not constraint"
+        left_lc = left_variable.lc()
+        right_lc = 1 - right_variable.lc()
+    else:
+        left_variable = left
+        right_variable = right
+        result_label = "and result"
+        constraint_label = "and constraint"
+        left_lc = left_variable.lc()
+        right_lc = right_variable.lc()
+
+    system.require_owned(left_variable)
+    system.require_owned(right_variable)
     result = system.alloc_private(
-        f"{label}/and result", left_value * right_value
+        f"{label}/{result_label}", int(left_value and right_value)
     )
-    system.enforce(left, right, result, f"{label}/and constraint")
+    system.enforce(
+        left_lc,
+        right_lc,
+        result,
+        f"{label}/{constraint_label}",
+    )
     return result
 
 
@@ -1836,6 +2040,12 @@ def constrain_spend_edwards_point_mul(
         if isinstance(bit, Variable):
             system.require_owned(bit)
             if system.witness_value(bit) not in (0, 1):
+                raise R1CSError(
+                    "variable-base scalar bits must be assigned booleans"
+                )
+        elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+            system.require_owned(bit.variable)
+            if system.witness_value(bit.variable) not in (0, 1):
                 raise R1CSError(
                     "variable-base scalar bits must be assigned booleans"
                 )
@@ -1919,11 +2129,7 @@ def _constrain_spend_edwards_point_select(
     )
 
     v_prime = system.alloc_private(f"{label}/v'/num", result_witness.v)
-    not_condition = (
-        1 - condition.lc()
-        if isinstance(condition, Variable)
-        else int(not condition)
-    )
+    not_condition = 1 - _spend_boolean_lc(system, condition)
     system.enforce(
         point_variables.v,
         _spend_boolean_lc(system, condition),
@@ -1931,3 +2137,244 @@ def _constrain_spend_edwards_point_select(
         f"{label}/v' computation",
     )
     return EdwardsPointWitnessVariables(u_prime, v_prime)
+
+
+def _validate_spend_reference_witness(witness: SpendReferenceWitness) -> None:
+    if not isinstance(witness, SpendReferenceWitness):
+        raise TypeError("witness must be a SpendReferenceWitness")
+    if not isinstance(witness.ak, Point) or not isinstance(witness.g_d, Point):
+        raise TypeError("ak and g_d witnesses must be Jubjub points")
+    for name in ("ar", "nsk", "rcv", "rcm"):
+        value = getattr(witness, name)
+        if type(value) is not int or not 0 <= value < _JUBJUB_SCALAR_MODULUS:
+            raise R1CSError(f"{name} witness is outside the Jubjub scalar field")
+    if type(witness.value) is not int or not 0 <= witness.value < 1 << 64:
+        raise R1CSError("value witness must be an unsigned 64-bit integer")
+    if not isinstance(witness.authentication_path, tuple) or len(
+        witness.authentication_path
+    ) != 32:
+        raise R1CSError("Spend authentication path must contain 32 entries")
+    for level, entry in enumerate(witness.authentication_path):
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            raise TypeError("authentication path entries must be (sibling, direction)")
+        sibling, direction = entry
+        if type(sibling) is not int or not 0 <= sibling < SCALAR_MODULUS:
+            raise R1CSError(f"authentication path sibling {level} is out of range")
+        if type(direction) is not bool:
+            raise TypeError(f"authentication path direction {level} must be boolean")
+    if type(witness.anchor) is not int or not 0 <= witness.anchor < SCALAR_MODULUS:
+        raise R1CSError("anchor witness is outside the circuit field")
+
+
+def _spend_point_witness(
+    system: R1CS, variables: EdwardsPointWitnessVariables
+) -> Point:
+    u = system.witness_value(variables.u)
+    v = system.witness_value(variables.v)
+    if u is None or v is None:
+        raise R1CSError("Spend point witness is unassigned")
+    return Point(u, v)
+
+
+def _inputize_spend_point(
+    system: SpendReferenceR1CS,
+    variables: EdwardsPointWitnessVariables,
+    witness: Point,
+    label: str,
+) -> tuple[Variable, Variable]:
+    _validate_point_assignment(system, variables, witness)
+    input_u = system.alloc_public(f"{label}/u/input variable", witness.u)
+    system.enforce(
+        input_u,
+        system.one,
+        variables.u,
+        f"{label}/u/enforce input is correct",
+    )
+    input_v = system.alloc_public(f"{label}/v/input variable", witness.v)
+    system.enforce(
+        input_v,
+        system.one,
+        variables.v,
+        f"{label}/v/enforce input is correct",
+    )
+    return input_u, input_v
+
+
+def constrain_source_faithful_spend(
+    system: SpendReferenceR1CS,
+    witness: SpendReferenceWitness,
+) -> SpendReferenceAssembly:
+    """Compose the pinned Spend stages in their upstream synthesis order."""
+    if not isinstance(system, SpendReferenceR1CS):
+        raise TypeError("complete Spend reference synthesis requires SpendReferenceR1CS")
+    if not system.is_fresh:
+        raise R1CSError("complete Spend reference synthesis requires a fresh system")
+    _validate_spend_reference_witness(witness)
+
+    ak_variables = constrain_spend_edwards_point_witness(system, witness.ak, "ak")
+    constrain_spend_edwards_point_not_small_order(
+        system, ak_variables, witness.ak, "ak not small order"
+    )
+
+    ar_bits = allocate_spend_fixed_base_scalar_bits(
+        system, witness.ar, 252, "ar"
+    )
+    ar_point_variables = constrain_spend_fixed_base_mul(
+        system,
+        ar_bits,
+        sapling_fixed_base_generator("spending_key"),
+        "computation of randomization for the signing key",
+    )
+    ar_point_witness = _spend_point_witness(system, ar_point_variables)
+    randomized_key_variables = constrain_spend_edwards_point_add(
+        system,
+        ak_variables,
+        witness.ak,
+        ar_point_variables,
+        ar_point_witness,
+        "computation of rk",
+    )
+    randomized_key_witness = _spend_point_witness(system, randomized_key_variables)
+    randomized_key_inputs = _inputize_spend_point(
+        system, randomized_key_variables, randomized_key_witness, "rk"
+    )
+
+    nsk_bits = allocate_spend_fixed_base_scalar_bits(
+        system, witness.nsk, 252, "nsk"
+    )
+    nullifier_key_variables = constrain_spend_fixed_base_mul(
+        system,
+        nsk_bits,
+        sapling_fixed_base_generator("proof_generation_key"),
+        "computation of nk",
+    )
+    ak_repr_bits = constrain_spend_edwards_point_repr(
+        system, ak_variables, witness.ak, "representation of ak"
+    )
+    nullifier_key_witness = _spend_point_witness(system, nullifier_key_variables)
+    nk_repr_bits = constrain_spend_edwards_point_repr(
+        system,
+        nullifier_key_variables,
+        nullifier_key_witness,
+        "representation of nk",
+    )
+    ivk = constrain_spend_ivk_blake2s(system, ak_repr_bits, nk_repr_bits)
+
+    diversifier_base_variables = constrain_spend_edwards_point_witness(
+        system, witness.g_d, "witness g_d"
+    )
+    constrain_spend_edwards_point_not_small_order(
+        system,
+        diversifier_base_variables,
+        witness.g_d,
+        "g_d not small order",
+    )
+    transmission_key_variables = constrain_spend_edwards_point_mul(
+        system,
+        diversifier_base_variables,
+        witness.g_d,
+        ivk.ivk_bits,
+        "compute pk_d",
+    )
+    transmission_key_witness = _spend_point_witness(
+        system, transmission_key_variables
+    )
+
+    value_commitment = constrain_spend_value_commitment(
+        system, witness.value, witness.rcv
+    )
+    g_d_repr_bits = constrain_spend_edwards_point_repr(
+        system,
+        diversifier_base_variables,
+        witness.g_d,
+        "representation of g_d",
+    )
+    transmission_key_repr_bits = constrain_spend_edwards_point_repr(
+        system,
+        transmission_key_variables,
+        transmission_key_witness,
+        "representation of pk_d",
+    )
+    note_commitment = constrain_spend_note_commitment(
+        system,
+        witness.value,
+        diversifier_base_variables,
+        witness.g_d,
+        transmission_key_variables,
+        transmission_key_witness,
+        witness.rcm,
+        value_bits=value_commitment.value_bits,
+        g_d_repr_bits=g_d_repr_bits,
+        pk_d_repr_bits=transmission_key_repr_bits,
+    )
+
+    merkle_path = constrain_spend_merkle_authentication_path(
+        system,
+        note_commitment.commitment_variables.u,
+        note_commitment.commitment_witness.u,
+        witness.authentication_path,
+    )
+    conditional_anchor = constrain_spend_source_order_conditional_anchor(
+        system,
+        merkle_path.root_variable,
+        merkle_path.root_value,
+        value_commitment.value_bits,
+        witness.value,
+        witness.anchor,
+    )
+
+    position_variables = constrain_spend_fixed_base_mul(
+        system,
+        merkle_path.position_bits,
+        sapling_fixed_base_generator("nullifier_position"),
+        "g^position",
+    )
+    position_witness = _spend_point_witness(system, position_variables)
+    rho_variables = constrain_spend_edwards_point_add(
+        system,
+        note_commitment.commitment_variables,
+        note_commitment.commitment_witness,
+        position_variables,
+        position_witness,
+        "faerie gold prevention",
+    )
+    rho_witness = _spend_point_witness(system, rho_variables)
+    rho_repr_bits = constrain_spend_edwards_point_repr(
+        system, rho_variables, rho_witness, "representation of rho"
+    )
+    nullifier_hash = constrain_spend_nullifier_blake2s(
+        system, nk_repr_bits, rho_repr_bits
+    )
+    nullifier_multipacking = constrain_spend_nullifier_multipacking(
+        system, nullifier_hash.digest_bits
+    )
+
+    public_inputs = (
+        *randomized_key_inputs,
+        *value_commitment.input_variables,
+        conditional_anchor.anchor_variable,
+        *nullifier_multipacking.input_variables,
+    )
+    if len(public_inputs) != 7 or tuple(
+        system.public_input_position(variable) for variable in public_inputs
+    ) != tuple(range(1, 8)):
+        raise R1CSError("source-ordered Spend inputs did not occupy positions 1 through 7")
+    return SpendReferenceAssembly(
+        public_inputs,
+        randomized_key_variables,
+        nullifier_key_variables,
+        ak_repr_bits,
+        nk_repr_bits,
+        ivk.ivk_bits,
+        diversifier_base_variables,
+        transmission_key_variables,
+        transmission_key_repr_bits,
+        value_commitment,
+        note_commitment,
+        merkle_path,
+        conditional_anchor,
+        rho_variables,
+        rho_repr_bits,
+        nullifier_hash,
+        nullifier_multipacking,
+    )

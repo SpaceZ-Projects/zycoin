@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::fs;
 
-use bellman::gadgets::test::TestConstraintSystem;
 use bellman::{Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
+use blake2s_simd::{Params as Blake2sParams, State as Blake2sState};
 use bls12_381::Scalar;
+use byteorder::{BigEndian, ByteOrder};
 use ff::{Field, PrimeField, PrimeFieldBits};
 use group::{Curve, Group, GroupEncoding};
 use jubjub;
@@ -374,6 +376,52 @@ impl TraceConstraintSystem {
             matches!((a, b, c), (Some(a), Some(b), Some(c)) if a * b == c)
         })
     }
+
+    fn hash(&self) -> String {
+        let mut hasher = Blake2sParams::new().hash_length(32).to_state();
+        for count in [
+            self.inputs.len(),
+            self.auxiliary_variables.len(),
+            self.constraints.len(),
+        ] {
+            hasher.update(&(count as u64).to_be_bytes());
+        }
+
+        for row in &self.constraints {
+            hash_terms(&mut hasher, &row.a);
+            hash_terms(&mut hasher, &row.b);
+            hash_terms(&mut hasher, &row.c);
+        }
+
+        hasher.finalize().to_hex().to_string()
+    }
+}
+
+fn hash_terms(hasher: &mut Blake2sState, terms: &[Term]) {
+    let mut canonical_terms = BTreeMap::<(u8, usize), Scalar>::new();
+    for term in terms {
+        let (kind, index) = match parse_identity(&term.identity) {
+            Index::Input(index) => (0, index),
+            Index::Aux(index) => (1, index),
+        };
+        let coefficient_bytes = hex_to_bytes(&term.coefficient_hex);
+        let coefficient =
+            Option::<Scalar>::from(Scalar::from_repr(coefficient_bytes.try_into().unwrap()))
+                .expect("exported linear-combination coefficients are canonical");
+        *canonical_terms.entry((kind, index)).or_insert(Scalar::ZERO) += coefficient;
+    }
+    canonical_terms.retain(|_, coefficient| *coefficient != Scalar::ZERO);
+
+    hasher.update(&(canonical_terms.len() as u64).to_be_bytes());
+    for ((kind, index), coefficient) in canonical_terms {
+        let mut encoded = [0; 41];
+        encoded[0] = if kind == 0 { b'I' } else { b'A' };
+        BigEndian::write_u64(&mut encoded[1..9], index as u64);
+        let coefficient = coefficient.to_repr();
+        encoded[9..].copy_from_slice(coefficient.as_ref());
+        encoded[9..].reverse();
+        hasher.update(&encoded);
+    }
 }
 
 fn row_value(system: &TraceConstraintSystem, terms: &[Term]) -> Option<Scalar> {
@@ -589,20 +637,14 @@ fn export_pinned_spend_fixture() {
         anchor: Some(current),
     };
 
-    let mut test_system = TestConstraintSystem::<Scalar>::new();
-    spend.clone().synthesize(&mut test_system).unwrap();
-    assert!(test_system.is_satisfied());
-    assert_eq!(test_system.num_constraints(), 98_777);
-    assert_eq!(test_system.num_inputs(), 8);
-    let test_hash = test_system.hash();
-    assert_eq!(test_hash, EXPECTED_UPSTREAM_TEST_HASH);
-
     let mut trace = TraceConstraintSystem::new();
     spend.synthesize(&mut trace).unwrap();
     assert!(trace.rows_satisfied());
     assert_eq!(trace.constraints.len(), 98_777);
     assert_eq!(trace.inputs.len(), 8);
     assert_eq!(trace.auxiliary_variables.len(), 98_638);
+    let test_hash = trace.hash();
+    assert_eq!(test_hash, EXPECTED_UPSTREAM_TEST_HASH);
     let mut allocation_event_indices: Vec<_> = trace
         .inputs
         .iter()
