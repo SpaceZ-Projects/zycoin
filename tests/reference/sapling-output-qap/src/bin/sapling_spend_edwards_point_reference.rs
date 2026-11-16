@@ -292,6 +292,42 @@ struct IvkBlake2sVector {
 }
 
 #[derive(Serialize)]
+struct NullifierBlake2sExport {
+    format: &'static str,
+    sapling_crypto_revision: &'static str,
+    bellman_revision: &'static str,
+    bellman_crate_version: &'static str,
+    full_synthesis_count: usize,
+    cases: Vec<NullifierBlake2sCase>,
+    vectors: Vec<NullifierBlake2sVector>,
+}
+
+#[derive(Serialize)]
+struct NullifierBlake2sCase {
+    name: String,
+    nk_u: String,
+    nk_v: String,
+    rho_u: String,
+    rho_v: String,
+    digest_bits: Vec<DigestBitRecord>,
+    satisfied: bool,
+    inputs: Vec<VariableRecord>,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct NullifierBlake2sVector {
+    name: String,
+    nk_u: Option<String>,
+    nk_v: Option<String>,
+    rho_u: Option<String>,
+    rho_v: Option<String>,
+    raw_half_boundary: bool,
+    digest_bits: Vec<bool>,
+}
+
+#[derive(Serialize)]
 struct DigestBitRecord {
     identity: String,
     value: bool,
@@ -1173,6 +1209,51 @@ fn ivk_digest_vector(
     }
 }
 
+fn nullifier_digest_vector(
+    name: &str,
+    nk_point: Option<ExtendedPoint>,
+    rho_point: Option<ExtendedPoint>,
+    raw_half_boundary: bool,
+) -> NullifierBlake2sVector {
+    let preimage_bits = if raw_half_boundary {
+        (0..512).map(|index| index >= 256).collect::<Vec<_>>()
+    } else {
+        point_repr_bits(nk_point.expect("point vector requires nk"))
+            .into_iter()
+            .chain(point_repr_bits(
+                rho_point.expect("point vector requires rho"),
+            ))
+            .collect()
+    };
+    let preimage = preimage_bits
+        .chunks_exact(8)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u8, |byte, (index, bit)| byte | (u8::from(*bit) << index))
+        })
+        .collect::<Vec<_>>();
+    let digest = blake2s_simd::Params::new()
+        .hash_length(32)
+        .personal(sapling_crypto::constants::PRF_NF_PERSONALIZATION)
+        .hash(&preimage);
+    let digest_bits = digest
+        .as_bytes()
+        .iter()
+        .flat_map(|byte| (0..8).map(move |bit| (byte >> bit) & 1 == 1))
+        .collect();
+    NullifierBlake2sVector {
+        name: name.to_owned(),
+        nk_u: nk_point.map(|point| scalar_decimal(point.to_affine().get_u())),
+        nk_v: nk_point.map(|point| scalar_decimal(point.to_affine().get_v())),
+        rho_u: rho_point.map(|point| scalar_decimal(point.to_affine().get_u())),
+        rho_v: rho_point.map(|point| scalar_decimal(point.to_affine().get_v())),
+        raw_half_boundary,
+        digest_bits,
+    }
+}
+
 fn build_ivk_blake2s_export() -> Result<IvkBlake2sExport, SynthesisError> {
     let generator: ExtendedPoint = jubjub::SubgroupPoint::generator().into();
     let twice_generator = generator + generator;
@@ -1231,6 +1312,72 @@ fn build_ivk_blake2s_export() -> Result<IvkBlake2sExport, SynthesisError> {
 
     Ok(IvkBlake2sExport {
         format: "bellman-sapling-ivk-blake2s-reference-v1",
+        sapling_crypto_revision: SAPLING_REVISION,
+        bellman_revision: BELLMAN_REVISION,
+        bellman_crate_version: BELLMAN_CRATE_VERSION,
+        full_synthesis_count: 1,
+        cases,
+        vectors,
+    })
+}
+
+fn build_nullifier_blake2s_export() -> Result<NullifierBlake2sExport, SynthesisError> {
+    let generator: ExtendedPoint = jubjub::SubgroupPoint::generator().into();
+    let twice_generator = generator + generator;
+    let nk_point = generator;
+    let rho_point = twice_generator;
+    let mut system = TraceConstraintSystem::default();
+    let nk = source_witness(system.namespace(|| "nk"), nk_point)?;
+    let nk_repr = source_repr(system.namespace(|| "representation of nk"), &nk)?;
+    let rho = source_witness(system.namespace(|| "rho"), rho_point)?;
+    let rho_repr = source_repr(system.namespace(|| "representation of rho"), &rho)?;
+    let preimage: Vec<Boolean> = nk_repr.into_iter().chain(rho_repr).collect();
+    let digest = blake2s::blake2s(
+        system.namespace(|| "nf computation"),
+        &preimage,
+        sapling_crypto::constants::PRF_NF_PERSONALIZATION,
+    )?;
+    let digest_bits = digest
+        .iter()
+        .map(source_digest_bit_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    let cases = vec![NullifierBlake2sCase {
+        name: "generator_pair".to_owned(),
+        nk_u: scalar_decimal(nk_point.to_affine().get_u()),
+        nk_v: scalar_decimal(nk_point.to_affine().get_v()),
+        rho_u: scalar_decimal(rho_point.to_affine().get_u()),
+        rho_v: scalar_decimal(rho_point.to_affine().get_v()),
+        digest_bits,
+        satisfied: system.is_satisfied(),
+        inputs: system.inputs,
+        variables: system.variables,
+        constraints: system.constraints,
+    }];
+    let negative_generator = -generator;
+    let vectors = vec![
+        nullifier_digest_vector(
+            "identity_points",
+            Some(ExtendedPoint::identity()),
+            Some(ExtendedPoint::identity()),
+            false,
+        ),
+        nullifier_digest_vector(
+            "generator_pair",
+            Some(generator),
+            Some(twice_generator),
+            false,
+        ),
+        nullifier_digest_vector(
+            "negative_generator_pair",
+            Some(negative_generator),
+            Some(generator),
+            false,
+        ),
+        nullifier_digest_vector("raw_half_boundary", None, None, true),
+    ];
+
+    Ok(NullifierBlake2sExport {
+        format: "bellman-sapling-nullifier-blake2s-reference-v1",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
         bellman_crate_version: BELLMAN_CRATE_VERSION,
@@ -2421,6 +2568,13 @@ fn parse_variable(identity: &str) -> Option<Variable> {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|argument| argument == "--ivk-only") {
         println!("{}", serde_json::to_string(&build_ivk_blake2s_export()?)?);
+        return Ok(());
+    }
+    if std::env::args().any(|argument| argument == "--nullifier-only") {
+        println!(
+            "{}",
+            serde_json::to_string(&build_nullifier_blake2s_export()?)?
+        );
         return Ok(());
     }
 

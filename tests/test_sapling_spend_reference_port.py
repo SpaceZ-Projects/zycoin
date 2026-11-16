@@ -27,6 +27,7 @@ from sapling_spend_reference_port import (
     constrain_spend_montgomery_add,
     constrain_spend_montgomery_into_edwards,
     constrain_spend_note_commitment,
+    constrain_spend_nullifier_blake2s,
     constrain_spend_pedersen_hash,
     constrain_spend_signed_montgomery_lookup,
     spend_edwards_to_montgomery_coordinates,
@@ -97,6 +98,32 @@ def _reference_ivk_cases() -> dict:
         "sapling_spend_edwards_point_reference",
         "--",
         "--ivk-only",
+    ]
+    environment = os.environ.copy()
+    environment["CARGO_TERM_COLOR"] = "never"
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=environment,
+    )
+    return json.loads(completed.stdout)
+
+
+def _reference_nullifier_cases() -> dict:
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--manifest-path",
+        str(REFERENCE_MANIFEST),
+        "--bin",
+        "sapling_spend_edwards_point_reference",
+        "--",
+        "--nullifier-only",
     ]
     environment = os.environ.copy()
     environment["CARGO_TERM_COLOR"] = "never"
@@ -285,7 +312,7 @@ def _ivk_bit_value(system: R1CS, bit) -> int:
     return _read_bit(system, bit)
 
 
-def _ivk_representation_bits(point: Point) -> tuple[int, ...]:
+def _sapling_representation_bits(point: Point) -> tuple[int, ...]:
     return tuple((point.v >> index) & 1 for index in range(255)) + (
         point.u & 1,
     )
@@ -310,6 +337,37 @@ def _allocate_boolean_bits(
 class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if os.environ.get("SAPLING_NULLIFIER_REFERENCE_ONLY") == "1":
+            cls.reference = _reference_nullifier_cases()
+            if cls.reference["format"] != (
+                "bellman-sapling-nullifier-blake2s-reference-v1"
+            ):
+                raise AssertionError("unexpected Bellman nullifier export format")
+            if cls.reference["sapling_crypto_revision"] != (
+                "88a7946b4a3066787776e11f0a502654167e022d"
+            ):
+                raise AssertionError("unexpected pinned Sapling source revision")
+            if cls.reference["bellman_revision"] != (
+                "b726862a4ece8a627e7fea486d77b502a6edbb0b"
+            ):
+                raise AssertionError("unexpected Bellman source revision")
+            if cls.reference["bellman_crate_version"] != "0.15.0":
+                raise AssertionError("unexpected Bellman crate version")
+            if (
+                cls.reference["full_synthesis_count"] != 1
+                or len(cls.reference["cases"]) != 1
+            ):
+                raise AssertionError(
+                    "nullifier exporter must synthesize exactly one trace"
+                )
+            cls.nullifier_blake2s_cases = {
+                case["name"]: case for case in cls.reference["cases"]
+            }
+            cls.nullifier_blake2s_vectors = {
+                vector["name"]: vector for vector in cls.reference["vectors"]
+            }
+            return
+
         if os.environ.get("SAPLING_IVK_REFERENCE_ONLY") == "1":
             cls.reference = _reference_ivk_cases()
             if cls.reference["format"] != (
@@ -2369,7 +2427,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                     else:
                         ak = Point(int(reference["ak_u"]), int(reference["ak_v"]))
                         nk = Point(int(reference["nk_u"]), int(reference["nk_v"]))
-                        bits = _ivk_representation_bits(ak) + _ivk_representation_bits(nk)
+                        bits = _sapling_representation_bits(ak) + _sapling_representation_bits(nk)
                     self.assertEqual(len(bits), 512)
                     message = bytes(
                         sum(bits[start + offset] << offset for offset in range(8))
@@ -2425,6 +2483,178 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
                 system, (unassigned,) + valid[1:256], valid[256:]
             ),
             lambda: constrain_spend_ivk_blake2s(
+                system, (non_boolean,) + valid[1:256], valid[256:]
+            ),
+        )
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_bellman_blake2s_reference",
+            side_effect=AssertionError("invalid input reached synthesis"),
+        ) as python_syntheses:
+            for call in invalid_calls:
+                with self.subTest(call=call):
+                    before_variables = len(system.variables)
+                    before_rows = system.constraint_count
+                    with self.assertRaises((R1CSError, TypeError)):
+                        call()
+                    self.assertEqual(len(system.variables), before_variables)
+                    self.assertEqual(system.constraint_count, before_rows)
+            python_syntheses.assert_not_called()
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_NULLIFIER_REFERENCE_ONLY") == "1",
+        "requires the isolated Bellman nullifier fixture",
+    )
+    def test_nullifier_blake2s_matches_bellman_ordered_traces(self) -> None:
+        reference = self.nullifier_blake2s_cases["generator_pair"]
+        system = R1CS()
+        nk = Point(int(reference["nk_u"]), int(reference["nk_v"]))
+        rho = Point(int(reference["rho_u"]), int(reference["rho_v"]))
+        nk_variables = constrain_spend_edwards_point_witness(system, nk, "nk")
+        nk_repr_bits = constrain_spend_edwards_point_repr(
+            system, nk_variables, nk, "representation of nk"
+        )
+        rho_variables = constrain_spend_edwards_point_witness(system, rho, "rho")
+        rho_repr_bits = constrain_spend_edwards_point_repr(
+            system, rho_variables, rho, "representation of rho"
+        )
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_bellman_blake2s_reference",
+            wraps=constrain_bellman_blake2s_reference,
+        ) as python_syntheses:
+            result = constrain_spend_nullifier_blake2s(
+                system, nk_repr_bits, rho_repr_bits
+            )
+            python_syntheses.assert_called_once()
+
+        self.assertEqual(reference["inputs"], [])
+        self.assertEqual(system.public_input_count, 0)
+        self.assert_ivk_system_matches_reference(
+            "nullifier generator_pair", system, reference
+        )
+        self.assertEqual(
+            result.preimage_bits,
+            tuple(nk_repr_bits) + tuple(rho_repr_bits),
+        )
+        self.assertEqual(len(result.digest_bits), 256)
+        self.assertEqual(
+            [_ivk_digest_bit_record(system, bit) for bit in result.digest_bits],
+            reference["digest_bits"],
+        )
+
+        message = bytes(
+            sum(
+                system.witness_value(result.preimage_bits[start + offset])
+                << offset
+                for offset in range(8)
+            )
+            for start in range(0, 512, 8)
+        )
+        expected_digest = blake2s(
+            message, digest_size=32, person=b"Zcash_nf"
+        ).digest()
+        actual_digest = bytes(
+            sum(
+                _ivk_bit_value(system, result.digest_bits[start + offset])
+                << offset
+                for offset in range(8)
+            )
+            for start in range(0, 256, 8)
+        )
+        self.assertEqual(actual_digest, expected_digest)
+        self.nullifier_matrix_fingerprint = system.matrix_fingerprint()
+        self.nullifier_matrix_rows = system.constraint_count
+        self.nullifier_matrix_columns = len(system.variables)
+        print(
+            "Nullifier matrix",
+            self.nullifier_matrix_rows,
+            self.nullifier_matrix_columns,
+            self.nullifier_matrix_fingerprint,
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_NULLIFIER_REFERENCE_ONLY") == "1",
+        "requires the isolated Bellman nullifier vectors",
+    )
+    def test_nullifier_digest_vectors_match_independent_blake2s(self) -> None:
+        expected_names = {
+            "identity_points",
+            "generator_pair",
+            "negative_generator_pair",
+            "raw_half_boundary",
+        }
+        self.assertEqual(set(self.nullifier_blake2s_vectors), expected_names)
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_bellman_blake2s_reference",
+            side_effect=AssertionError("output-vector checks must not synthesize"),
+        ):
+            for name, reference in self.nullifier_blake2s_vectors.items():
+                with self.subTest(case=name):
+                    if reference["raw_half_boundary"]:
+                        self.assertEqual(name, "raw_half_boundary")
+                        bits = (0,) * 256 + (1,) * 256
+                    else:
+                        nk = Point(int(reference["nk_u"]), int(reference["nk_v"]))
+                        rho = Point(int(reference["rho_u"]), int(reference["rho_v"]))
+                        bits = (
+                            _sapling_representation_bits(nk)
+                            + _sapling_representation_bits(rho)
+                        )
+                    self.assertEqual(len(bits), 512)
+                    message = bytes(
+                        sum(bits[start + offset] << offset for offset in range(8))
+                        for start in range(0, 512, 8)
+                    )
+                    expected_digest = blake2s(
+                        message, digest_size=32, person=b"Zcash_nf"
+                    ).digest()
+                    self.assertEqual(
+                        reference["digest_bits"],
+                        [
+                            bool((byte >> bit) & 1)
+                            for byte in expected_digest
+                            for bit in range(8)
+                        ],
+                    )
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_NULLIFIER_REFERENCE_ONLY") == "1",
+        "requires the isolated Bellman nullifier fixture",
+    )
+    def test_nullifier_blake2s_rejects_invalid_inputs_before_mutation(self) -> None:
+        system = R1CS()
+        valid = tuple(
+            system.alloc_private(f"valid nullifier input[{index}]", index & 1)
+            for index in range(512)
+        )
+        foreign_system = R1CS()
+        foreign = foreign_system.alloc_private("foreign nullifier input", 0)
+        unassigned = system.alloc_private("unassigned nullifier input", None)
+        non_boolean = system.alloc_private("non-Boolean nullifier input", 2)
+        invalid_calls = (
+            lambda: constrain_spend_nullifier_blake2s(
+                system, valid[:255], valid[256:]
+            ),
+            lambda: constrain_spend_nullifier_blake2s(
+                system, valid[:256], valid[256:511]
+            ),
+            lambda: constrain_spend_nullifier_blake2s(
+                system, cast(tuple[Variable, ...], None), valid[256:]
+            ),
+            lambda: constrain_spend_nullifier_blake2s(
+                system,
+                valid[:256],
+                cast(tuple[Variable, ...], tuple(True for _ in range(256))),
+            ),
+            lambda: constrain_spend_nullifier_blake2s(
+                system, (foreign,) + valid[1:256], valid[256:]
+            ),
+            lambda: constrain_spend_nullifier_blake2s(
+                system, (unassigned,) + valid[1:256], valid[256:]
+            ),
+            lambda: constrain_spend_nullifier_blake2s(
                 system, (non_boolean,) + valid[1:256], valid[256:]
             ),
         )

@@ -104,6 +104,12 @@ class IvkBlake2sResult:
     ivk_bits: tuple[CircuitBit, ...]
 
 
+@dataclass(frozen=True)
+class NullifierBlake2sResult:
+    preimage_bits: tuple[Variable, ...]
+    digest_bits: tuple[CircuitBit, ...]
+
+
 def spend_edwards_to_montgomery_coordinates(
     point: Point,
 ) -> tuple[int, int] | None:
@@ -749,6 +755,38 @@ def constrain_spend_ivk_blake2s(
         digest_bits,
         digest_bits[:251],
     )
+
+
+def constrain_spend_nullifier_blake2s(
+    system: R1CS,
+    nk_repr_bits: tuple[Variable, ...] | list[Variable],
+    rho_repr_bits: tuple[Variable, ...] | list[Variable],
+) -> NullifierBlake2sResult:
+    """Port the pinned 512-bit PRF^nf synthesis before nullifier multipacking."""
+    if not isinstance(system, R1CS):
+        raise TypeError("system must be an R1CS")
+    if not isinstance(nk_repr_bits, (tuple, list)) or not isinstance(
+        rho_repr_bits, (tuple, list)
+    ):
+        raise TypeError("nullifier representations must be tuples or lists of variables")
+    preimage_bits = tuple(nk_repr_bits) + tuple(rho_repr_bits)
+    if len(nk_repr_bits) != 256 or len(rho_repr_bits) != 256:
+        raise R1CSError("nullifier point representations must each contain 256 bits")
+    for bit in preimage_bits:
+        if not isinstance(bit, Variable):
+            raise TypeError("nullifier representation bits must be allocated variables")
+        system.require_owned(bit)
+        value = system.witness_value(bit)
+        if value not in (0, 1):
+            raise R1CSError("nullifier representation bit is unassigned or non-Boolean")
+
+    digest_bits = constrain_bellman_blake2s_reference(
+        system,
+        preimage_bits,
+        b"Zcash_nf",
+        annotation_prefix="nf computation",
+    )
+    return NullifierBlake2sResult(preimage_bits, digest_bits)
 
 
 def _constrain_spend_unchecked_field_bits(
