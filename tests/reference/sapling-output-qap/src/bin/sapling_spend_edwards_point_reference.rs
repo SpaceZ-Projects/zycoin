@@ -3,6 +3,7 @@ use bellman::gadgets::blake2s;
 use bellman::gadgets::boolean::AllocatedBit;
 use bellman::gadgets::boolean::Boolean;
 use bellman::gadgets::lookup::{lookup3_xy, lookup3_xy_with_conditional_negation};
+use bellman::gadgets::multipack;
 use bellman::gadgets::num::{AllocatedNum, Num};
 use bellman::{ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
 use bls12_381::Scalar;
@@ -335,6 +336,41 @@ struct NullifierBlake2sExport {
     full_synthesis_count: usize,
     cases: Vec<NullifierBlake2sCase>,
     vectors: Vec<NullifierBlake2sVector>,
+}
+
+#[derive(Serialize)]
+struct NullifierMultipackingExport {
+    format: &'static str,
+    sapling_crypto_revision: &'static str,
+    bellman_revision: &'static str,
+    bellman_crate_version: &'static str,
+    full_synthesis_count: usize,
+    cases: Vec<NullifierMultipackingCase>,
+    vectors: Vec<NullifierMultipackingVector>,
+}
+
+#[derive(Serialize)]
+struct NullifierMultipackingCase {
+    name: String,
+    nk_u: String,
+    nk_v: String,
+    rho_u: String,
+    rho_v: String,
+    digest_bits: Vec<DigestBitRecord>,
+    chunk_sizes: Vec<usize>,
+    packed_values: Vec<String>,
+    satisfied: bool,
+    inputs: Vec<VariableRecord>,
+    variables: Vec<VariableRecord>,
+    constraints: Vec<Row>,
+}
+
+#[derive(Serialize)]
+struct NullifierMultipackingVector {
+    name: &'static str,
+    digest_bits: Vec<bool>,
+    chunk_sizes: Vec<usize>,
+    packed_values: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1550,6 +1586,116 @@ fn build_nullifier_blake2s_export() -> Result<NullifierBlake2sExport, SynthesisE
     })
 }
 
+fn allocate_prior_nullifier_inputs(
+    system: &mut TraceConstraintSystem,
+) -> Result<(), SynthesisError> {
+    for name in [
+        "rk/u/input variable",
+        "rk/v/input variable",
+        "value commitment/commitment point/u/input variable",
+        "value commitment/commitment point/v/input variable",
+        "anchor/input variable",
+    ] {
+        system.alloc_input(|| name, || Ok(Scalar::ZERO))?;
+    }
+    Ok(())
+}
+
+fn nullifier_multipacking_vector(
+    name: &'static str,
+    digest_bits: Vec<bool>,
+) -> NullifierMultipackingVector {
+    let chunk_sizes = (0..digest_bits.len())
+        .step_by(Scalar::CAPACITY as usize)
+        .map(|offset| (digest_bits.len() - offset).min(Scalar::CAPACITY as usize))
+        .collect();
+    let packed_values = multipack::compute_multipacking::<Scalar>(&digest_bits)
+        .iter()
+        .map(|value| scalar_decimal(*value))
+        .collect();
+    NullifierMultipackingVector {
+        name,
+        digest_bits,
+        chunk_sizes,
+        packed_values,
+    }
+}
+
+fn build_nullifier_multipacking_export() -> Result<NullifierMultipackingExport, SynthesisError> {
+    let generator: ExtendedPoint = jubjub::SubgroupPoint::generator().into();
+    let nk_point = generator;
+    let rho_point = generator + generator;
+    let mut system = TraceConstraintSystem::default();
+    allocate_prior_nullifier_inputs(&mut system)?;
+
+    let nk = source_witness(system.namespace(|| "nk"), nk_point)?;
+    let nk_repr = source_repr(system.namespace(|| "representation of nk"), &nk)?;
+    let rho = source_witness(system.namespace(|| "rho"), rho_point)?;
+    let rho_repr = source_repr(system.namespace(|| "representation of rho"), &rho)?;
+    let preimage: Vec<Boolean> = nk_repr.into_iter().chain(rho_repr).collect();
+    let digest = blake2s::blake2s(
+        system.namespace(|| "nf computation"),
+        &preimage,
+        sapling_crypto::constants::PRF_NF_PERSONALIZATION,
+    )?;
+    multipack::pack_into_inputs(system.namespace(|| "pack nullifier"), &digest)?;
+
+    let digest_bits = digest
+        .iter()
+        .map(source_digest_bit_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    let digest_values = digest
+        .iter()
+        .map(|bit| bit.get_value().ok_or(SynthesisError::AssignmentMissing))
+        .collect::<Result<Vec<_>, _>>()?;
+    let chunk_sizes = (0..digest.len())
+        .step_by(Scalar::CAPACITY as usize)
+        .map(|offset| (digest.len() - offset).min(Scalar::CAPACITY as usize))
+        .collect();
+    let packed_values = multipack::compute_multipacking::<Scalar>(&digest_values)
+        .iter()
+        .map(|value| scalar_decimal(*value))
+        .collect();
+    let case = NullifierMultipackingCase {
+        name: "generator_pair".to_owned(),
+        nk_u: scalar_decimal(nk_point.to_affine().get_u()),
+        nk_v: scalar_decimal(nk_point.to_affine().get_v()),
+        rho_u: scalar_decimal(rho_point.to_affine().get_u()),
+        rho_v: scalar_decimal(rho_point.to_affine().get_v()),
+        digest_bits,
+        chunk_sizes,
+        packed_values,
+        satisfied: system.is_satisfied(),
+        inputs: system.inputs,
+        variables: system.variables,
+        constraints: system.constraints,
+    };
+
+    let all_zero = vec![false; 256];
+    let all_one = vec![true; 256];
+    let alternating = (0..256).map(|index| index % 2 == 0).collect();
+    let mut chunk_boundary = vec![false; 256];
+    chunk_boundary[253] = true;
+    chunk_boundary[254] = true;
+    chunk_boundary[255] = true;
+    let vectors = vec![
+        nullifier_multipacking_vector("all_zero", all_zero),
+        nullifier_multipacking_vector("all_one", all_one),
+        nullifier_multipacking_vector("alternating_lsb_first", alternating),
+        nullifier_multipacking_vector("capacity_boundary_bits", chunk_boundary),
+    ];
+
+    Ok(NullifierMultipackingExport {
+        format: "bellman-sapling-nullifier-multipacking-reference-v1",
+        sapling_crypto_revision: SAPLING_REVISION,
+        bellman_revision: BELLMAN_REVISION,
+        bellman_crate_version: BELLMAN_CRATE_VERSION,
+        full_synthesis_count: 1,
+        cases: vec![case],
+        vectors,
+    })
+}
+
 fn source_montgomery_into_edwards<CS: ConstraintSystem<Scalar>>(
     mut cs: CS,
     point: &SourceMontgomeryPoint,
@@ -2739,6 +2885,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "{}",
             serde_json::to_string(&build_value_commitment_export()?)?
+        );
+        return Ok(());
+    }
+    if std::env::args().any(|argument| argument == "--nullifier-multipacking-only") {
+        println!(
+            "{}",
+            serde_json::to_string(&build_nullifier_multipacking_export()?)?
         );
         return Ok(());
     }

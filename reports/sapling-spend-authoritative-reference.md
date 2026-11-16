@@ -111,7 +111,8 @@ or matrix.
 | Merkle level direction, sibling selection and Pedersen hash | Isolated test-only `constrain_spend_merkle_authentication_path` | **Standalone path trace verified** for depths 1, 31, and 32; full Spend composition remains unverified. |
 | Conditional anchor | Isolated test-only `constrain_spend_conditional_anchor` | **Standalone anchor trace verified** including late Bellman inputization, both ordered rows, and fifth public-input mapping; full Spend composition remains unverified. |
 | `g^position`, `rho`, `rho.repr` | Isolated fixed-base, addition, and representation primitives; production `constrain_sapling_nullifier_rho` | **Not recomposed in the isolated port.** The source directly consumes all path bits; no integrated trace verifies this handoff. |
-| Nullifier `nf = BLAKE2s(nk || rho)` | Test-only `constrain_spend_nullifier_blake2s` | **Standalone retained fixture trace verified** for exact ordered allocations, assignments, labels, and A/B/C rows. Nullifier multipacking remains unverified. |
+| Nullifier `nf = BLAKE2s(nk || rho)` | Test-only `constrain_spend_nullifier_blake2s` | **Standalone retained fixture trace verified** for exact ordered allocations, assignments, labels, and A/B/C rows. |
+| Nullifier multipacking | Test-only `constrain_spend_nullifier_multipacking` | **Standalone retained fixture trace verified** for exact ordered allocations, assignments, public input positions, labels, and A/B/C rows. Full Spend event-order integration remains unverified. |
 | Complete synthesis and complete matrix comparison | Production `constrain_sapling_spend`; full pinned Bellman export in `tests/reference/sapling-output-qap/tests/export_spend.rs` | **Not implemented in the isolated reference port.** The full export is available, but no complete isolated Python synthesis result or comparable matrix fingerprint exists. |
 
 The existing production `constrain_sapling_spend` is a whole-circuit
@@ -120,8 +121,8 @@ requirement: it allocates public inputs up front, uses the production Merkle
 and anchor paths, and its reported trace correspondence contains unmatched
 and reordered rows. The isolated test-only module currently provides
 standalone parity for several cryptographic units, including retained IVK,
-nullifier BLAKE2s, and value-commitment fixtures, but lacks nullifier
-multipacking and full Spend source-order composition. Consequently there is no complete
+nullifier BLAKE2s, nullifier multipacking, and value-commitment fixtures, but
+lacks full Spend source-order composition. Consequently there is no complete
 Python-vs-Bellman assignment, ordered-matrix, fingerprint, or mutation result
 for this task. Reusing the production assembler or merely chaining the
 verified units would not resolve those gaps and could create an unjustified
@@ -147,7 +148,7 @@ order:
 | Note commitment and authentication path | The isolated note hash/randomization and Merkle path already have unit traces, but their composition must preserve the value bits and ordered `g_d`/`pk_d` representations, note commitment output, 32 direct direction-bit variables, and path allocations without reallocation or substitution. |
 | Conditional anchor | Isolated `rt`/anchor trace is verified. Full context still needs the actual preceding root/value variables and correct temporal public-input position. |
 | Nullifier position and `rho` | Fixed-base multiplication of the original 32 direction bits, Edwards addition to `cm`, and strict `rho` representation in the complete post-anchor context. |
-| Nullifier PRF and packing | 512-bit nullifier-preimage handoff; full BLAKE2s trace with `PRF_NF_PERSONALIZATION`; exact 254+2-bit `pack_into_inputs` allocation and row sequence for `nf[0]`/`nf[1]`. |
+| Nullifier PRF and packing | 512-bit nullifier-preimage handoff; full BLAKE2s trace with `PRF_NF_PERSONALIZATION`; exact 254+2-bit `pack_into_inputs` allocation and row sequence for `nf[0]`/`nf[1]`. Standalone BLAKE2s and multipacking traces are verified, but their complete Spend temporal input context is not. |
 
 These are not all absent as production functionality; several have production
 counterparts and some constituent cryptographic operations have standalone
@@ -178,9 +179,8 @@ official parameter compatibility remain **Unverified**.
    then strict representation, fixed-base lookup, and variable-base
    multiplication. Retain the exact source's allocation and enforcement
    order in each unit rather than normalizing factors.
-3. Add source-trace parity for nullifier multipacking, including outputs and
-   altered-witness failure rows. Standalone value-commitment and BLAKE2s
-   stages now have retained fixture traces.
+3. Preserve the standalone nullifier multipacking trace and its 254+2-bit
+   boundary checks when composing the complete Spend event order.
 4. Recompose all verified components in `Spend::synthesize` order, preserving
    inputize events, the direct direction-bit handoff to `g^position`, and the
    already verified `rt` relation without skipping or duplicating rows.
@@ -816,10 +816,11 @@ The three focused nullifier tests passed (**3 tests / 11 subtests**, 14.54
 seconds); the existing pinned nullifier output and personalization regressions
 passed (**2 tests**, 5.07 seconds). Ruff, Python syntax checks, Rust formatting,
 and `git diff --check` passed. No full gadget or Sapling suite was run.
-Nullifier multipacking and full Spend source-order composition remain
-unverified. This stage does not establish complete Spend matrix alignment,
-upstream full-circuit Bellman equivalence, or official parameter
-compatibility; those remain **Unverified**.
+Nullifier multipacking is separately verified in the standalone combined
+trace described below. This hash-stage result does not establish full Spend
+source-order composition, complete Spend matrix alignment, upstream
+full-circuit Bellman equivalence, or official parameter compatibility; those
+remain **Unverified**.
 
 ### Source-faithful Spend value commitment
 
@@ -866,6 +867,61 @@ randomness; these checks do not invoke circuit synthesis. Invalid, missing,
 Boolean-as-integer, and out-of-range values/randomness reject before
 allocation or fixed-base synthesis. The isolated API has no caller-supplied
 variables, so foreign-variable ownership validation is not applicable.
-Nullifier multipacking, full Spend event-order integration, complete Spend
-matrix alignment, upstream full-circuit Bellman equivalence, and official
-parameter compatibility remain **Unverified**.
+Full Spend event-order integration, complete Spend matrix alignment, upstream
+full-circuit Bellman equivalence, and official parameter compatibility remain
+**Unverified**.
+
+### Source-faithful Spend nullifier multipacking
+
+At Sapling revision `88a7946b4a3066787776e11f0a502654167e022d` and Bellman
+revision `b726862a4ece8a627e7fea486d77b502a6edbb0b` (`0.15.0`),
+`Spend::synthesize` calls `multipack::pack_into_inputs` under the
+`"pack nullifier"` namespace after the nullifier BLAKE2s stage. Bellman
+`gadgets/multipack.rs::pack_into_inputs` consumes the digest Boolean sequence
+in order using `Scalar::CAPACITY`-sized chunks, folds each chunk little-endian
+with coefficients `1, 2, 4, ...`, allocates one public input per chunk, and
+enforces `packed_num * ONE = input`. For the 256-bit nullifier digest,
+`Scalar::CAPACITY` is 254: all bits are consumed as a 254-bit chunk followed
+by a 2-bit chunk; no digest bits are dropped.
+
+The test-only `constrain_spend_nullifier_multipacking` validates the complete
+bit sequence, ownership, assignment, and Boolean range before allocating any
+public inputs or constraints. It supports both the local Sapling gadget
+negated-bit wrapper and the Bellman BLAKE2s reference port's `_Negated`
+wrapper, preserving each wrapper's `1 - variable` semantics. It then
+allocates the packed inputs and emits the source-ordered packing rows. The
+reference exporter synthesizes the nullifier hash and multipacking together,
+so the differential test checks the digest-bit identities and values,
+allocation identities and assignments, public positions, labels, and every
+ordered A/B/C row.
+
+The retained representative fixture includes five earlier public-input
+placeholders (`rk.u`, `rk.v`, `cv.u`, `cv.v`, and `anchor`) to establish the
+source positions of the packed inputs. The packed nullifier inputs are
+positions **6 and 7** (one-based). Those preceding values are fixture context,
+not a claim that the full Spend witness was composed. Bellman and Python
+matched exactly: **22,568 rows**, **22,526 columns** (ONE, seven public
+inputs, and 22,518 auxiliaries), with canonical matrix fingerprint
+`d4b682f3441cc17495557468a1bfdccb053fe9800fcabb96a6f3cb97269403ab`.
+The focused differential run performed exactly **two full syntheses**: one
+Bellman reference trace and one Python synthesis. It passed **3 tests** with
+**22,580 subtests** in **274.58 seconds**.
+
+Host-only vectors cover all-zero, all-one, alternating LSB-first, and the
+capacity boundary (bits 253, 254, and 255 set), confirming little-endian
+packing and the 254+2 split without additional circuit synthesis. Invalid
+lengths, malformed sequences, foreign and unassigned variables,
+non-Boolean variables, and invalid literal bits were rejected before public
+input allocation or constraint mutation. The Python differential also
+compares satisfaction and confirms one invocation each of the nullifier
+BLAKE2s and multipacking synthesis functions. This establishes only the
+standalone combined nullifier-hash/multipacking fixture; complete Spend
+event-order integration, complete Spend matrix alignment, upstream
+full-circuit Bellman equivalence, and official parameter compatibility remain
+**Unverified**.
+
+The shared temporal-column mapping also passed the value-commitment regression
+(**3 tests / 1,276 subtests**, 2.38 seconds). The compatibility-manifest tests
+passed (**19 tests / 5 subtests**, 0.29 seconds). Ruff, Python syntax checks,
+Rust formatting/build checks, and `git diff --check` passed; the full Sapling
+gadget suite was not run.

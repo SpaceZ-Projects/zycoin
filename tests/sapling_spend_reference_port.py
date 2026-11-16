@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TypeAlias
 
-from src.blake2s_gadget import CircuitBit
+from src.blake2s_gadget import CircuitBit, _NegatedBit, _read_bit
 from src.bls12_381 import SCALAR_MODULUS
 from src.bls12_381 import SCALAR_MODULUS as CIRCUIT_FIELD_MODULUS
 from src.jubjub import (
@@ -19,9 +19,11 @@ from src.jubjub import (
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, LinearCombination, R1CSError, Variable
 from src.sapling_gadgets import sapling_fixed_base_generator
+from tests.bellman_blake2s_reference import _Negated as _BellmanNegated
 from tests.bellman_blake2s_reference import constrain_bellman_blake2s_reference
 
 SpendBoolean: TypeAlias = Variable | bool
+SpendCircuitBit: TypeAlias = CircuitBit | _BellmanNegated
 
 _FIXED_BASE_WINDOW_BITS = 3
 _FIXED_BASE_WINDOW_COUNT = 84
@@ -112,14 +114,21 @@ class ConditionalAnchorResult:
 @dataclass(frozen=True)
 class IvkBlake2sResult:
     preimage_bits: tuple[Variable, ...]
-    digest_bits: tuple[CircuitBit, ...]
-    ivk_bits: tuple[CircuitBit, ...]
+    digest_bits: tuple[SpendCircuitBit, ...]
+    ivk_bits: tuple[SpendCircuitBit, ...]
 
 
 @dataclass(frozen=True)
 class NullifierBlake2sResult:
     preimage_bits: tuple[Variable, ...]
-    digest_bits: tuple[CircuitBit, ...]
+    digest_bits: tuple[SpendCircuitBit, ...]
+
+
+@dataclass(frozen=True)
+class NullifierMultipackingResult:
+    digest_bits: tuple[SpendCircuitBit, ...]
+    chunk_sizes: tuple[int, ...]
+    input_variables: tuple[Variable, ...]
 
 
 class SpendReferenceR1CS(R1CS):
@@ -143,6 +152,18 @@ class SpendReferenceR1CS(R1CS):
             return None
         return self._temporal_public_variables.index(variable) + 1
 
+    def auxiliary_index(self, variable: Variable) -> int:
+        self.require_owned(variable)
+        if variable.kind != "private":
+            raise R1CSError("variable is not an auxiliary variable")
+        return (
+            sum(
+                item.kind == "private"
+                for item in self._variables[1 : variable.index + 1]
+            )
+            - 1
+        )
+
     def public_inputs(self) -> tuple[int, ...]:
         values = tuple(
             self.witness_value(variable)
@@ -161,7 +182,11 @@ class SpendReferenceR1CS(R1CS):
             assert position is not None
             return position
         if variable.kind == "private":
-            return self._public_input_count + variable_index
+            private_ordinal = sum(
+                item.kind == "private"
+                for item in self._variables[1 : variable_index + 1]
+            )
+            return self._public_input_count + private_ordinal
         raise R1CSError("unexpected variable kind in Spend reference R1CS")
 
     def serialize_matrix(self) -> bytes:
@@ -886,6 +911,81 @@ def constrain_spend_nullifier_blake2s(
         annotation_prefix="nf computation",
     )
     return NullifierBlake2sResult(preimage_bits, digest_bits)
+
+
+def constrain_spend_nullifier_multipacking(
+    system: R1CS,
+    digest_bits: tuple[SpendCircuitBit, ...] | list[SpendCircuitBit],
+    label: str = "pack nullifier",
+) -> NullifierMultipackingResult:
+    """Port Bellman multipack::pack_into_inputs for the 256 nf bits."""
+    if not isinstance(system, SpendReferenceR1CS):
+        raise R1CSError(
+            "nullifier multipacking requires the temporal-input Spend reference R1CS"
+        )
+    if not isinstance(digest_bits, (tuple, list)):
+        raise TypeError("nullifier digest bits must be a tuple or list")
+    if len(digest_bits) != 256:
+        raise R1CSError("nullifier multipacking requires exactly 256 digest bits")
+    if not isinstance(label, str) or not label:
+        raise R1CSError("label must be a non-empty string")
+
+    for bit in digest_bits:
+        if isinstance(bit, Variable):
+            system.require_owned(bit)
+        elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+            system.require_owned(bit.variable)
+        elif type(bit) not in (int, bool):
+            raise TypeError("nullifier digest bits must be assigned circuit bits")
+        if _spend_circuit_bit_value(system, bit) not in (0, 1):
+            raise R1CSError("nullifier digest bits must be assigned booleans")
+
+    capacity = SCALAR_MODULUS.bit_length() - 1
+    chunk_sizes = tuple(
+        min(capacity, len(digest_bits) - offset)
+        for offset in range(0, len(digest_bits), capacity)
+    )
+    input_variables: list[Variable] = []
+    bit_offset = 0
+    for chunk_index, chunk_size in enumerate(chunk_sizes):
+        packed_value = 0
+        packed_lc = system.linear_combination(())
+        coefficient = 1
+        for bit in digest_bits[bit_offset : bit_offset + chunk_size]:
+            packed_value += _spend_circuit_bit_value(system, bit) * coefficient
+            if isinstance(bit, Variable):
+                bit_lc = bit.lc()
+            elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+                bit_lc = 1 - bit.variable.lc()
+            else:
+                bit_lc = system.linear_combination((), int(bit))
+            packed_lc += bit_lc * coefficient
+            coefficient <<= 1
+        bit_offset += chunk_size
+
+        packed_input = system.alloc_public(
+            f"{label}/input {chunk_index}", packed_value
+        )
+        system.enforce(
+            packed_lc,
+            1,
+            packed_input,
+            f"{label}/packing constraint {chunk_index}",
+        )
+        input_variables.append(packed_input)
+
+    return NullifierMultipackingResult(
+        tuple(digest_bits), chunk_sizes, tuple(input_variables)
+    )
+
+
+def _spend_circuit_bit_value(system: R1CS, bit: SpendCircuitBit) -> int:
+    if isinstance(bit, _BellmanNegated):
+        value = system.witness_value(bit.variable)
+        if value not in (0, 1):
+            raise R1CSError("nullifier digest bit is unassigned or non-Boolean")
+        return 1 - int(value)
+    return _read_bit(system, bit)
 
 
 def _constrain_spend_unchecked_field_bits(

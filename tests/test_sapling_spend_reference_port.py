@@ -29,6 +29,7 @@ from sapling_spend_reference_port import (
     constrain_spend_montgomery_into_edwards,
     constrain_spend_note_commitment,
     constrain_spend_nullifier_blake2s,
+    constrain_spend_nullifier_multipacking,
     constrain_spend_pedersen_hash,
     constrain_spend_signed_montgomery_lookup,
     constrain_spend_value_commitment,
@@ -147,6 +148,32 @@ def _reference_nullifier_cases() -> dict:
     return json.loads(completed.stdout)
 
 
+def _reference_nullifier_multipacking_cases() -> dict:
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--manifest-path",
+        str(REFERENCE_MANIFEST),
+        "--bin",
+        "sapling_spend_edwards_point_reference",
+        "--",
+        "--nullifier-multipacking-only",
+    ]
+    environment = os.environ.copy()
+    environment["CARGO_TERM_COLOR"] = "never"
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=environment,
+    )
+    return json.loads(completed.stdout)
+
+
 def _reference_value_commitment_cases() -> dict:
     command = [
         "cargo",
@@ -181,7 +208,7 @@ def _reference_index(identity: str) -> int:
     raise AssertionError(f"unexpected isolated reference variable {identity!r}")
 
 
-def _value_reference_column(identity: str, input_count: int) -> int:
+def _input_reference_column(identity: str, input_count: int) -> int:
     if identity == "Input(0)":
         return 0
     if identity.startswith("Input(") and identity.endswith(")"):
@@ -191,12 +218,12 @@ def _value_reference_column(identity: str, input_count: int) -> int:
     raise AssertionError(f"unexpected value-commitment variable {identity!r}")
 
 
-def _canonical_value_reference_terms(
+def _canonical_reference_terms_with_inputs(
     terms: list[dict], input_count: int
 ) -> list[list[str | int]]:
     combined: dict[int, int] = {}
     for term in terms:
-        column = _value_reference_column(term["identity"], input_count)
+        column = _input_reference_column(term["identity"], input_count)
         coefficient = int.from_bytes(
             bytes.fromhex(term["coefficient_hex"]), "little"
         )
@@ -210,7 +237,7 @@ def _canonical_value_reference_terms(
     ]
 
 
-def _value_reference_matrix_fingerprint(reference: dict) -> str:
+def _reference_matrix_fingerprint_with_inputs(reference: dict) -> str:
     input_count = len(reference["inputs"])
     auxiliary_count = len(reference["variables"])
     document = {
@@ -225,7 +252,7 @@ def _value_reference_matrix_fingerprint(reference: dict) -> str:
         ),
         "constraints": [
             [
-                _canonical_value_reference_terms(row[side], input_count)
+                _canonical_reference_terms_with_inputs(row[side], input_count)
                 for side in ("a", "b", "c")
             ]
             for row in reference["constraints"]
@@ -240,7 +267,7 @@ def _value_reference_matrix_fingerprint(reference: dict) -> str:
     return sha256(_MATRIX_FINGERPRINT_DOMAIN + serialized).hexdigest()
 
 
-def _canonical_local_value_terms(
+def _canonical_local_terms_with_inputs(
     system: SpendReferenceR1CS,
     terms: tuple[tuple[int, int], ...],
 ) -> tuple[tuple[int, int], ...]:
@@ -416,6 +443,32 @@ def _ivk_digest_bit_record(system: R1CS, bit) -> dict:
     }
 
 
+def _spend_digest_bit_record(system: SpendReferenceR1CS, bit) -> dict:
+    if isinstance(bit, Variable):
+        return {
+            "identity": f"Aux({system.auxiliary_index(bit)})",
+            "value": bool(system.witness_value(bit)),
+            "negated": False,
+        }
+    if isinstance(bit, _NegatedBit):
+        return {
+            "identity": f"Aux({system.auxiliary_index(bit.variable)})",
+            "value": bool(_read_bit(system, bit)),
+            "negated": True,
+        }
+    if isinstance(bit, _BellmanNegated):
+        return {
+            "identity": f"Aux({system.auxiliary_index(bit.variable)})",
+            "value": bool(1 - system.witness_value(bit.variable)),
+            "negated": True,
+        }
+    return {
+        "identity": f"Constant({int(bit)})",
+        "value": bool(bit),
+        "negated": False,
+    }
+
+
 def _ivk_bit_value(system: R1CS, bit) -> int:
     if isinstance(bit, _BellmanNegated):
         return 1 - int(system.witness_value(bit.variable))
@@ -447,6 +500,39 @@ def _allocate_boolean_bits(
 class SpendEdwardsPointReferencePortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if os.environ.get("SAPLING_NULLIFIER_MULTIPACK_REFERENCE_ONLY") == "1":
+            cls.reference = _reference_nullifier_multipacking_cases()
+            if cls.reference["format"] != (
+                "bellman-sapling-nullifier-multipacking-reference-v1"
+            ):
+                raise AssertionError(
+                    "unexpected Bellman nullifier-multipacking export format"
+                )
+            if cls.reference["sapling_crypto_revision"] != (
+                "88a7946b4a3066787776e11f0a502654167e022d"
+            ):
+                raise AssertionError("unexpected pinned Sapling source revision")
+            if cls.reference["bellman_revision"] != (
+                "b726862a4ece8a627e7fea486d77b502a6edbb0b"
+            ):
+                raise AssertionError("unexpected Bellman source revision")
+            if cls.reference["bellman_crate_version"] != "0.15.0":
+                raise AssertionError("unexpected Bellman crate version")
+            if (
+                cls.reference["full_synthesis_count"] != 1
+                or len(cls.reference["cases"]) != 1
+            ):
+                raise AssertionError(
+                    "multipacking exporter must synthesize exactly one trace"
+                )
+            cls.nullifier_multipacking_cases = {
+                case["name"]: case for case in cls.reference["cases"]
+            }
+            cls.nullifier_multipacking_vectors = {
+                vector["name"]: vector for vector in cls.reference["vectors"]
+            }
+            return
+
         if os.environ.get("SAPLING_VALUE_COMMITMENT_REFERENCE_ONLY") == "1":
             cls.reference = _reference_value_commitment_cases()
             if cls.reference["format"] != (
@@ -1856,28 +1942,28 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             with self.subTest(row=reference_row["index"]):
                 self.assertEqual(local_row.label, reference_row["annotation"])
                 self.assertEqual(
-                    _canonical_local_value_terms(system, local_row.left.terms),
+                    _canonical_local_terms_with_inputs(system, local_row.left.terms),
                     tuple(
                         (column, int(coefficient))
-                        for column, coefficient in _canonical_value_reference_terms(
+                        for column, coefficient in _canonical_reference_terms_with_inputs(
                             reference_row["a"], len(reference["inputs"])
                         )
                     ),
                 )
                 self.assertEqual(
-                    _canonical_local_value_terms(system, local_row.right.terms),
+                    _canonical_local_terms_with_inputs(system, local_row.right.terms),
                     tuple(
                         (column, int(coefficient))
-                        for column, coefficient in _canonical_value_reference_terms(
+                        for column, coefficient in _canonical_reference_terms_with_inputs(
                             reference_row["b"], len(reference["inputs"])
                         )
                     ),
                 )
                 self.assertEqual(
-                    _canonical_local_value_terms(system, local_row.output.terms),
+                    _canonical_local_terms_with_inputs(system, local_row.output.terms),
                     tuple(
                         (column, int(coefficient))
-                        for column, coefficient in _canonical_value_reference_terms(
+                        for column, coefficient in _canonical_reference_terms_with_inputs(
                             reference_row["c"], len(reference["inputs"])
                         )
                     ),
@@ -1947,7 +2033,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         self.assertEqual(
             self.value_commitment_matrix_fingerprint,
-            _value_reference_matrix_fingerprint(reference),
+            _reference_matrix_fingerprint_with_inputs(reference),
         )
         print(
             "Spend value-commitment matrix",
@@ -2980,6 +3066,285 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
             self.nullifier_matrix_columns,
             self.nullifier_matrix_fingerprint,
         )
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_NULLIFIER_MULTIPACK_REFERENCE_ONLY") == "1",
+        "requires the isolated Bellman nullifier-multipacking fixture",
+    )
+    def test_spend_nullifier_multipacking_matches_bellman_ordered_trace(
+        self,
+    ) -> None:
+        reference = self.nullifier_multipacking_cases["generator_pair"]
+        system = SpendReferenceR1CS()
+        prior_input_names = (
+            "rk/u/input variable",
+            "rk/v/input variable",
+            "value commitment/commitment point/u/input variable",
+            "value commitment/commitment point/v/input variable",
+            "anchor/input variable",
+        )
+        for name in prior_input_names:
+            system.alloc_public(name, 0)
+
+        nk = Point(int(reference["nk_u"]), int(reference["nk_v"]))
+        rho = Point(int(reference["rho_u"]), int(reference["rho_v"]))
+        nk_variables = constrain_spend_edwards_point_witness(system, nk, "nk")
+        nk_repr_bits = constrain_spend_edwards_point_repr(
+            system, nk_variables, nk, "representation of nk"
+        )
+        rho_variables = constrain_spend_edwards_point_witness(system, rho, "rho")
+        rho_repr_bits = constrain_spend_edwards_point_repr(
+            system, rho_variables, rho, "representation of rho"
+        )
+        with patch.object(
+            sapling_spend_reference_port,
+            "constrain_bellman_blake2s_reference",
+            wraps=constrain_bellman_blake2s_reference,
+        ) as python_hash_syntheses, patch(
+            __name__ + ".constrain_spend_nullifier_multipacking",
+            wraps=constrain_spend_nullifier_multipacking,
+        ) as python_packing_syntheses:
+            hash_result = constrain_spend_nullifier_blake2s(
+                system, nk_repr_bits, rho_repr_bits
+            )
+            result = constrain_spend_nullifier_multipacking(
+                system, hash_result.digest_bits
+            )
+            python_hash_syntheses.assert_called_once()
+            python_packing_syntheses.assert_called_once()
+
+        private_variables = [
+            variable for variable in system.variables[1:]
+            if variable.kind == "private"
+        ]
+        public_variables = [
+            variable for variable in system.variables[1:]
+            if variable.kind == "public"
+        ]
+        self.assertEqual(len(public_variables), 7)
+        self.assertEqual(
+            [variable.name for variable in public_variables],
+            [record["annotation"] for record in reference["inputs"]],
+        )
+        self.assertEqual(
+            [system.public_input_position(variable) for variable in public_variables],
+            list(range(1, 8)),
+        )
+        self.assertEqual(
+            [variable.name for variable in private_variables],
+            [record["annotation"] for record in reference["variables"]],
+        )
+        self.assertEqual(
+            [system.witness_value(variable) for variable in private_variables],
+            [
+                int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+                for record in reference["variables"]
+            ],
+        )
+        self.assertEqual(
+            [
+                system.witness_value(variable)
+                for variable in public_variables
+            ],
+            [
+                int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+                for record in reference["inputs"]
+            ],
+        )
+        self.assertEqual(system.public_inputs(), tuple(
+            int.from_bytes(bytes.fromhex(record["assignment"]), "little")
+            for record in reference["inputs"]
+        ))
+
+        self.assertEqual(len(hash_result.digest_bits), 256)
+        self.assertEqual(result.digest_bits, hash_result.digest_bits)
+        self.assertEqual(result.chunk_sizes, (254, 2))
+        self.assertEqual(result.chunk_sizes, tuple(reference["chunk_sizes"]))
+        self.assertEqual(sum(result.chunk_sizes), 256)
+        self.assertEqual(
+            [system.public_input_position(variable) for variable in result.input_variables],
+            [6, 7],
+        )
+        self.assertEqual(
+            [system.witness_value(variable) for variable in result.input_variables],
+            [int(value) for value in reference["packed_values"]],
+        )
+        self.assertEqual(
+            [_spend_digest_bit_record(system, bit) for bit in result.digest_bits],
+            reference["digest_bits"],
+        )
+        self.assertTrue(system.is_satisfied())
+        self.assertTrue(reference["satisfied"])
+
+        input_count = len(reference["inputs"])
+        self.assertEqual(system.constraint_count, len(reference["constraints"]))
+        for local_row, reference_row in zip(
+            system.constraints, reference["constraints"], strict=True
+        ):
+            with self.subTest(row=reference_row["index"]):
+                self.assertEqual(local_row.label, reference_row["annotation"])
+                self.assertEqual(
+                    _canonical_local_terms_with_inputs(system, local_row.left.terms),
+                    tuple(
+                        (column, int(coefficient))
+                        for column, coefficient in _canonical_reference_terms_with_inputs(
+                            reference_row["a"], input_count
+                        )
+                    ),
+                )
+                self.assertEqual(
+                    _canonical_local_terms_with_inputs(system, local_row.right.terms),
+                    tuple(
+                        (column, int(coefficient))
+                        for column, coefficient in _canonical_reference_terms_with_inputs(
+                            reference_row["b"], input_count
+                        )
+                    ),
+                )
+                self.assertEqual(
+                    _canonical_local_terms_with_inputs(system, local_row.output.terms),
+                    tuple(
+                        (column, int(coefficient))
+                        for column, coefficient in _canonical_reference_terms_with_inputs(
+                            reference_row["c"], input_count
+                        )
+                    ),
+                )
+
+        self.assertEqual(
+            system.matrix_fingerprint(),
+            _reference_matrix_fingerprint_with_inputs(reference),
+        )
+        self.nullifier_multipacking_matrix_rows = system.constraint_count
+        self.nullifier_multipacking_matrix_columns = len(system.variables)
+        self.nullifier_multipacking_matrix_fingerprint = system.matrix_fingerprint()
+        print(
+            "Nullifier multipacking matrix",
+            self.nullifier_multipacking_matrix_rows,
+            self.nullifier_multipacking_matrix_columns,
+            self.nullifier_multipacking_matrix_fingerprint,
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_NULLIFIER_MULTIPACK_REFERENCE_ONLY") == "1",
+        "requires isolated Bellman nullifier-multipacking vectors",
+    )
+    def test_spend_nullifier_multipacking_vectors_without_synthesis(self) -> None:
+        expected_names = {
+            "all_zero",
+            "all_one",
+            "alternating_lsb_first",
+            "capacity_boundary_bits",
+        }
+        self.assertEqual(set(self.nullifier_multipacking_vectors), expected_names)
+        capacity = SCALAR_MODULUS.bit_length() - 1
+        self.assertEqual(capacity, 254)
+        with patch(
+            __name__ + ".constrain_spend_nullifier_multipacking",
+            side_effect=AssertionError("packing vectors must not synthesize"),
+        ):
+            for name, reference in self.nullifier_multipacking_vectors.items():
+                with self.subTest(case=name):
+                    digest_bits = reference["digest_bits"]
+                    self.assertEqual(len(digest_bits), 256)
+                    sizes = tuple(
+                        min(capacity, len(digest_bits) - offset)
+                        for offset in range(0, len(digest_bits), capacity)
+                    )
+                    self.assertEqual(tuple(reference["chunk_sizes"]), sizes)
+                    self.assertEqual(sizes, (254, 2))
+                    packed_values = [
+                        sum(
+                            int(bit) << bit_index
+                            for bit_index, bit in enumerate(
+                                digest_bits[offset : offset + chunk_size]
+                            )
+                        )
+                        for offset, chunk_size in zip(
+                            (0, capacity), sizes, strict=True
+                        )
+                    ]
+                    self.assertEqual(
+                        [int(value) for value in reference["packed_values"]],
+                        packed_values,
+                    )
+                    self.assertTrue(
+                        all(0 <= value < SCALAR_MODULUS for value in packed_values)
+                    )
+        boundary = self.nullifier_multipacking_vectors["capacity_boundary_bits"]
+        self.assertEqual(
+            [index for index, bit in enumerate(boundary["digest_bits"]) if bit],
+            [253, 254, 255],
+        )
+        self.assertEqual(
+            [int(value) for value in boundary["packed_values"]],
+            [1 << 253, 3],
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("SAPLING_NULLIFIER_MULTIPACK_REFERENCE_ONLY") == "1",
+        "requires the isolated nullifier-multipacking input",
+    )
+    def test_spend_nullifier_multipacking_rejects_invalid_bits_before_mutation(
+        self,
+    ) -> None:
+        system = SpendReferenceR1CS()
+        for name in (
+            "rk/u/input variable",
+            "rk/v/input variable",
+            "value commitment/commitment point/u/input variable",
+            "value commitment/commitment point/v/input variable",
+            "anchor/input variable",
+        ):
+            system.alloc_public(name, 0)
+        valid = tuple(
+            system.alloc_private(f"nullifier bit[{index}]", index & 1)
+            for index in range(256)
+        )
+        foreign_system = SpendReferenceR1CS()
+        foreign = foreign_system.alloc_private("foreign nullifier bit", 1)
+        unassigned = system.alloc_private("unassigned nullifier bit", None)
+        non_boolean = system.alloc_private("non-Boolean nullifier bit", 2)
+        invalid_calls = (
+            lambda: constrain_spend_nullifier_multipacking(system, valid[:255]),
+            lambda: constrain_spend_nullifier_multipacking(
+                system, valid + (valid[0],)
+            ),
+            lambda: constrain_spend_nullifier_multipacking(
+                system, cast(tuple, None)
+            ),
+            lambda: constrain_spend_nullifier_multipacking(
+                system, (foreign,) + valid[1:]
+            ),
+            lambda: constrain_spend_nullifier_multipacking(
+                system, (unassigned,) + valid[1:]
+            ),
+            lambda: constrain_spend_nullifier_multipacking(
+                system, (non_boolean,) + valid[1:]
+            ),
+            lambda: constrain_spend_nullifier_multipacking(
+                system, (2,) + valid[1:]
+            ),
+            lambda: constrain_spend_nullifier_multipacking(
+                system, (None,) + valid[1:]
+            ),
+        )
+        with patch.object(
+            system,
+            "alloc_public",
+            wraps=system.alloc_public,
+        ) as input_allocations:
+            for call in invalid_calls:
+                before_variables = len(system.variables)
+                before_rows = system.constraint_count
+                before_public_inputs = system.public_input_count
+                with self.subTest(call=call):
+                    with self.assertRaises((R1CSError, TypeError)):
+                        call()
+                    self.assertEqual(len(system.variables), before_variables)
+                    self.assertEqual(system.constraint_count, before_rows)
+                    self.assertEqual(system.public_input_count, before_public_inputs)
+            input_allocations.assert_not_called()
 
     @unittest.skipUnless(
         os.environ.get("SAPLING_NULLIFIER_REFERENCE_ONLY") == "1",
