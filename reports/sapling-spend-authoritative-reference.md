@@ -132,9 +132,9 @@ implementation and was not modified. Its production matrix fingerprint and
 official-parameter binding are not inferred from the test-only result. The
 isolated source-faithful composition passed complete ordered-matrix comparison
 against the retained Bellman matrix for three valid witnesses. Independent
-Bellman constraint-row exports for the two added witnesses, production Spend
-matrix equivalence, and official parameter compatibility remain
-**Unverified**.
+full Bellman matrix exports for the two added witnesses are verified;
+production Spend matrix equivalence and official parameter compatibility
+remain **Unverified**.
 
 ### Phase 9.21.40 — Full source-order recomposition
 
@@ -191,57 +191,61 @@ proving gate, setup, or official parameter was changed.
 
 The full source-order Python Spend path was differentially exercised for three
 independently constructed satisfying witnesses. The original pinned Bellman
-trace remains the full matrix reference: 98,777 rows, 98,646 columns, and
-matrix fingerprint
+trace was reused without another synthesis. Each of the two additional
+witnesses was independently synthesized by pinned Bellman with complete
+ordered A/B/C row capture and compared directly against its Python matrix.
+Each matrix has 98,777 rows, 98,646 columns, and fingerprint
 `cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
-For each added case, a separate pinned Bellman `Spend::synthesize` run
-exported all input/auxiliary identities, allocation events, annotations, and
-assignments with constraint-row capture disabled. The Python path was then
-fully synthesized and compared against the retained Bellman matrix and that
-case's Bellman assignments. This avoids repeating a witness-independent
-98,777-row Bellman export; it is not a claim that Bellman rows were separately
-re-exported for either variant.
+Both variant Bellman exports and Python matrices contain the same allocation
+identities and order, assignments, annotations, public-input positions, and
+every ordered A/B/C expression. Bellman reported each witness satisfied, and
+both Python systems are satisfied. The Bellman TestConstraintSystem hash also
+matched the pinned expected value
+`d37c738e83df5d9b0bb6495ac96abf21bcb2697477e2c15c2c7916ff7a3b6a89`.
 
 The first added witness uses value zero and alternating direction bits
-(`true, false, ...`) over a 32-level path. Its Python full synthesis took
-45.849 seconds in the final passing run. The second uses `u64::MAX` and 32
-`true` direction bits; its Python full synthesis took 42.750 seconds. Both
-cases use independent fixed RNG seeds and produce different `ak`, `nsk`,
-`g_d`, and `rcv` assignments from the baseline. Their complete IVK and
-nullifier BLAKE2s allocation groups, note-content hash, and `nk`
-representation assignments also differ from baseline. Both preserve the
-98,777-row / 98,646-column matrix and the fingerprint above. Allocation event
-order, all variable identities and assignments, annotations, public-input
-positions, every ordered A/B/C expression, and satisfaction results matched.
+(`true, false, ...`) over a 32-level path, using seed
+`3157920b21844d6a77039ce125684fb2`. Its full Bellman exporter command took
+31.082 seconds; Python synthesis took 49.957 seconds. The second uses
+`u64::MAX` and 32 `true` direction bits, with seed
+`a74c11df052e8b7319c036548922e36d`; its Bellman exporter took 28.407 seconds
+and Python synthesis took 50.193 seconds. End-to-end test times were 96.982
+and 94.455 seconds, respectively.
 
-Post-synthesis circuit-level mutations were evaluated against the same
-Bellman matrix and each case's independently exported assignments. Changing
-only public `Input(5)` fails row 76,894 (`anchor/enforce input is correct`) in
-both systems. Changing `Input(5)` and the conditional-anchor auxiliary
-together leaves the conditional-root row satisfied for the zero-value case;
-the same mutation fails row 76,893 (`conditionally enforce correct root`) for
-the maximum-value case. Mutating `ak/u` and the first Merkle sibling also
-produced identical failed-row tuples in the Python evaluator and the Bellman
-matrix evaluator. These are post-synthesis witness mutations, not additional
+The sampled peak working set of the Bellman exporter process tree
+(cargo/test descendants, excluding the Python test runner) was 563.4 MiB for
+each case. The process tree was sampled at approximately 150 ms intervals, so
+this is an observed peak, not a platform-level peak-RSS guarantee. Both cases
+use independent fixed RNG seeds and produce different `ak`, `nsk`, `g_d`, and
+`rcv` assignments from the baseline. Their complete IVK and nullifier BLAKE2s
+allocation groups, note-content hash, and `nk` representation assignments
+also differ from baseline.
+
+Post-synthesis circuit-level mutations were evaluated against each variant's
+independently exported Bellman matrix and assignments. Changing only public
+`Input(5)` fails row 76,894 (`anchor/enforce input is correct`) in both
+systems. Changing `Input(5)` and the conditional-anchor auxiliary together
+leaves the conditional-root row satisfied for the zero-value case; the same
+mutation fails row 76,893 (`conditionally enforce correct root`) for the
+maximum-value case. Mutating `ak/u` and the first Merkle sibling also produced
+identical failed-row tuples in the Python evaluator and the Bellman matrix
+evaluator. These are post-synthesis witness mutations, not additional
 invalid-input synthesis runs.
 
-Final focused results: the retained baseline differential passed again
-(1 test); the two added witness differentials passed (2 tests); and the
-composition-boundary regressions passed (7 tests). The full Python synthesis
-timings for the added witnesses are reported separately above. Ruff,
+The two missing full-matrix variant differentials passed (2 tests); the
+original baseline trace was reused and was not resynthesized. Ruff,
 `py_compile`, Pylance file syntax validation, Rust formatting, and
-`git diff --check` passed. An initial zero-value run exposed an incorrect test
+`git diff --check` passed. An earlier zero-value test run exposed an incorrect
 expectation: changing the public anchor alone is not a no-op, because the
-separate input-equality row remains enforced. The test now distinguishes that
-row from the value-conditioned root row, and both variants pass the exact
-failure-location assertions.
+separate input-equality row remains enforced. The test distinguishes that row
+from the value-conditioned root row, and the final full-matrix runs pass the
+exact failure-location assertions.
 
 **Coverage status:** the isolated source-faithful port has exact matrix,
 assignment, and satisfaction evidence for three valid witnesses, plus
 post-synthesis anchor, point-coordinate, and authentication-sibling
-mutations. Other witness families and independent full Bellman matrix exports
-for the added witnesses remain unverified. Production Spend matrix identity,
-official-parameter compatibility, and ceremony validity remain
+mutations. Other witness families remain unverified. Production Spend matrix
+identity, official-parameter compatibility, and ceremony validity remain
 **Unverified**.
 
 ## Historical incremental porting sequence (completed)

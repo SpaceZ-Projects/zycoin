@@ -867,11 +867,11 @@ def _reference_full_spend_trace() -> dict:
         return json.loads(trace_path.read_text(encoding="utf-8"))
 
 
-def _reference_spend_assignment_variant(name: str) -> dict:
+def _reference_full_spend_variant_trace(name: str) -> tuple[dict, float]:
     with tempfile.TemporaryDirectory(
-        prefix="sapling-spend-assignment-reference-"
+        prefix="sapling-spend-full-reference-"
     ) as directory:
-        trace_path = Path(directory) / "spend-assignments.json"
+        trace_path = Path(directory) / "spend-reference.json"
         command = [
             "cargo",
             "test",
@@ -880,14 +880,15 @@ def _reference_spend_assignment_variant(name: str) -> dict:
             str(REFERENCE_MANIFEST),
             "--test",
             "export_spend",
-            "export_spend_assignment_variant",
+            "export_spend_variant_fixture",
             "--",
             "--exact",
         ]
         environment = os.environ.copy()
         environment["CARGO_TERM_COLOR"] = "never"
-        environment["SAPLING_SPEND_ASSIGNMENT_VARIANT"] = name
-        environment["SAPLING_SPEND_ASSIGNMENT_EXPORT"] = str(trace_path)
+        environment["SAPLING_SPEND_VARIANT"] = name
+        environment["SAPLING_SPEND_EXPORT"] = str(trace_path)
+        started = time.perf_counter()
         subprocess.run(
             command,
             cwd=ROOT,
@@ -897,7 +898,11 @@ def _reference_spend_assignment_variant(name: str) -> dict:
             timeout=900,
             env=environment,
         )
-        return json.loads(trace_path.read_text(encoding="utf-8"))
+        exporter_seconds = time.perf_counter() - started
+        return (
+            json.loads(trace_path.read_text(encoding="utf-8")),
+            exporter_seconds,
+        )
 
 
 def _full_spend_trace_assignment(record: dict) -> int:
@@ -1034,51 +1039,65 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             raise AssertionError("Bellman Spend trace failed metadata validation")
         cls.witness = _full_spend_reference_witness(cls.reference)
 
-    def _assert_assignment_variant_matches(self, assignment_reference: dict):
+    def _assert_full_variant_matches(
+        self, bellman_reference: dict, exporter_seconds: float
+    ):
         self.assertEqual(
-            assignment_reference["format"],
-            "bellman-sapling-spend-assignment-reference-v1",
+            bellman_reference["format"],
+            "bellman-sapling-spend-reference-v1",
         )
-        self.assertEqual(assignment_reference["full_synthesis_count"], 1)
-        self.assertFalse(assignment_reference["constraints_recorded"])
+        self.assertTrue(bellman_reference["satisfied"])
+        self.assertEqual(bellman_reference["num_constraints"], 98_777)
+        self.assertEqual(len(bellman_reference["constraints"]), 98_777)
         self.assertEqual(
-            assignment_reference["sapling_crypto_revision"],
+            bellman_reference["upstream_test_asserted_hash"],
+            self.reference["upstream_test_asserted_hash"],
+        )
+        self.assertEqual(
+            bellman_reference["observed_test_constraint_system_hash"],
+            self.reference["observed_test_constraint_system_hash"],
+        )
+        self.assertEqual(
+            bellman_reference["sapling_crypto_revision"],
             self.reference["sapling_crypto_revision"],
         )
         self.assertEqual(
-            assignment_reference["bellman_revision"],
+            bellman_reference["bellman_revision"],
             self.reference["bellman_revision"],
         )
-        self.assertEqual(assignment_reference["num_inputs_including_one"], 8)
-        self.assertEqual(assignment_reference["num_auxiliary_variables"], 98_638)
+        self.assertEqual(bellman_reference["num_inputs_including_one"], 8)
+        self.assertEqual(bellman_reference["num_auxiliary_variables"], 98_638)
 
-        witness = _full_spend_reference_witness(assignment_reference)
+        witness = _full_spend_reference_witness(bellman_reference)
         system = SpendReferenceR1CS()
         started = time.perf_counter()
         assembly = constrain_source_faithful_spend(system, witness)
         synthesis_seconds = time.perf_counter() - started
         print(
-            f"{assignment_reference['fixture']['name']}: "
-            f"Python full synthesis {synthesis_seconds:.3f}s"
+            f"{bellman_reference['fixture']['name']}: Bellman exporter "
+            f"{exporter_seconds:.3f}s; Python full synthesis "
+            f"{synthesis_seconds:.3f}s"
         )
 
-        matrix_reference = self.reference
+        matrix_reference = bellman_reference
         expected_allocations = (
-            *assignment_reference["inputs"],
-            *assignment_reference["auxiliary_variables"],
+            *bellman_reference["inputs"],
+            *bellman_reference["auxiliary_variables"],
         )
+        self.assertEqual(len(system.constraints), 98_777)
+        self.assertEqual(len(system.variables), 98_646)
         self.assertEqual(len(system.constraints), matrix_reference["num_constraints"])
         self.assertEqual(len(system.variables), len(expected_allocations))
         self.assertTrue(system.is_satisfied())
         self.assertEqual(
             _full_spend_reference_failed_rows_with_assignments(
-                matrix_reference, assignment_reference
+                matrix_reference, bellman_reference
             ),
             (),
         )
         self.assertEqual(
             system.witness_value(system.variables[0]),
-            _full_spend_trace_assignment(assignment_reference["inputs"][0]),
+            _full_spend_trace_assignment(bellman_reference["inputs"][0]),
         )
 
         expected_by_identity = {
@@ -1117,9 +1136,9 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             actual_identities,
             [record["identity"] for record in expected_events],
         )
-        self.assertEqual(auxiliary_index, len(assignment_reference["auxiliary_variables"]))
+        self.assertEqual(auxiliary_index, len(bellman_reference["auxiliary_variables"]))
 
-        public_records = assignment_reference["inputs"][1:]
+        public_records = bellman_reference["inputs"][1:]
         self.assertEqual(len(assembly.public_inputs), 7)
         self.assertEqual(
             [system.public_input_position(variable) for variable in assembly.public_inputs],
@@ -1165,11 +1184,15 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             system.matrix_fingerprint(),
             _reference_matrix_fingerprint_with_inputs(
                 {
-                    "inputs": expected_public_inputs,
+                    "inputs": matrix_reference["inputs"][1:],
                     "variables": matrix_reference["auxiliary_variables"],
                     "constraints": matrix_reference["constraints"],
                 }
             ),
+        )
+        self.assertEqual(
+            system.matrix_fingerprint(),
+            "cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127",
         )
 
         replacements = (
@@ -1177,7 +1200,7 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             (
                 next(
                     record["identity"]
-                    for record in assignment_reference["auxiliary_variables"]
+                    for record in bellman_reference["auxiliary_variables"]
                     if record["annotation"] == "ak/u/num"
                 ),
                 (witness.ak.u + 1) % SCALAR_MODULUS,
@@ -1185,7 +1208,7 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             (
                 next(
                     record["identity"]
-                    for record in assignment_reference["auxiliary_variables"]
+                    for record in bellman_reference["auxiliary_variables"]
                     if record["annotation"]
                     == "merkle tree hash 0/path element/num"
                 ),
@@ -1199,7 +1222,7 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             )
             reference_failures = _full_spend_reference_failed_rows_with_assignments(
                 matrix_reference,
-                assignment_reference,
+                bellman_reference,
                 {identity: replacement},
             )
             self.assertEqual(local_failures, reference_failures)
@@ -1209,7 +1232,7 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
 
         conditional_anchor_identity = next(
             record["identity"]
-            for record in assignment_reference["auxiliary_variables"]
+            for record in bellman_reference["auxiliary_variables"]
             if record["annotation"] == "conditional anchor/num"
         )
         conditional_anchor_value = (witness.anchor + 1) % SCALAR_MODULUS
@@ -1226,7 +1249,7 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
         )
         reference_failures = _full_spend_reference_failed_rows_with_assignments(
             matrix_reference,
-            assignment_reference,
+            bellman_reference,
             conditional_anchor_replacements,
         )
         self.assertEqual(local_failures, reference_failures)
@@ -1237,10 +1260,10 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
         return system, assembly, synthesis_seconds
 
     def test_zero_value_alternating_path_witness_matches_bellman(self) -> None:
-        assignment_reference = _reference_spend_assignment_variant(
+        bellman_reference, exporter_seconds = _reference_full_spend_variant_trace(
             "zero-value-alternating"
         )
-        witness = _full_spend_reference_witness(assignment_reference)
+        witness = _full_spend_reference_witness(bellman_reference)
         self.assertEqual(witness.value, 0)
         self.assertEqual(
             tuple(direction for _, direction in witness.authentication_path),
@@ -1264,19 +1287,19 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             )
             variant_values = tuple(
                 record["assignment_hex"]
-                for record in assignment_reference["auxiliary_variables"]
+                for record in bellman_reference["auxiliary_variables"]
                 if record["annotation"].startswith(prefix)
             )
             self.assertEqual(len(variant_values), len(baseline_values), prefix)
             self.assertNotEqual(variant_values, baseline_values, prefix)
 
-        self._assert_assignment_variant_matches(assignment_reference)
+        self._assert_full_variant_matches(bellman_reference, exporter_seconds)
 
     def test_max_value_all_right_path_witness_matches_bellman(self) -> None:
-        assignment_reference = _reference_spend_assignment_variant(
+        bellman_reference, exporter_seconds = _reference_full_spend_variant_trace(
             "max-value-all-right"
         )
-        witness = _full_spend_reference_witness(assignment_reference)
+        witness = _full_spend_reference_witness(bellman_reference)
         self.assertEqual(witness.value, (1 << 64) - 1)
         self.assertEqual(
             tuple(direction for _, direction in witness.authentication_path),
@@ -1300,13 +1323,13 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
             )
             variant_values = tuple(
                 record["assignment_hex"]
-                for record in assignment_reference["auxiliary_variables"]
+                for record in bellman_reference["auxiliary_variables"]
                 if record["annotation"].startswith(prefix)
             )
             self.assertEqual(len(variant_values), len(baseline_values), prefix)
             self.assertNotEqual(variant_values, baseline_values, prefix)
 
-        self._assert_assignment_variant_matches(assignment_reference)
+        self._assert_full_variant_matches(bellman_reference, exporter_seconds)
 
     def test_complete_composition_matches_bellman_trace_and_failure_row(
         self,

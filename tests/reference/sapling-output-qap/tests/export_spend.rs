@@ -39,20 +39,6 @@ struct Export {
 }
 
 #[derive(Serialize)]
-struct AssignmentExport {
-    format: &'static str,
-    sapling_crypto_revision: &'static str,
-    bellman_revision: &'static str,
-    full_synthesis_count: usize,
-    fixture: Fixture,
-    num_inputs_including_one: usize,
-    num_auxiliary_variables: usize,
-    constraints_recorded: bool,
-    inputs: Vec<VariableRecord>,
-    auxiliary_variables: Vec<VariableRecord>,
-}
-
-#[derive(Serialize)]
 struct Fixture {
     name: &'static str,
     seed_hex: &'static str,
@@ -101,19 +87,10 @@ struct TraceConstraintSystem {
     auxiliary_variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
     next_allocation_event: usize,
-    capture_constraints: bool,
 }
 
 impl TraceConstraintSystem {
     fn new() -> Self {
-        Self::with_constraint_capture(true)
-    }
-
-    fn new_assignments_only() -> Self {
-        Self::with_constraint_capture(false)
-    }
-
-    fn with_constraint_capture(capture_constraints: bool) -> Self {
         Self {
             namespaces: Vec::new(),
             inputs: vec![VariableRecord {
@@ -138,7 +115,6 @@ impl TraceConstraintSystem {
             auxiliary_variables: Vec::new(),
             constraints: Vec::new(),
             next_allocation_event: 1,
-            capture_constraints,
         }
     }
 
@@ -560,9 +536,6 @@ impl ConstraintSystem<Scalar> for TraceConstraintSystem {
         LB: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
         LC: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
     {
-        if !self.capture_constraints {
-            return;
-        }
         let name = self.full_name(annotation().into());
         let a = a(LinearCombination::zero());
         let b = b(LinearCombination::zero());
@@ -811,15 +784,17 @@ fn assignment_variant_spend(name: &str) -> (Spend, Fixture) {
 }
 
 #[test]
-fn export_spend_assignment_variant() {
-    let variant =
-        std::env::var("SAPLING_SPEND_ASSIGNMENT_VARIANT").expect("set the assignment variant");
+fn export_spend_variant_fixture() {
+    let variant = std::env::var("SAPLING_SPEND_VARIANT").expect("set the Spend variant");
     let (spend, fixture) = assignment_variant_spend(&variant);
-    let mut trace = TraceConstraintSystem::new_assignments_only();
+    let mut trace = TraceConstraintSystem::new();
     spend.synthesize(&mut trace).unwrap();
-    assert!(trace.constraints.is_empty());
     assert_eq!(trace.inputs.len(), 8);
     assert_eq!(trace.auxiliary_variables.len(), 98_638);
+    assert_eq!(trace.constraints.len(), 98_777);
+    assert!(trace.rows_satisfied());
+    let test_hash = trace.hash();
+    assert_eq!(test_hash, EXPECTED_UPSTREAM_TEST_HASH);
     let mut allocation_event_indices: Vec<_> = trace
         .inputs
         .iter()
@@ -831,19 +806,22 @@ fn export_spend_assignment_variant() {
         allocation_event_indices,
         (0..trace.inputs.len() + trace.auxiliary_variables.len()).collect::<Vec<_>>()
     );
-    let export = AssignmentExport {
-        format: "bellman-sapling-spend-assignment-reference-v1",
+    let export = Export {
+        format: "bellman-sapling-spend-reference-v1",
         sapling_crypto_revision: SAPLING_REVISION,
         bellman_revision: BELLMAN_REVISION,
-        full_synthesis_count: 1,
         fixture,
+        upstream_test_asserted_hash: EXPECTED_UPSTREAM_TEST_HASH,
+        observed_test_constraint_system_hash: test_hash,
         num_inputs_including_one: trace.inputs.len(),
         num_auxiliary_variables: trace.auxiliary_variables.len(),
-        constraints_recorded: false,
+        num_constraints: trace.constraints.len(),
+        satisfied: true,
         inputs: trace.inputs,
         auxiliary_variables: trace.auxiliary_variables,
+        constraints: trace.constraints,
     };
-    let path = std::env::var("SAPLING_SPEND_ASSIGNMENT_EXPORT")
-        .expect("set SAPLING_SPEND_ASSIGNMENT_EXPORT to an external artifact path");
+    let path = std::env::var("SAPLING_SPEND_EXPORT")
+        .expect("set SAPLING_SPEND_EXPORT to an artifact path");
     fs::write(path, serde_json::to_vec(&export).unwrap()).unwrap();
 }

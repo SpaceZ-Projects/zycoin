@@ -33,8 +33,9 @@ and provenance; it is the source record for the focused reports below.
   distinguishes the reference source pin from unverified official-parameter
   circuit binding. Phases 9.21.40–41 record exact full source-order parity for
   the isolated test-only Spend composition across three valid witnesses,
-  reusing the pinned Bellman matrix for the two added assignment traces.
-  Production matrix and official-parameter compatibility remain unverified.
+  including independent full Bellman matrix exports for the two added
+  witnesses. Production matrix and official-parameter compatibility remain
+  unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
