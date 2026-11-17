@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.45):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.46):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -91,12 +91,13 @@ captured production and pinned-reference matrices under the accepted role
 mapping and helper projection. It is not a proof that every possible
 production synthesis execution emits that same matrix. Exact ordered matrix
 identity is disproved for the captured exports; QAP/Groth16 compatibility
-remains **Unverified**. For the pinned baseline witness, all eight canonical
-QAP vectors differ. The official H accumulation also differs under direct
-mapping, while IC/L/A/B_G1/B_G2 accumulations match only for that mapped
-witness. Phase 9.21.45 records the full vector/section fingerprints and
-preserves the unverified status of transformed-query equivalence and
-parameter-to-circuit binding.
+remains **Unverified**. All eight canonical QAP vectors differ for both the
+pinned baseline and `zero-value-alternating` witnesses. Bellman independently
+recomputed production H from production A/B/C for both witnesses, while the
+official H accumulation differs under direct mapping for both. IC/L/A/B_G1/
+B_G2 accumulations were compared only for the baseline witness. Phases
+9.21.45–46 record the full vector fingerprints and preserve the unverified
+status of transformed-query equivalence and parameter-to-circuit binding.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 
@@ -6380,6 +6381,38 @@ Nevertheless the upstream test hash, assignment, matrix fingerprint, and all
 QAP vector fingerprints matched their pinned values. No production code,
 Output, setup, parameter, or proving gate changed; no synthetic setup
 regression was run.
+
+### Phase 9.21.46 — Alternate-witness Spend QAP comparison
+
+The `zero-value-alternating` fixture was freshly synthesized on production
+and exported from pinned Bellman. Dimensions were 98,777 rows by 98,646
+columns over QAP domain 131,072. Production retained fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`;
+the independently verified Bellman matrix fingerprint is
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+All 8 ONE/public and 98,637 mapped auxiliary assignments agreed under the
+documented anchor and packed-position helper projections.
+
+All eight canonical QAP vector fingerprints differ between Bellman and
+production, and all sixteen alternate fingerprints differ from their
+corresponding baseline-witness fingerprints. The mismatch pattern therefore
+persists across both witnesses, although each vector's contents are
+witness-specific. Bellman's quotient divisibility check and production's
+independent quotient identity both pass. Bellman 0.15 recomputed production H
+from production A/B/C evaluations and reproduced production H coefficients
+and evaluations. The official H-query accumulation still differs:
+Bellman `cb5a744efe825173a2b85da7cd2da193cc4462d1c2f85410c9d9981ffa7a73d2`,
+production `d3ff0c5ff484fbf25d87e8df5d76d463f833db5ac7f90c819e3e98dccec956bc`.
+The other five production query accumulations were not compared for this
+alternate fixture. No complete transformed-QAP/query equivalence or
+official parameter-to-production-circuit binding is established.
+
+The complete vector fingerprints, assignment hashes, exact stage timings,
+and scope limitations are recorded in
+[Phase 9.21.46 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92146--alternate-witness-spend-qap-comparison).
+The focused test passed **1 test in 386.41 s**; its Bellman variant exporter
+passed **1 Rust test in 26.39 s**. No production circuit, Output, setup,
+parameter, or proving gate changed; no synthetic setup regression was run.
 
 ## Phase 9.21.18 — Authentic Sapling parameter-format audit
 

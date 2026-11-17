@@ -185,10 +185,19 @@ was generated and the gate remains closed. Details and complete fingerprints
 are in [Phase 9.21.45 of the implementation
 report](sapling-circuit-implementation.md#phase-92145--production-spend-qap-and-query-equivalence)
 and [the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92145--production-spend-qap-and-official-query-audit).
-The smallest diagnostic next step is an all-vector QAP comparison for one
-existing alternate witness; only a complete symbolic query-coordinate
-transformation or a trusted setup bound to the production matrix could
-establish compatibility.
+Phase 9.21.46 extends the comparison to the `zero-value-alternating` witness:
+all eight Bellman/production QAP vector differences persist, both quotient
+identities pass, and Bellman independently recomputes production H from its
+A/B/C evaluations. The official H accumulation still differs
+(`cb5a744e…` Bellman versus `d3ff0c5f…` production). This establishes stable
+empirical differences across two witnesses, not transformed QAP/query
+equivalence. The alternate test passed **1 test in 386.41 s**; details and
+all fingerprints are in [Phase 9.21.46 of the authoritative Spend
+report](sapling-spend-authoritative-reference.md#phase-92146--alternate-witness-spend-qap-comparison).
+The remaining evidence-supported step is a complete symbolic transformation
+of row-domain, factor, variable, and helper/query coordinates, or a trusted
+setup bound to the production matrix. The baseline raw JSON digest issue was
+not re-investigated; the prior raw export remains unavailable.
 
 Focused verification passed the official six-section query test (**1 test,
 1,166.468 s; Bellman accumulation 202.154 s**) and the parameter-query/
@@ -606,7 +615,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.45):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.46):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -621,12 +630,14 @@ role mapping and auxiliary projection. This does not establish that arbitrary
 production synthesis executions emit the same matrix. The v7 mapping and row
 artifact remain unchanged. Exact ordered matrix alignment, QAP/query
 compatibility, authentic proving-key/verification-key compatibility, and
-production proof generation remain **Unverified**. Phase 9.21.45 found all
-eight canonical QAP vectors differ for the pinned baseline witness and a
-direct-mapping H accumulation mismatch with the official key. IC/L/A/B_G1/
-B_G2 direct accumulations match only for that witness; they do not prove
-query-vector equivalence. Official parameter-to-circuit binding and ceremony
-validity remain **Unverified**.
+production proof generation remain **Unverified**. Phases 9.21.45 and
+9.21.46 found all eight canonical QAP vectors differ for both the pinned
+baseline and `zero-value-alternating` witnesses. Bellman independently
+recomputed production H from production A/B/C for both witnesses, while the
+direct-mapping official H accumulation differed for both. IC/L/A/B_G1/B_G2
+direct accumulations were compared only for the baseline witness and are not
+proof of query-vector equivalence. Official parameter-to-circuit binding and
+ceremony validity remain **Unverified**.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

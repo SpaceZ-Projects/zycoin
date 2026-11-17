@@ -50,6 +50,10 @@ and provenance; it is the source record for the focused reports below.
   records the complete baseline QAP fingerprints and official six-section
   query comparison: five direct witness accumulations match, H differs, and
   parameter-to-production-circuit binding remains unverified.
+  [Phase 9.21.46](sapling-spend-authoritative-reference.md#phase-92146--alternate-witness-spend-qap-comparison)
+  extends all eight QAP-vector comparisons to the `zero-value-alternating`
+  witness; every Bellman/production pair still differs, Bellman recomputes
+  production H, and the direct official H accumulation still differs.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
@@ -68,6 +72,9 @@ and provenance; it is the source record for the focused reports below.
   establishes that relation equivalence does not establish canonical QAP
   equivalence; it documents the differing vectors, row transformations, and
   H-query mismatch under direct mapping.
+  [Phase 9.21.46](sapling-circuit-implementation.md#phase-92146--alternate-witness-spend-qap-comparison)
+  records the alternate-witness QAP fingerprints, quotient checks, and
+  persistent official H accumulation mismatch.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution and little-endian position interpretation;
   Phase 9.21.43 establishes relation equivalence for the captured exports,
@@ -136,11 +143,12 @@ and provenance; it is the source record for the focused reports below.
   field/curve primitives, pinned pairing-vector verification, and performance
   and security limitations.
 - [Sapling Groth16 proof-generation readiness](sapling-groth16-proof-generation.md) —
-  Phase 9.21.45 records that all eight canonical Spend QAP vectors differ
-  for the pinned baseline witness, and that direct official-query H
-  accumulation differs while the other five mapped witness accumulations
-  match. Parameter-to-circuit binding and ceremony validity remain
-  unverified. Phase 9.21.43 establishes relation equivalence for the captured
+  Phases 9.21.45–46 record that all eight canonical Spend QAP vectors differ
+  for both baseline and `zero-value-alternating` witnesses, Bellman
+  independently recomputes production H, and direct official-query H
+  accumulation differs for both. The other five mapped witness accumulations
+  were compared only for baseline. Parameter-to-circuit binding and ceremony
+  validity remain unverified. Phase 9.21.43 establishes relation equivalence for the captured
   production and pinned-reference matrices without establishing QAP/query
   equivalence.
   Phase 9.21.37 records the insecure full-size synthetic Spend setup and its

@@ -1261,3 +1261,67 @@ The pinned Rust exporter was explicitly filtered to the baseline fixture
 because its unfiltered variant test requires an additional environment
 variable. No code, fixture, parameter, setup, or proving gate was changed,
 and no synthetic setup regression was run.
+
+### Phase 9.21.46 — Alternate-witness Spend QAP comparison
+
+The `zero-value-alternating` witness was independently synthesized by pinned
+Bellman and fresh production synthesis. The Bellman assignment fingerprint is
+`2fbecf40aaa9dbfcf6476fc68354a5d69550edcc1057aa29d3945a6856484370`; the
+production assignment fingerprint is
+`a54bfbcdaf8d53b65d4617f24878e8b5ad6507dff04455571e1466f730f12a95`.
+The assignment map matched all 8 ONE/public values and 98,637 auxiliary
+values. As in the baseline comparison, upstream `Aux(76805)` is projected
+from the anchor and local packed position column 32,621 is reconstructed
+from the little-endian path directions. The production synthesis was
+satisfied and retained 98,777 rows by 98,646 columns, with matrix fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+The independently verified pinned Bellman matrix remains 98,777 by 98,646,
+fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The QAP domain is 131,072.
+
+| Canonical QAP vector | Elements | Bellman SHA-256 | Production SHA-256 |
+|---|---:|---|---|
+| A evaluations | 131,072 | `ed48c295ddf77151a35a204a36cfc4af44b699608c29883f6b06943cbca4812d` | `f9ad06b02fee3b77a26d58d7b745120c219d65d284ee7499297d12da43f4f4e7` |
+| B evaluations | 131,072 | `fb939d73fa877d1557765af2a7f138822435591d094800b375a0f83b6cd2e75c` | `1c037eff849c4ed30ed051ab29daba97d83cdec7cb25447351b230adbdc68067` |
+| C evaluations | 131,072 | `586c928a885ecd15f5a5848d8aa9e1b00c7b8bf18c03ef7c46a9518bb75de535` | `14edd1999e02847740ac6666ce0e0522b8d2978d0b12eb680290eae7e507e183` |
+| A polynomial coefficients | 131,072 | `8df1793a251d9b2b134ae1de1943d110c90924a229057e1fcdd0c2667744c861` | `3de5a4bc3f61b62587cb78b8b79c52299c24e207b5fbf2a09094877112bfcdb9` |
+| B polynomial coefficients | 131,072 | `34a7ec0db0c5e32e0e1b337cc15d7be240d6d975234a158835eee01e62c9907a` | `01c2aff0c44f558c4afbc19a6aa4ee82fad04d91362b918521610684ea401c1c` |
+| C polynomial coefficients | 131,072 | `1680ffc16088a76605ce35b6c0a76d7393da6baaf51d9c5f25f0a3fbc1734c8d` | `0910bcc0225aeca315db54845efff73c5f7565ef8b11ce36380d1901c9757e1e` |
+| H quotient coefficients | 131,071 | `38d0b98546ba107791f1e4c77670d9e6b76f8ceef4d246de3a180d7c024f8bed` | `604aaeb55a719031c41b15c30193bd469210584ed40e02e73a220ad8bfa5075f` |
+| H evaluations | 131,072 | `a5ac5c823e94310619df3744b43dd7eed47b8ed2a5df619f14b6c742d90d83db` | `62dc36d14ff35033b51f074b39703ea3656b9f455e286ad189594101e1560f49` |
+
+All eight Bellman/production vector pairs differ, and both implementations'
+eight alternate-witness hashes differ from their corresponding retained
+baseline-witness hashes. Thus the vector values vary with the witness, while
+the observed all-eight cross-implementation mismatch persists across both
+witnesses. Bellman's quotient divisibility check and production's independent
+2n coset-FFT quotient identity both pass. Bellman 0.15 independently
+recomputed H from the production A/B/C evaluations and reproduced the
+production H coefficient hash
+`604aaeb55a719031c41b15c30193bd469210584ed40e02e73a220ad8bfa5075f`
+and evaluation hash
+`62dc36d14ff35033b51f074b39703ea3656b9f455e286ad189594101e1560f49`.
+This confirms the production quotient calculation for this witness; it does
+not transform the Bellman QAP into the production QAP.
+
+Using the official H points, Bellman's alternate-witness H accumulation
+SHA-256 is
+`cb5a744efe825173a2b85da7cd2da193cc4462d1c2f85410c9d9981ffa7a73d2`;
+the production-coefficient accumulation is
+`d3ff0c5ff484fbf25d87e8df5d76d463f833db5ac7f90c819e3e98dccec956bc`.
+The direct H-query mismatch therefore persists. This run accumulated all
+six official sections but did not compare the other five production
+accumulations for this alternate witness. It establishes neither a complete
+symbolic query-coordinate transformation nor official
+parameter-to-production-circuit binding; both remain **Unverified**.
+
+The focused alternate test passed **1 test in 386.41 s**. Its measured
+stages were Bellman export 37.356 s (1 Rust test passed in 26.39 s), Bellman
+QAP derivation 33.274 s, production synthesis 7.435 s, production QAP
+derivation 21.991 s, and Bellman H cross-check/query accumulation 257.443 s
+(the Rust accumulator reported 204.451 s for all six sections). The
+baseline raw JSON trace digest was not investigated or regenerated; its
+cause remains unresolved because the prior raw export is unavailable.
+No production circuit, arithmetic, Output, setup, parameter, or proving gate
+was changed, and no synthetic setup regression was run.
