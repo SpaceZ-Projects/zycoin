@@ -88,6 +88,9 @@ and provenance; it is the source record for the focused reports below.
   implements and independently verifies a test-only temporal-to-canonical
   mapping against all variables, assignments, and ordered A/B/C expressions
   in the retained full Spend matrix; production replacement remains unverified.
+  [Phase 9.21.57](sapling-spend-authoritative-reference.md#phase-92157--source-faithful-spend-witness-validation)
+  adds source-backed host admission checks to the isolated witness path while
+  retaining all circuit constraints; retained-baseline matrix parity passes.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.

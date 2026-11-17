@@ -2544,3 +2544,56 @@ query compatibility, and Spend proving remain separate and unverified.
   (20 min 13.888 s); no synthesis or Bellman export was performed.
 - Targeted Ruff and `compileall` passed. `git diff --check` is recorded after
   the report updates in the final task verification.
+
+### Phase 9.21.57 — Source-faithful Spend witness validation
+
+Added fail-before-allocation validation to the isolated
+`_validate_spend_reference_witness`. The valid synthesis path, allocation
+order, bit decompositions, equations, labels, and enforcement order are
+unchanged.
+
+#### Validation inventory and source boundary
+
+| Witness item | Host validation | Circuit relation retained | Pinned-source / remaining boundary |
+|---|---|---|---|
+| `ak` authorization point | Must be a `Point` with integer canonical coordinates, on Jubjub, non-small-order, and in the prime-order subgroup. | Edwards curve and non-small-order checks remain in the R1CS. | Pinned fixture obtains it through subgroup-typed `SpendValidatingKey` / `ProofGenerationKey`; production witness preparation also requires subgroup membership. No separate `ask` is present in `SpendReferenceWitness`. |
+| `ar`, `nsk`, `rcv`, `rcm` | Exact Python integers in `[0, jubjub::Fr)`. | Existing 252-bit little-endian decompositions and Boolean/reconstruction or scalar-multiplication constraints are unchanged. | Their field types in the pinned implementation are canonical by construction; no byte-encoding fields are supplied here. |
+| Note value | Exact integer in `[0, 2^64)`. | Existing 64 value bits and range/commitment constraints remain. | Both the pinned `NoteValue::from_raw` and production preparation use the unsigned 64-bit range. |
+| `g_d` diversifier base | Same canonical point, curve, non-small-order, and prime-subgroup checks as `ak`. | Existing curve and non-small-order rows remain. | Pinned payment addresses derive `g_d` from a valid diversifier; this isolated witness contains only `g_d`, not the diversifier bytes, so their group-hash correspondence cannot be checked here. Production has and checks the diversifier. |
+| Authentication path | Exactly 32 tuple entries; every sibling is an exact canonical circuit-field integer and every direction is exactly `bool`. | Existing position-bit Boolean constraints, path ordering, and per-level Pedersen relations remain. | The pinned fixture supplies a 32-level path of canonical `Scalar` siblings and Boolean directions. Position is derived from the directions, not an independent isolated-witness field. |
+| Anchor | Exact canonical circuit-field integer. For nonzero value, independently recompute the note and Merkle root and require the supplied anchor to match before allocation. For zero value, a different anchor remains allowed. | The conditional-anchor equation and late public inputization remain unchanged; when value is zero the source relation does not force root equality. | This matches the pinned equation `(root - anchor) * value = 0` and production's nonzero-anchor check. |
+| `nk`, `ivk`, `pk_d`, value/note commitments, Merkle root, `rho`, nullifier digest and packed chunks | Not independent fields of `SpendReferenceWitness`; no duplicate caller-supplied values can be inconsistent. The nonzero anchor is checked against the locally derived root. | Existing derivation, bit, hash, and public-input constraints produce these values. | The full production witness API does carry additional derived values and validates their consistency; that API is outside this isolated witness type. |
+
+Point subgroup validation is deliberately host-side input admission, not a
+replacement for the circuit's existing curve and non-small-order constraints.
+It follows the pinned typed inputs and production's authorization-key
+preparation. Tests include a valid on-curve, non-small-order point outside the
+prime subgroup and confirm that it is rejected. Point encodings are not fields
+of this witness API; callers provide `Point` objects, whose coordinates are
+checked directly.
+
+#### Verification
+
+Focused validation and composition tests: **7 passed**. They cover scalar and
+value bounds, point type/canonicality/curve/small-order/subgroup checks,
+malformed paths and directions, mismatching nonzero anchors, and the valid
+zero-value/mismatching-anchor case. Each invalid complete-witness call is
+asserted to leave the R1CS at one ONE variable and zero constraints.
+
+The retained baseline Bellman trace was synthesized through the updated
+source-faithful entrypoint: **1 passed in 63.890 s**, including all ordered
+rows/assignments and unchanged matrix dimensions and fingerprint (98,777 rows,
+98,646 columns,
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`).
+Previously verified three-witness Bellman parity remains the circuit-level
+baseline. The two alternate full exports were not rerun; their pinned Rust
+fixture constructors use subgroup keys and valid diversifier-derived bases,
+canonical field scalars, 32 canonical path siblings/directions, and anchors
+computed from those paths. The new host tests also admit zero and maximum
+64-bit values. No Bellman exporter was run for this task.
+
+Targeted Ruff and `compileall` passed. Production Spend and Output, parameters,
+readiness gates, and proving were not changed. Remaining gaps include the
+missing diversifier bytes and source key material in the isolated API, derived
+field parity beyond retained witnesses, and production integration; witness
+validation alone does not establish production readiness.

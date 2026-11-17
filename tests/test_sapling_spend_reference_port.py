@@ -7,6 +7,8 @@ import tempfile
 import time
 import unittest
 from contextlib import ExitStack
+from dataclasses import replace
+from functools import cache
 from hashlib import blake2s, sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,8 +50,10 @@ from src.blake2s_gadget import _NegatedBit, _read_bit
 from src.bls12_381 import SCALAR_MODULUS
 from src.jubjub import (
     CURVE_D,
+    FIELD_MODULUS,
     IDENTITY,
     Point,
+    find_group_hash,
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import (
@@ -61,6 +65,8 @@ from src.r1cs import (
 )
 from src.sapling_gadgets import (
     _pedersen_montgomery_tables,
+    make_merkle_path_witness,
+    make_note_commitment_witness,
     sapling_fixed_base_generator,
 )
 from tests.bellman_blake2s_reference import _add as _bellman_add
@@ -76,6 +82,181 @@ ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
     ROOT / "tests" / "reference" / "sapling-output-qap" / "Cargo.toml"
 )
+
+
+@cache
+def _valid_source_spend_witness(
+    *,
+    value: int = 7,
+    ak: Point | None = None,
+    g_d: Point | None = None,
+    anchor: int | None = None,
+) -> SpendReferenceWitness:
+    if ak is None:
+        ak = sapling_fixed_base_generator("spending_key").multiply(5)
+    if g_d is None:
+        g_d = find_group_hash(b"Zcash_gd", bytes(range(11)))
+    if g_d is None:
+        raise AssertionError("deterministic diversifier did not map to Jubjub")
+
+    nsk = 13
+    rcm = 17
+    nullifier_key = sapling_fixed_base_generator(
+        "proof_generation_key"
+    ).multiply(nsk)
+    ivk_digest = blake2s(
+        ak.encode() + nullifier_key.encode(),
+        digest_size=32,
+        person=b"Zcashivk",
+    ).digest()
+    ivk = int.from_bytes(ivk_digest, "little") & ((1 << 251) - 1)
+    transmission_key = g_d.multiply(ivk)
+    note_commitment = make_note_commitment_witness(
+        value, g_d, transmission_key, rcm
+    ).commitment
+    authentication_path = tuple(
+        (level + 1, bool(level & 1)) for level in range(32)
+    )
+    position = sum(
+        int(direction) << level
+        for level, (_, direction) in enumerate(authentication_path)
+    )
+    merkle_path = make_merkle_path_witness(
+        note_commitment.u,
+        tuple(sibling for sibling, _ in authentication_path),
+        position,
+    )
+    computed_anchor = merkle_path.pedersen_hashes[-1].result.u
+    return SpendReferenceWitness(
+        ak=ak,
+        ar=19,
+        nsk=nsk,
+        g_d=g_d,
+        value=value,
+        rcv=23,
+        rcm=rcm,
+        authentication_path=authentication_path,
+        anchor=computed_anchor if anchor is None else anchor,
+    )
+
+
+class SpendReferenceWitnessValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.witness = _valid_source_spend_witness()
+
+    def _assert_rejected_before_mutation(
+        self, witness: SpendReferenceWitness, message: str
+    ) -> None:
+        system = SpendReferenceR1CS()
+        with self.assertRaisesRegex((R1CSError, TypeError), message):
+            constrain_source_faithful_spend(system, witness)
+        self.assertEqual(len(system.variables), 1)
+        self.assertEqual(system.constraint_count, 0)
+
+    def test_valid_inputs_and_scalar_boundary_values_are_admitted(self):
+        for witness in (
+            self.witness,
+            _valid_source_spend_witness(value=(1 << 64) - 1),
+            _valid_source_spend_witness(value=0, anchor=123),
+        ):
+            with self.subTest(witness=witness.ak):
+                self.assertIsNone(
+                    sapling_spend_reference_port._validate_spend_reference_witness(
+                        witness
+                    )
+                )
+
+    def test_rejects_non_subgroup_keys_and_diversifier_bases(self):
+        non_subgroup_point = (
+            sapling_fixed_base_generator("spending_key")
+            + Point(0, FIELD_MODULUS - 1)
+        )
+        self.assertTrue(non_subgroup_point.is_on_curve())
+        self.assertFalse(non_subgroup_point.is_in_subgroup())
+        self.assertNotEqual(non_subgroup_point.multiply(8), IDENTITY)
+
+        invalid_witnesses = (
+            (
+                _valid_source_spend_witness(ak=non_subgroup_point),
+                "ak witness is not in the prime-order subgroup",
+            ),
+            (
+                _valid_source_spend_witness(g_d=non_subgroup_point),
+                "g_d witness is not in the prime-order subgroup",
+            ),
+        )
+        for witness, message in invalid_witnesses:
+            with self.subTest(message=message):
+                self._assert_rejected_before_mutation(witness, message)
+
+    def test_rejects_out_of_range_scalar_value_and_anchor_before_mutation(self):
+        invalid_witnesses = (
+            (replace(self.witness, ar=-1), "ar witness is outside"),
+            (
+                replace(self.witness, nsk=JUBJUB_SCALAR_MODULUS),
+                "nsk witness is outside",
+            ),
+            (replace(self.witness, rcv=True), "rcv witness is outside"),
+            (
+                replace(self.witness, rcm=JUBJUB_SCALAR_MODULUS),
+                "rcm witness is outside",
+            ),
+            (replace(self.witness, value=1 << 64), "unsigned 64-bit"),
+            (replace(self.witness, anchor=SCALAR_MODULUS), "anchor witness"),
+        )
+        for witness, message in invalid_witnesses:
+            with self.subTest(message=message):
+                self._assert_rejected_before_mutation(witness, message)
+
+    def test_rejects_malformed_authentication_paths_before_mutation(self):
+        short_path = self.witness.authentication_path[:-1]
+        bad_sibling = ((SCALAR_MODULUS, False),) + self.witness.authentication_path[1:]
+        bad_direction = ((1, 1),) + self.witness.authentication_path[1:]
+        malformed_entry = ((1, False, 2),) + self.witness.authentication_path[1:]
+        invalid_witnesses = (
+            (replace(self.witness, authentication_path=short_path), "32 entries"),
+            (replace(self.witness, authentication_path=bad_sibling), "sibling 0"),
+            (replace(self.witness, authentication_path=bad_direction), "must be boolean"),
+            (replace(self.witness, authentication_path=malformed_entry), "entries must be"),
+            (
+                replace(
+                    self.witness,
+                    authentication_path=list(self.witness.authentication_path),
+                ),
+                "32 entries",
+            ),
+        )
+        for witness, message in invalid_witnesses:
+            with self.subTest(message=message):
+                self._assert_rejected_before_mutation(witness, message)
+
+    def test_rejects_invalid_or_small_order_points_before_mutation(self):
+        invalid_witnesses = (
+            (replace(self.witness, ak=Point(1, 1)), "not on Jubjub"),
+            (replace(self.witness, ak=IDENTITY), "ak witness is small order"),
+            (replace(self.witness, g_d=IDENTITY), "g_d witness is small order"),
+            (replace(self.witness, ak=Point(1.0, 1.0)), "coordinates must be"),
+            (replace(self.witness, ak=object()), "must be a Jubjub point"),
+        )
+        for witness, message in invalid_witnesses:
+            with self.subTest(message=message):
+                self._assert_rejected_before_mutation(witness, message)
+
+    def test_rejects_nonzero_anchor_mismatch_but_allows_zero_value_anchor(self):
+        mismatch = replace(
+            self.witness,
+            anchor=(self.witness.anchor + 1) % SCALAR_MODULUS,
+        )
+        self._assert_rejected_before_mutation(
+            mismatch, "requires the computed Merkle anchor"
+        )
+
+        zero_value = _valid_source_spend_witness(value=0, anchor=123)
+        self.assertIsNone(
+            sapling_spend_reference_port._validate_spend_reference_witness(
+                zero_value
+            )
+        )
 
 
 class SpendReferenceCompositionBoundaryTests(unittest.TestCase):
@@ -385,16 +566,9 @@ class SpendReferenceCompositionBoundaryTests(unittest.TestCase):
 
     def test_source_stage_handoffs_without_full_synthesis(self) -> None:
         system = SpendReferenceR1CS()
-        witness = SpendReferenceWitness(
-            IDENTITY,
-            0,
-            0,
-            IDENTITY,
-            0,
-            0,
-            0,
-            tuple((0, False) for _ in range(32)),
-            0,
+        witness = _valid_source_spend_witness(
+            value=0,
+            anchor=0,
         )
         events: list[str] = []
         observed: dict[str, object] = {}

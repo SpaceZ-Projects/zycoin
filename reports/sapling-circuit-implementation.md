@@ -6435,6 +6435,25 @@ trace mapping passed (**1 passed in 1,213.888 s**). Targeted Ruff and
 [authoritative report](sapling-spend-authoritative-reference.md#phase-92156--source-faithful-spend-temporal-to-canonical-allocation-bridge)
 for mapping semantics, exact evidence, and remaining blockers.
 
+### Phase 9.21.57 — Source-faithful Spend witness validation
+
+The test-only Spend entrypoint now rejects malformed/out-of-range scalar,
+value, path, and anchor inputs and invalid `ak`/`g_d` points before R1CS
+mutation. It checks subgroup membership as required by the pinned typed
+Spend inputs, while retaining the existing curve, non-small-order, bit,
+Merkle, and conditional-anchor constraints. A nonzero note value requires the
+derived Merkle root as anchor; zero-value anchors remain unconstrained by that
+relation. No circuit rows or valid allocation behavior changed.
+
+Focused validation/composition regressions passed (**7 passed**). The retained
+baseline Bellman trace re-synthesized and matched the original **98,777 ×
+98,646** matrix fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`
+(**1 passed in 63.890 s**). Alternate Bellman exports were not rerun.
+Production integration and validation of omitted diversifier/source-key
+inputs remain open. See the
+[authoritative validation inventory](sapling-spend-authoritative-reference.md#phase-92157--source-faithful-spend-witness-validation).
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

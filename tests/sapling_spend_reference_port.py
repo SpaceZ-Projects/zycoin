@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import lru_cache
+from hashlib import blake2s
 from typing import TypeAlias
 
 from src.blake2s_gadget import CircuitBit, _NegatedBit, _read_bit
@@ -12,13 +13,18 @@ from src.bls12_381 import SCALAR_MODULUS
 from src.bls12_381 import SCALAR_MODULUS as CIRCUIT_FIELD_MODULUS
 from src.jubjub import (
     CURVE_D,
+    FIELD_MODULUS,
     IDENTITY,
     Point,
     find_group_hash,
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, LinearCombination, R1CSError, Variable
-from src.sapling_gadgets import sapling_fixed_base_generator
+from src.sapling_gadgets import (
+    make_merkle_path_witness,
+    make_note_commitment_witness,
+    sapling_fixed_base_generator,
+)
 from tests.bellman_blake2s_reference import _Negated as _BellmanNegated
 from tests.bellman_blake2s_reference import constrain_bellman_blake2s_reference
 
@@ -2142,8 +2148,6 @@ def _constrain_spend_edwards_point_select(
 def _validate_spend_reference_witness(witness: SpendReferenceWitness) -> None:
     if not isinstance(witness, SpendReferenceWitness):
         raise TypeError("witness must be a SpendReferenceWitness")
-    if not isinstance(witness.ak, Point) or not isinstance(witness.g_d, Point):
-        raise TypeError("ak and g_d witnesses must be Jubjub points")
     for name in ("ar", "nsk", "rcv", "rcm"):
         value = getattr(witness, name)
         if type(value) is not int or not 0 <= value < _JUBJUB_SCALAR_MODULUS:
@@ -2164,6 +2168,53 @@ def _validate_spend_reference_witness(witness: SpendReferenceWitness) -> None:
             raise TypeError(f"authentication path direction {level} must be boolean")
     if type(witness.anchor) is not int or not 0 <= witness.anchor < SCALAR_MODULUS:
         raise R1CSError("anchor witness is outside the circuit field")
+
+    for name in ("ak", "g_d"):
+        point = getattr(witness, name)
+        if not isinstance(point, Point):
+            raise TypeError(f"{name} witness must be a Jubjub point")
+        if (
+            type(point.u) is not int
+            or type(point.v) is not int
+            or not 0 <= point.u < FIELD_MODULUS
+            or not 0 <= point.v < FIELD_MODULUS
+        ):
+            raise R1CSError(f"{name} coordinates must be canonical field elements")
+        if not point.is_on_curve():
+            raise R1CSError(f"{name} witness is not on Jubjub")
+        if point.multiply(8) == IDENTITY:
+            raise R1CSError(f"{name} witness is small order")
+        if not point.is_in_subgroup():
+            raise R1CSError(f"{name} witness is not in the prime-order subgroup")
+
+    nullifier_key = sapling_fixed_base_generator(
+        "proof_generation_key"
+    ).multiply(witness.nsk)
+    ivk_digest = blake2s(
+        witness.ak.encode() + nullifier_key.encode(),
+        digest_size=32,
+        person=b"Zcashivk",
+    ).digest()
+    ivk = int.from_bytes(ivk_digest, "little") & ((1 << 251) - 1)
+    transmission_key = witness.g_d.multiply(ivk)
+    note_commitment = make_note_commitment_witness(
+        witness.value,
+        witness.g_d,
+        transmission_key,
+        witness.rcm,
+    ).commitment
+    position = sum(
+        int(direction) << level
+        for level, (_, direction) in enumerate(witness.authentication_path)
+    )
+    merkle_path = make_merkle_path_witness(
+        note_commitment.u,
+        tuple(sibling for sibling, _ in witness.authentication_path),
+        position,
+    )
+    computed_anchor = merkle_path.pedersen_hashes[-1].result.u
+    if witness.value != 0 and witness.anchor != computed_anchor:
+        raise R1CSError("nonzero Spend value requires the computed Merkle anchor")
 
 
 def _spend_point_witness(
