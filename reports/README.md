@@ -41,8 +41,11 @@ and provenance; it is the source record for the focused reports below.
   [Phase 9.21.43](sapling-spend-authoritative-reference.md#phase-92143--production-spend-relation-equivalence)
   establishes relation equivalence for those captured matrices under the
   mapped variables and explicit anchor/position projections; ordered matrix
-  identity is disproved for the exports, and production matrix-shape
-  invariance across fresh synthesis runs remains unresolved.
+  identity is disproved for the exports. [Phase 9.21.44](sapling-spend-authoritative-reference.md#phase-92144--fresh-production-spend-synthesis)
+  verifies matching full structure and historical production fingerprints
+  across fresh baseline and one alternate witness syntheses. The prior raw
+  production trace was unavailable, so historical byte-for-byte trace
+  comparison and reproducibility beyond these two runs remain unresolved.
   Official-parameter compatibility remains unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
@@ -55,6 +58,9 @@ and provenance; it is the source record for the focused reports below.
   gives the discrepancy-by-discrepancy algebraic relation proof for the
   captured matrices, including the `T=A` anchor and `P=Σ2^i d_i` position
   projections. Exact ordered matrix and QAP identity remain unverified.
+  [Phase 9.21.44](sapling-circuit-implementation.md#phase-92144--fresh-production-spend-synthesis)
+  records fresh baseline and alternate production traces, full structural
+  hashes, live assignment comparison, and the historical raw-trace limitation.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution and little-endian position interpretation;
   Phase 9.21.43 establishes relation equivalence for the captured exports,

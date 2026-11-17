@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import csv
+import gc
 import hashlib
+import json
 import os
+import time
 import unittest
 from hashlib import blake2s
 from pathlib import Path
@@ -21,6 +24,7 @@ from src.sapling_gadgets import (
     sapling_fixed_base_generator,
 )
 from src.sapling_spend_circuit import (
+    SPEND_PUBLIC_INPUT_ORDER,
     SaplingSpendWitness,
     _prepare_witness,
     constrain_sapling_spend,
@@ -277,7 +281,7 @@ class ProductionSpendAlignmentTests(unittest.TestCase):
         )
         summary = {
             "fixture": reference["fixture"]["name"],
-            "production_fingerprint": _LOCAL_MATRIX_FINGERPRINT,
+            "production_fingerprint": system.matrix_fingerprint(),
             "reference_fingerprint": _REFERENCE_MATRIX_FINGERPRINT,
             "mapped_public_variables": 8,
             "mapped_auxiliary_variables": len(mapped),
@@ -292,6 +296,42 @@ class ProductionSpendAlignmentTests(unittest.TestCase):
         return summary
 
     @staticmethod
+    def _trace_fingerprints(system: R1CS) -> dict:
+        structure_sha256 = hashlib.sha256(system.serialize()).hexdigest()
+        assignment_hasher = hashlib.sha256(
+            b"zycoin-sapling-spend-production-assignment-v1\0"
+        )
+        for variable in system.variables:
+            value = system.witness_value(variable)
+            if value is None:
+                raise AssertionError(
+                    f"production trace has an unassigned variable {variable.index}"
+                )
+            assignment_hasher.update(value.to_bytes(32, "little"))
+        assignment_sha256 = assignment_hasher.hexdigest()
+        public_positions = tuple(
+            (variable.name, system.public_input_position(variable))
+            for variable in system.variables
+            if variable.kind == "public"
+        )
+        public_positions_sha256 = hashlib.sha256(
+            json.dumps(public_positions, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+        trace_sha256 = hashlib.sha256(
+            b"zycoin-sapling-spend-production-trace-v1\0"
+            + bytes.fromhex(structure_sha256)
+            + bytes.fromhex(assignment_sha256)
+            + bytes.fromhex(public_positions_sha256)
+        ).hexdigest()
+        return {
+            "structure_sha256": structure_sha256,
+            "assignment_sha256": assignment_sha256,
+            "public_positions_sha256": public_positions_sha256,
+            "trace_sha256": trace_sha256,
+            "public_positions": public_positions,
+        }
+
+    @staticmethod
     def _rows_satisfied(system: R1CS, values: list[int]) -> int:
         def evaluate(terms: tuple[tuple[int, int], ...]) -> int:
             return sum(
@@ -304,7 +344,9 @@ class ProductionSpendAlignmentTests(unittest.TestCase):
             for row in system.constraints
         )
 
-    def test_production_assignments_and_matrices_match_audit_baseline(self) -> None:
+    def test_fresh_alternate_production_trace_matches_baseline_and_reference(
+        self,
+    ) -> None:
         baseline_reference = self.reference
         baseline_generated = generate_pinned_test_witness(0)
         baseline_witness = SaplingSpendWitness(
@@ -337,22 +379,103 @@ class ProductionSpendAlignmentTests(unittest.TestCase):
         self.assertEqual(baseline_witness.authentication_path, baseline_source.authentication_path)
         self.assertEqual(baseline_witness.anchor, baseline_source.anchor)
 
-        system = R1CS()
-        constrain_sapling_spend(system, baseline_witness)
-        self.assertTrue(system.is_satisfied())
-        self.assertEqual(system.matrix_fingerprint(), _LOCAL_MATRIX_FINGERPRINT)
-        self._audit_assignment(
-            system,
+        baseline_system = R1CS()
+        baseline_started = time.perf_counter()
+        constrain_sapling_spend(baseline_system, baseline_witness)
+        baseline_synthesis_seconds = time.perf_counter() - baseline_started
+        self.assertTrue(baseline_system.is_satisfied())
+        baseline_audit = self._audit_assignment(
+            baseline_system,
             baseline_reference,
             baseline_witness,
             verify_live_assignments=True,
         )
+        self.assertEqual(
+            baseline_audit["production_fingerprint"],
+            _LOCAL_MATRIX_FINGERPRINT,
+        )
+        baseline_trace = self._trace_fingerprints(baseline_system)
+        del baseline_system
+        self.__class__.reference = None
+        del baseline_reference
+        del baseline_source
+        gc.collect()
 
-        for variant in ("zero-value-alternating", "max-value-all-right"):
-            reference, _ = reference_tests._reference_full_spend_variant_trace(variant)
-            witness = self._production_witness_from_reference(reference)
-            _prepare_witness(witness)
-            self._audit_assignment(system, reference, witness)
+        variant_reference, reference_export_seconds = (
+            reference_tests._reference_full_spend_variant_trace(
+                "zero-value-alternating"
+            )
+        )
+        variant_witness = self._production_witness_from_reference(
+            variant_reference
+        )
+        self.assertEqual(variant_witness.value, 0)
+        self.assertEqual(
+            tuple(direction for _, direction in variant_witness.authentication_path),
+            (True, False) * 16,
+        )
+        _prepare_witness(variant_witness)
+
+        alternate_system = R1CS()
+        alternate_started = time.perf_counter()
+        constrain_sapling_spend(alternate_system, variant_witness)
+        alternate_synthesis_seconds = time.perf_counter() - alternate_started
+        self.assertTrue(alternate_system.is_satisfied())
+        self.assertEqual(alternate_system.constraint_count, 98_777)
+        self.assertEqual(len(alternate_system.variables), 98_646)
+        alternate_audit = self._audit_assignment(
+            alternate_system,
+            variant_reference,
+            variant_witness,
+            verify_live_assignments=True,
+        )
+        self.assertEqual(
+            alternate_audit["production_fingerprint"],
+            _LOCAL_MATRIX_FINGERPRINT,
+        )
+        alternate_trace = self._trace_fingerprints(alternate_system)
+        self.assertEqual(
+            baseline_trace["structure_sha256"],
+            alternate_trace["structure_sha256"],
+        )
+        self.assertEqual(
+            baseline_trace["public_positions"],
+            alternate_trace["public_positions"],
+        )
+        self.assertEqual(
+            baseline_trace["public_positions"],
+            tuple(
+                (f"Sapling Spend public {name}", index)
+                for index, name in enumerate(SPEND_PUBLIC_INPUT_ORDER, start=1)
+            ),
+        )
+        self.assertNotEqual(
+            baseline_trace["assignment_sha256"],
+            alternate_trace["assignment_sha256"],
+        )
+        self.assertNotEqual(
+            baseline_trace["trace_sha256"], alternate_trace["trace_sha256"]
+        )
+        self.assertEqual(alternate_audit["production_rows_satisfied"], 98_777)
+        print(
+            json.dumps(
+                {
+                    "baseline": {
+                        **baseline_audit,
+                        **baseline_trace,
+                        "synthesis_seconds": baseline_synthesis_seconds,
+                    },
+                    "alternate": {
+                        **alternate_audit,
+                        **alternate_trace,
+                        "reference_export_seconds": reference_export_seconds,
+                        "synthesis_seconds": alternate_synthesis_seconds,
+                    },
+                    "structure_equal": True,
+                },
+                sort_keys=True,
+            )
+        )
 
 
 if __name__ == "__main__":

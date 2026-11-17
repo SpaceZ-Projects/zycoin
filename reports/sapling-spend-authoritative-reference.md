@@ -1099,3 +1099,54 @@ The shared temporal-column mapping also passed the value-commitment regression
 passed (**19 tests / 5 subtests**, 0.29 seconds). Ruff, Python syntax checks,
 Rust formatting/build checks, and `git diff --check` passed; the full Sapling
 gadget suite was not run.
+
+### Phase 9.21.44 — Fresh production Spend synthesis
+
+The test-only alignment regression freshly synthesized the pinned baseline
+witness and the existing `zero-value-alternating` witness in separate
+production R1CS instances. Both fresh systems had **98,777 rows × 98,646
+columns**, production matrix fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`, and
+all **98,777 rows satisfied**. Each live assignment was checked against the
+pinned reference through the established semantic map and helper projections.
+The alternate fixture had value zero and directions `(true, false) * 16`;
+its freshly exported Bellman trace fingerprint was
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+
+The fresh baseline and alternate production traces had the same complete
+serialized structure SHA-256
+`af27c2ab4d8423b3315b96f2cf8f24fda1c1442bd0c28796bd22222fcc56c493`,
+including variable names/order and ordered labeled A/B/C expressions. Their
+assignment hashes differed as expected:
+`3360c2f3e562f7ce1e9bb67c21cdf1d54354679ff8f7a08e99618cf312ae7bd6`
+(baseline) and
+`c2bb7870d3e608643d1d8caaad1f99b802a37c3bf2cdd6754a36fa6a0437d367`
+(alternate). Public positions were identical (SHA-256
+`3675d2e5277c442f6e1848a82b011ecb75c3a6d11aa0468ba4d5f73c1826fa07`):
+`rk.u`, `rk.v`, `cv.u`, `cv.v`, `anchor`, `nullifier_chunk_0`, and
+`nullifier_chunk_1` occupy positions 1–7. Combined trace hashes were
+`829f1f4dcaf9968ebb00c4098358746dd7ea2c6493a0b164cd1cefe05a77a01a`
+(baseline) and
+`620da3f15b477cc53a07e88c8e3209963ab6d461093963bdc2307aac8c14a65a`
+(alternate).
+
+The original raw production trace was not persisted, so byte-for-byte
+comparison to that trace is unavailable. Instead, both fresh matrices match
+its recorded production fingerprint and match each other's complete structure;
+the fresh alternate's mapped assignments and satisfied rows were checked
+against the independently exported Bellman matrix. The crosswalk covers 8
+public/ONE variables and 98,637 auxiliaries; 53,901 mapped auxiliary columns
+differ and 52,520 are displaced in relative order, consistent with the
+documented captured-matrix mapping. This verifies reproducibility only for
+these two fresh executions, not arbitrary witnesses or all executions.
+
+The focused fresh-synthesis test passed **1 test in 481.933 seconds**. Within
+that run, the two production synthesis calls took **11.697 s** and **6.561 s**,
+and the Bellman variant export took **31.023 s**. The semantic-projection
+probes passed **8 tests** and the row/variable correspondence probes passed
+**29 tests** (0.016 s and 0.006 s, respectively). Exact ordered matrix
+identity remains disproved; captured-matrix relation equivalence remains
+established under the documented mapping. QAP/query equivalence, official
+parameter-to-circuit binding, and ceremony validity remain **Unverified**.
+No production circuit, Output, setup, parameter, or proving gate changed; no
+synthetic setup regression was run.

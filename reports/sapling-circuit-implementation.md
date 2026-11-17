@@ -6260,6 +6260,49 @@ gated.
 - The unchanged `src/r1cs.py` Ruff baseline remains **45 findings**:
   13 UP007, 12 UP006, 9 UP045, 8 UP037, 2 UP035, and 1 SIM102.
 
+### Phase 9.21.44 — Fresh production Spend synthesis
+
+The focused regression freshly synthesized a pinned baseline witness and the
+existing zero-value/alternating-direction witness into separate production
+R1CS systems. Each had 98,777 rows and 98,646 columns, production fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`, and
+98,777 satisfied rows. The alternate's independent Bellman export had
+fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+
+The baseline and alternate production structures matched exactly by
+serialization SHA-256
+`af27c2ab4d8423b3315b96f2cf8f24fda1c1442bd0c28796bd22222fcc56c493`,
+covering variable identities/names and order, labels, and every ordered
+A/B/C expression. Assignment hashes were respectively
+`3360c2f3e562f7ce1e9bb67c21cdf1d54354679ff8f7a08e99618cf312ae7bd6` and
+`c2bb7870d3e608643d1d8caaad1f99b802a37c3bf2cdd6754a36fa6a0437d367`;
+the combined trace hashes were
+`829f1f4dcaf9968ebb00c4098358746dd7ea2c6493a0b164cd1cefe05a77a01a` and
+`620da3f15b477cc53a07e88c8e3209963ab6d461093963bdc2307aac8c14a65a`.
+Both traces used the same public positions (hash
+`3675d2e5277c442f6e1848a82b011ecb75c3a6d11aa0468ba4d5f73c1826fa07`):
+the seven Sapling public inputs follow ONE at positions 1–7. The fresh
+alternate assignment was compared live against the independent reference
+using the established variable map and helper projections.
+
+The prior raw production trace was unavailable. The historical matrix
+fingerprint was matched by both fresh runs, but a byte-for-byte historical
+trace comparison cannot be made. This establishes fresh structural
+reproducibility only for the baseline and this single alternate witness.
+Captured-matrix relation equivalence remains established under the documented
+semantic mapping and anchor/position projections; ordered matrix identity is
+disproved. QAP/query equivalence, official parameter binding, and ceremony
+validity remain **Unverified**.
+
+Verification: **1 focused synthesis test passed in 481.933 s**; production
+synthesis measured 11.697 s (baseline) and 6.561 s (alternate), with a 31.023
+s Bellman variant export. All 98,777 rows were satisfied in each fresh
+production run. The separate relation probes passed 8 semantic-projection
+tests and 29 row/variable correspondence tests. No production code, Output,
+setup, parameter, or proving gate changed; no synthetic setup regression was
+run.
+
 ## Phase 9.21.18 — Authentic Sapling parameter-format audit
 
 The pinned Bellman 0.15.0 writer serializes six uncompressed verification-key

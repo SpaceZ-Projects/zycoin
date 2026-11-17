@@ -138,6 +138,26 @@ and provenance tests passed 43 tests (0.035 s), and pinned-Bellman
 Merkle/anchor differential tests passed 4 tests (137.703 s). Ruff's 11
 findings were in unchanged audit/test helpers; syntax and diff checks passed.
 
+**Phase 9.21.44 fresh-production result:** separate fresh production
+syntheses of the pinned baseline and one zero-value/alternating-path witness
+both reproduced the recorded local fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9` and
+98,777 × 98,646 dimensions, with every row satisfied. Their complete
+serialized structures matched (SHA-256
+`af27c2ab4d8423b3315b96f2cf8f24fda1c1442bd0c28796bd22222fcc56c493`); the
+alternate assignments were compared against an independent Bellman export
+(`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`).
+The prior raw production trace was unavailable, so only its historical
+matrix fingerprint—not its complete serialized trace—could be compared.
+Fresh reproducibility is established for these two runs only, not for
+arbitrary witnesses. This does not alter the Phase 9.21.43 captured-matrix
+relation verdict and does not establish exact matrix identity, QAP/query
+equivalence, official parameter-to-circuit binding, or ceremony validity;
+the latter three remain **Unverified** and Spend proving remains gated.
+The test passed **1 test in 481.933 s** (production synthesis 11.697 s and
+6.561 s; Bellman variant export 31.023 s). The relation probes passed 8
+semantic-projection tests and 29 row/variable correspondence tests.
+
 The Phase 9.21.38 full-vector check independently accumulated every official
 IC/H/L/A/B_G1/B_G2 section using ZyCoin's complete MSM and a separate Bellman
 0.15 loader. IC, L, A, B_G1, and B_G2 matched; H differed for the deterministic
