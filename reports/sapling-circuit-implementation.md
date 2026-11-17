@@ -6569,6 +6569,43 @@ remain test-only, and parameter binding, ceremony validity, and proving
 readiness remain unverified. Targeted Ruff, `compileall`, `git diff
 --check`, and new-module Pylance diagnostics passed.
 
+### Phase 9.21.61 — Full source-faithful Spend verification
+
+After the production-safe BLAKE2s circuit gadget was integrated into the
+isolated Spend port, a fresh complete baseline synthesis matched the retained
+Bellman trace. The comparison covered all allocation events and identities,
+assignments, public inputs, labels, ordered A/B/C terms, and satisfaction.
+The canonical temporal-to-variable bridge and generic adapter produced the
+expected **98,777 × 98,646** matrix with fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The baseline adapter check also verified the assignment layout, seven public
+inputs, 98,638 auxiliaries, QAP domain, and evaluation/polynomial API
+consistency. The fresh baseline regression passed in **2,159.62 s**.
+
+Raw Bellman JSON traces for the zero-value/alternating-direction and
+maximum-value/all-right witnesses were not retained. The test therefore
+generated fresh test-only exports from pinned Sapling and Bellman revisions,
+then verified each full Python synthesis against its corresponding trace.
+Both matched every allocation, assignment, public input, annotation, and
+ordered A/B/C expression, as well as satisfaction and the canonical matrix
+fingerprint. The reference exports took 29.584 s and 28.413 s; Python
+synthesis took 53.848 s and 47.284 s, respectively. Their invalid-assignment
+failure-row comparisons also passed. These variant checks did not rebuild the
+QAP adapter; only the baseline exercised that path.
+
+The default IVK vector test setup was corrected to index vectors already
+present in the combined reference export. Its default-setup regression passed
+without changing fixtures or assertions. Focused IVK, nullifier, multipacking,
+BLAKE2s, temporal-mapping, and adapter-boundary tests passed. Targeted Ruff,
+`compileall`, `git diff --check`, and Pylance diagnostics passed; existing
+unused-local warnings in the test module were left unchanged.
+
+**Status:** full source-faithful Spend matrix parity is **Verified** for the
+three tested witnesses, including the fresh baseline adapter/QAP check.
+Production replacement, official parameter binding, ceremony validity, and
+Spend proving readiness remain **Unverified / Blocked**. Output circuit code
+was not changed.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

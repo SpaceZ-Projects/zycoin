@@ -2770,3 +2770,63 @@ subtests**; adapter boundary tests **5 passed**; host IVK helper integration
 **1 passed**. Targeted Ruff, `compileall`, `git diff --check`, and new-module
 Pylance diagnostics passed. Existing unused-local Pylance warnings in test
 files were left unchanged.
+
+### Phase 9.21.61 — Full Spend verification after BLAKE2s migration
+
+The fresh baseline comparison used the retained
+`sapling-spend-reference.json` artifact, whose header identifies pinned
+Sapling `88a7946b4a3066787776e11f0a502654167e022d`, Bellman
+`b726862a4ece8a627e7fea486d77b502a6edbb0b`, the pinned fixture iteration 0,
+and matching upstream/observed Bellman test-system hash
+`d37c738e83df5d9b0bb6495ac96abf21bcb2697477e2c15c2c7916ff7a3b6a89`.
+The full-composition test freshly synthesized the isolated Python Spend
+circuit and compared it with this trace. It checked the complete temporal
+allocation order and identities, all assignments, public-input positions and
+values, every annotation and ordered A/B/C expression, and satisfaction.
+The canonical adapter then matched fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127` at
+**98,777 rows × 98,646 columns**, with 98,638 auxiliary variables, seven
+public inputs, and the expected 131,072-element QAP domain. The test also
+compared the adapted assignment and public/auxiliary values, checked QAP
+evaluation/polynomial consistency, and matched the failure row for a
+tampered anchor. The end-to-end baseline test passed in **2,159.62 s**.
+
+The two variant Bellman JSON traces were not present among the retained raw
+artifacts, so the variant comparisons generated fresh test-only exports from
+the same pinned revisions; no setup parameters were generated. Both fresh
+traces independently matched the Python full synthesis, including allocation
+identities/order, assignments, public inputs, labels, ordered A/B/C rows,
+satisfaction, and the same canonical matrix fingerprint:
+
+| Witness | Bellman export | Python synthesis | Result |
+|---|---:|---:|---|
+| Zero-value, alternating path directions | 29.584 s | 53.848 s | Exact full-matrix match |
+| Maximum-value, all-right path directions | 28.413 s | 47.284 s | Exact full-matrix match |
+
+Both variant tests also matched the pinned invalid-assignment failure rows.
+Together, the baseline and two variants freshly verify the isolated
+source-faithful Spend matrix after the BLAKE2s gadget migration. Only the
+baseline test exercised the generic QAP adapter; the two variant tests
+verified full circuit matrices and witness behavior without rebuilding the
+adapter/QAP.
+
+The missing default IVK vector initialization was a separate test setup bug:
+the default combined reference export already contained the vectors, but its
+`setUpClass` path initialized only IVK cases. It now indexes those vectors in
+the default path as well. The default vector test passed (**1 test, 4
+subtests**); no reference fixtures or assertions changed.
+
+Focused verification passed: IVK trace/vector/invalid-input tests (**3
+passed, 14 subtests**); nullifier trace/vector/invalid-input tests (**3
+passed, 11 subtests**); multipacking trace/vector/invalid-input tests (**3
+passed, 22,580 subtests**); BLAKE2s, temporal-mapping, and adapter-boundary
+tests (**31 passed, 1 skipped, 56 subtests**). Targeted Ruff,
+`compileall`, and `git diff --check` passed. Pylance reported no issues in
+`src/sapling_blake2s.py`; the test module retained only its pre-existing
+unused-local warnings.
+
+This verifies the isolated test-only circuit against the pinned Bellman
+reference for three valid witnesses, not production Spend replacement,
+official parameter-to-circuit binding, ceremony provenance, or proving
+readiness. Those remain **Unverified**. No production Spend or Output circuit
+implementation was changed.

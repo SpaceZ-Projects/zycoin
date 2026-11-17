@@ -2286,6 +2286,10 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         cls.ivk_blake2s_cases = {
             case["name"]: case for case in cls.reference["ivk_blake2s"]["cases"]
         }
+        cls.ivk_blake2s_vectors = {
+            vector["name"]: vector
+            for vector in cls.reference["ivk_blake2s"]["vectors"]
+        }
 
     def assert_case_matches(
         self, name: str, point: Point, *, expected_satisfied: bool = True

@@ -2779,6 +2779,30 @@ parameter-to-circuit binding, ceremony validity, and production readiness
 remain **Unverified**. The default IVK vector-test setup issue is unchanged
 and separately documented.
 
+### Phase 9.21.61 — Source-faithful Spend matrix verification status
+
+The isolated source-faithful Spend implementation now has a fresh full
+baseline comparison against the retained pinned Bellman trace after the
+production-safe BLAKE2s migration. Exact allocation and assignment order,
+public inputs, annotations, ordered A/B/C expressions, satisfaction, and
+failure-row behavior passed. The canonical adapter produced 98,777 rows ×
+98,646 columns and fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The baseline test also verified the seven-public-input / 98,638-auxiliary
+layout and generic QAP evaluation/polynomial interfaces.
+
+Two variant tests regenerated test-only pinned Bellman reference exports
+because their raw JSON traces were unavailable. Fresh zero-value/alternating
+and maximum-value/all-right full-circuit comparisons passed with the same
+matrix fingerprint and exact ordered rows. No setup parameters were
+generated. The default IVK vector setup was fixed and its test passed.
+
+This is evidence for the isolated source-faithful circuit and its baseline
+adapter, not for replacing production Spend or using any official
+parameter set. Official parameter-to-circuit binding, ceremony validity,
+production migration, and proving readiness remain **Unverified / Blocked**.
+No Output circuit code was changed.
+
 ### Phase 9.21.54 — Spend H-map exact-method status
 
 The retained Spend exports verify the quotient's shifted cross-correlation
