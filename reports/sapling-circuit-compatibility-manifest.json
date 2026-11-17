@@ -1236,12 +1236,29 @@
       "interpretation": "The two systems are each satisfied and independently quotient-divisible, but their exact canonical QAP vectors are not equal. The exact causes of the differences have not been isolated. The compatibility blocker is the absence of a validated row/variable/QAP transformation across the two matrix encodings; these vector differences alone do not establish semantic incompatibility or parameter-to-circuit binding."
     },
     "spend_qap_transformation_audit": {
-      "phase": "9.21.35",
+      "phase": "9.21.48",
       "semantic_relation_equivalence": "Evidence-supported for the pinned exports under the accepted variable map and explicit auxiliary projection; not a formal source-level proof.",
       "qap_equivalence": "Unverified. All eight complete canonical vectors differ; exact coefficient-level counts are recorded below.",
       "proving_query_compatibility": "Unverified. No complete public linear transformation from the local A/B/C variable polynomials and auxiliary space to the pinned Bellman proving queries has been established.",
       "parameter_to_circuit_binding": "Unverified. Parser and point serialization equality does not bind the pinned Spend parameter points to either local QAP or prove ceremony provenance.",
       "ceremony_validity": "Unverified. The phase1radix2m17 Phase-1 artifact and exact ceremony-era Spend setup implementation remain unavailable.",
+      "expanded_row_factor_certificate": {
+        "path": "reports/sapling-spend-expanded-row-factor-identities.json",
+        "sha256": "be5f65ef3c902b9f2cc707856c0cba4b910efa724680a6989d8abf692cd6b3f8",
+        "source_row_artifact_sha256": "44a14939955a9a82a24f4013bb0b9144a1810b648d6e4d9d3643117330b58ecc",
+        "row_mapping_fingerprint_sha256": "f502b0f22dece3829d6e2e1e198ca8d98d82e233e9eb1a4dcded3a399f6ae17d",
+        "expanded_rows": 333,
+        "factor_map_classes": {
+          "linear_constraint_c_to_a": 74,
+          "pkd_affine_swap": 251,
+          "unit_b_affine_shift": 8
+        },
+        "raw_residual_scales": {
+          "+1": 329,
+          "-1": 4
+        },
+        "complete_query_transformation": "Unresolved"
+      },
       "row_correspondence": {
         "source_artifact_sha256": "44a14939955a9a82a24f4013bb0b9144a1810b648d6e4d9d3643117330b58ecc",
         "content_fingerprint_sha256": "a22e02d13ad12988836eba4dc2985060197c38c9fd9ca50d8e468191290f5609",
@@ -1264,6 +1281,15 @@
         "moved_rows": {
           "moved": 48546,
           "same_index": 50229
+        },
+        "expanded_relation_scale": {
+          "rows": 333,
+          "all_unit_scale": true,
+          "scale_domain": "normalized expanded-polynomial signatures",
+          "raw_residual_scales": {
+            "+1": 329,
+            "-1": 4
+          }
         },
         "factor_normalization_profiles": [
           {
@@ -1292,7 +1318,7 @@
           "pk_d_selection": 251,
           "merkle_path_left_and_right": 64,
           "other": 18,
-          "unit_relation_scale": 333
+          "normalized_unit_relation_scale": 333
         },
         "witness_level_mapped_row_observations": {
           "native_rows_with_equal_A_B_C_values": 69840,
@@ -1988,7 +2014,12 @@
             },
             "expanded_relation_scale": {
               "rows": 333,
-              "all_unit_scale": true
+              "all_unit_scale": true,
+              "scale_domain": "normalized expanded-polynomial signatures",
+              "raw_residual_scales": {
+                "+1": 329,
+                "-1": 4
+              }
             },
             "unmatched_upstream_rows": [
               {
@@ -2137,7 +2168,11 @@
                   }
                 ],
                 "expanded_relation_matches_total": 333,
-                "expanded_relation_unit_scale": 333,
+                "expanded_relation_normalized_unit_scale": 333,
+                "expanded_relation_raw_scales": {
+                  "+1": 329,
+                  "-1": 4
+                },
                 "factor_normalization_matches_total": 28351,
                 "existing_matches_or_classifications_changed": false
               },

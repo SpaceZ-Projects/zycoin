@@ -1460,3 +1460,108 @@ Focused algebraic and query-mapping regressions passed **28 tests with
 8 subtests in 9.48 s**. No synthesis was repeated; no production code,
 Output, setup, parameter, or proving gate changed, and no synthetic setup
 regression was run.
+
+### Phase 9.21.48 — Complete expanded-row factor identities
+
+This follow-up used only the retained row-correspondence artifact
+(`44a14939955a9a82a24f4013bb0b9144a1810b648d6e4d9d3643117330b58ecc`);
+no witness or circuit synthesis was repeated. A test-only verifier expanded
+and checked every A/B/C polynomial in all 333 previously classified
+expanded-residual pairs. The complete terms, row indices, annotations,
+derived identities, and raw residual scales are preserved in
+[the factor-identity certificate](sapling-spend-expanded-row-factor-identities.json),
+whose SHA-256 is
+`be5f65ef3c902b9f2cc707856c0cba4b910efa724680a6989d8abf692cd6b3f8`.
+The verifier cross-checks the certificate digest and all 333 exact
+finite-field residual and factor identities.
+
+The 333 pairs divide into three exact, witness-independent factor formulas.
+Let `U_A,U_B,U_C` denote upstream factors and `L_A,L_B,L_C` the mapped local
+factors:
+
+| Rows | Count | Exact factor identity | Raw `F_U/F_L` |
+|---|---:|---|---:|
+| `pk_d` selection | 251 | `U_A=L_B+ONE`, `U_B=L_A`, `U_C=L_C+L_A`; expansion gives `F_U=F_L`. | `+1` |
+| Merkle/scalar linear constraints | 74 (64 Merkle path reconstruction, 10 scalar-representation rows) | `U_A=U_B=0`, `U_C=-L_A`, `L_B=ONE`, `L_C=0`; hence `F_U=F_L=L_A`. | `+1` |
+| Unit-B affine rows | 8 | `U_A=λL_A+u`, `U_B=L_B=ONE`, `U_C=λL_C+u`, with `L_C=0` and `u=U_C`; four rows have `λ=+1`, four `λ=-1`. | four `+1`, four `-1` |
+
+Thus 329 raw residuals have scale `+1` and four have scale `-1`. The earlier
+“333 unit-scale” count compared *normalized expanded-polynomial signatures*;
+it did not establish the raw equation scale. That earlier field is corrected
+in the compatibility manifest and explicitly qualified as normalized.
+The 74 C-to-A cases are valid residual identities but their row-local map
+from the three local factors to the three upstream factors has rank 1, not
+3. Accordingly, the identities do not establish an invertible per-row
+three-factor coordinate change.
+
+The other 98,442 matched rows retain their existing nonzero diagonal or
+anti-diagonal A/B scale maps, with `C_U=αβL_C` and rank-2 A/B blocks.
+Together the 98,775 paired residuals are related by a row permutation and
+nonzero row scaling: rank 98,775, kernel zero. The raw `-1` rows above are
+already included in this count.
+
+The full variable map remains: 8 public/ONE coordinates and 98,637 common
+auxiliaries map directly; for the two unmatched helper coordinates, with
+`S=Σ(i=0..31)2^i d_i`, use `P=T+S-A` and inverse `T=P-S+A`. This is a
+linear bijection on the 98,646-coordinate ambient assignment space, rank
+98,646, kernel zero. It accounts for every variable and every row when
+combined with the two helper-row factor formulas:
+
+```text
+source root:   U_A = L_root_A - L_position_A, U_B = L_root_B, U_C = 0
+source anchor: U_A = A, U_B = ONE, U_C = A + L_position_A
+```
+
+The helper residual identities remain
+`f_root=g_root-V*g_position` and `f_anchor=-g_position`, represented by
+`[[1,-V],[0,-1]]`. This is pointwise invertible (rank 2, zero kernel,
+determinant `-1`) but still witness-dependent through `V`. The explicit
+factor equations therefore improve the coverage of the proposed
+transformation; they do not turn this residual operation into a constant
+row matrix.
+
+#### Polynomial coordinates, query sections, and verification equation
+
+The certificate now supplies exact factor formulas for every paired row,
+and the helper substitution supplies formulas for the remaining rows.
+Their coefficients are fixed and witness-independent, but the certificate
+does **not** by itself establish an invertible, full-domain polynomial
+coordinate transformation. In particular, 74 row-local factor maps are
+rank-deficient; the helper residual map is assignment-dependent; and the
+expanded formulas include cross-factor terms and fixed `ONE`/variable
+shifts. No complete transformed coefficient matrices for A, B, C, or H
+were derived, and no global rank/kernel proof for a six-section query
+coordinate matrix is available. The normalized signature equality from the
+prior phase cannot fill that gap.
+
+| Official section | Phase 9.21.48 conclusion |
+|---|---|
+| IC | **Unresolved.** Public-variable identities and the variable bijection are known, but no complete transformation of the combined `(βA+αB+C)/γ` query coordinates is derived. |
+| H | **Unresolved.** The eight-vector direct-identity mismatch persists in the retained baseline and alternate-witness evidence. No witness-independent H-coefficient map or compatible H-query map has been established. |
+| L | **Unresolved.** The variable mapping is complete, but no transformation of the combined private `(βA+αB+C)/δ` coordinates is established. |
+| A | **Unresolved.** Exact row-factor formulas now cover all constraints, but the corresponding full polynomial/query-coordinate matrix and any required shift coordinates have not been constructed. |
+| B_G1 | **Unresolved.** The same missing full polynomial-coordinate map applies; a row-local factor identity is not a group-query mapping. |
+| B_G2 | **Unresolved.** The known A/B-swapped rows require A_G2 contributions in the direct construction, while the official sections do not expose A_G2. This does not disprove every possible alternative transformation. |
+
+Therefore the complete production-to-Bellman polynomial/query transformation
+is **Unresolved**, not established or disproven. In particular, the
+available data do not establish transformation rank, kernel, invertibility,
+and compatibility for all six sections, nor do they establish preservation
+of `e(π_A,π_B)=e(αG1,βG2)e(IC(x),γG2)e(π_C,δG2)`. No inference is made about
+parameter-to-circuit binding or ceremony validity; both remain
+**Unverified**, and Spend proving remains gated.
+
+**Smallest evidence-supported next step:** use the retained complete matrices
+and this certificate to construct the explicit global A/B/C coefficient
+operators over the 131,072-point domain, including the ONE/variable shift
+columns and helper rows; compute their exact rank and kernel; then derive
+whether the induced H and six query-section coordinates can be formed from
+the official points, especially B_G2 without A_G2. If those exact operators
+cannot yield query points, the evidence-supported alternatives remain exact
+Bellman matrix reproduction or a separately trusted setup bound to the
+production relation.
+
+Verification: the new focused certificate test passed **1 test and 333
+subtests in 0.31 s**. No witness synthesis, production change, Output change,
+setup/parameter change, proving-gate change, or synthetic setup regression
+was performed in this phase.

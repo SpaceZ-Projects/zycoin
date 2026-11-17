@@ -134,7 +134,30 @@ class SaplingSpendQAPTransformationTests(unittest.TestCase):
                 "pk_d_selection": 251,
                 "merkle_path_left_and_right": 64,
                 "other": 18,
-                "unit_relation_scale": 333,
+                "normalized_unit_relation_scale": 333,
+            },
+        )
+        factor_certificate = audit["expanded_row_factor_certificate"]
+        self.assertEqual(factor_certificate["expanded_rows"], 333)
+        self.assertEqual(
+            factor_certificate["factor_map_classes"],
+            {
+                "linear_constraint_c_to_a": 74,
+                "pkd_affine_swap": 251,
+                "unit_b_affine_shift": 8,
+            },
+        )
+        self.assertEqual(
+            factor_certificate["raw_residual_scales"],
+            {"+1": 329, "-1": 4},
+        )
+        self.assertEqual(
+            audit["row_correspondence"]["expanded_relation_scale"],
+            {
+                "rows": 333,
+                "all_unit_scale": True,
+                "scale_domain": "normalized expanded-polynomial signatures",
+                "raw_residual_scales": {"+1": 329, "-1": 4},
             },
         )
         self.assertEqual(

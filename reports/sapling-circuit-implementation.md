@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.47):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.48):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -99,17 +99,22 @@ B_G2 accumulations were compared only for the baseline witness. Phases
 9.21.45–46 record the full vector fingerprints and preserve the unverified
 status of transformed-query equivalence and parameter-to-circuit binding.
 
-Phase 9.21.47 derives a full-rank pointwise residual map for the captured
-constraints, including the invertible helper-variable substitution
-`P=T+Σ2^i d_i-A` and helper residual map
-`[g_root,g_position]=[f_root-Vf_anchor,-f_anchor]`. Its witness-dependent
-coefficient prevents treating it as a fixed row-linear QAP transformation.
-The A/B factor crosswalk gives invertible rowwise maps on 98,442 rows and
-expanded residual identities on 333 more, but does not give a complete
-component-wise A/B/C polynomial transform. The six official query-section
-conclusions and exact field equations are recorded in
-[Phase 9.21.47 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92147--symbolic-spend-residual-and-query-transformation-audit).
-QAP/query transformation remains **Unresolved**, not disproven.
+Phase 9.21.48 verifies exact factor identities for all 333 expanded-residual
+rows from the retained correspondence artifact: 251 `pk_d` factor swaps with
+an explicit `ONE` term, 74 C-to-A linear-factor identities, and 8 unit-B
+affine identities. Their raw residual scales are 329 `+1` and 4 `-1`; the
+prior all-unit count applied only to normalized polynomial signatures. The
+full row-factor formulas and certificate digest are recorded in
+[Phase 9.21.48 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92148--complete-expanded-row-factor-identities)
+and [the factor-identity certificate](sapling-spend-expanded-row-factor-identities.json).
+The 74 C-to-A row maps are rank 1, so they are not invertible per-row
+three-factor maps. The 98,442 existing factor-matched maps remain invertible
+in their A/B blocks. The full variable map and pointwise residual map are
+accounted for, but no global A/B/C/H coefficient operators, exact rank/kernel
+for those operators, or six-section query mapping has been established.
+The helper residual operation still contains witness value `V`. QAP/query
+transformation remains **Unresolved**, not disproven; parameter binding and
+ceremony validity remain **Unverified**.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 
@@ -956,7 +961,9 @@ bit-reconstruction rows (upstream 75769 ↔ local 75770 and upstream 76025 ↔
 local 76026); neither is an anchor or packed-position relation. The
 28,351 factor-normalization pairs remain unchanged; none supplies a
 one-to-one match for the unmatched position reconstruction or the upstream
-anchor auxiliary. All 333 expanded pairs retain unit scale.
+anchor auxiliary. The prior row signatures used normalized expanded
+polynomials; Phase 9.21.48 records the raw residual scales (329 `+1`, four
+`-1`).
 
 No variable or one-to-one row mapping was added or changed. The v7 variable
 mapping SHA-256 remains
@@ -981,7 +988,8 @@ The test-only comparison uses the v7 semantic variable mapping and uniquely
 matching A/B/C factor signatures, followed by unique expanded `A*B-C`
 signatures for residual rows. Neither row indices nor witness satisfaction
 select row pairs. Exact coefficients and variable references are recorded;
-all 333 expanded-relation-only pairs have unit polynomial scale. Of the
+the then-reported unit scale is for normalized expanded-polynomial
+signatures, not the raw row equations; see Phase 9.21.48. Of the
 98,775 pairs, 50,229 retain the same row index and 48,546 are reordered.
 No ambiguous row pairs were accepted.
 

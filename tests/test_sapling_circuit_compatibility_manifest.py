@@ -266,7 +266,15 @@ class SaplingCircuitCompatibilityManifestTests(unittest.TestCase):
                         },
                     )
                     self.assertEqual(rows["row_positions"], {"same_index": 50229, "moved": 48546})
-                    self.assertTrue(rows["expanded_relation_scale"]["all_unit_scale"])
+                    self.assertEqual(
+                        rows["expanded_relation_scale"],
+                        {
+                            "rows": 333,
+                            "all_unit_scale": True,
+                            "scale_domain": "normalized expanded-polynomial signatures",
+                            "raw_residual_scales": {"+1": 329, "-1": 4},
+                        },
+                    )
                     self.assertEqual(
                         rows["artifact_sha256"],
                         "44a14939955a9a82a24f4013bb0b9144a1810b648d6e4d9d3643117330b58ecc",
