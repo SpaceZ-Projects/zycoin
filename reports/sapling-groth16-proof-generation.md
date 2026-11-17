@@ -615,7 +615,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.48):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.49):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -655,6 +655,27 @@ Exact Bellman matrix reproduction or a complete proven six-section transform
 (otherwise a production-bound trusted setup) remains necessary before
 proving readiness. The new certificate test passed **1 test and 333
 subtests in 0.31 s**; no synthesis or setup regression was run.
+
+Phase 9.21.49 constructs the fixed forward coefficient identity
+`Q_U=R Q_L M+S`: the variable map is bijective, all 98,442 ordinary factor
+blocks match the retained row terms, and the 333-row certificate plus helper
+equations complete the factor formulas. The factor-only operator rank is
+296,180/296,331 (kernel 151); the augmented operator rank is 296,182 with
+left nullity 149 and kernel 98,795. This is a fixed forward A/B/C
+transformation, not an invertible query-coordinate map. The helper residual
+term remains `-V` for constant residual-row operations, and no fixed H
+operator or transformation for IC, H, L, A, B_G1, or B_G2 is established.
+The known B_G2 inverse needs A_G2, which the official file lacks. Hence the
+Groth16 verification equation is not shown to be preserved. The global
+equations and exact section conclusions are recorded in
+[Phase 9.21.49 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92149--global-spend-qap-and-query-coordinate-audit).
+The focused algebraic/query suite passed **50 tests and 346 subtests in
+9.89 s**; all 98,442 ordinary factor blocks passed exact comparison with
+**0 mismatches in 2.513 s**. Syntax, JSON, targeted Ruff E4/E7/E9/F, and
+`git diff --check` passed. The mapping suite also ran an Output-only QAP
+rebuild regression (8.04 s); no Spend synthesis was performed. A final run
+excluding that case passed **49 tests and 346 subtests** (1 deselected) in
+**1.97 s**.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

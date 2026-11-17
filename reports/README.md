@@ -54,10 +54,11 @@ and provenance; it is the source record for the focused reports below.
   extends all eight QAP-vector comparisons to the `zero-value-alternating`
   witness; every Bellman/production pair still differs, Bellman recomputes
   production H, and the direct official H accumulation still differs.
-  [Phase 9.21.48](sapling-spend-authoritative-reference.md#phase-92148--complete-expanded-row-factor-identities)
-  verifies exact factor identities for all 333 expanded rows, corrects the
-  raw residual-scale counts, and keeps the full QAP/query transformation
-  unresolved. See the [factor-identity certificate](sapling-spend-expanded-row-factor-identities.json).
+  [Phase 9.21.49](sapling-spend-authoritative-reference.md#phase-92149--global-spend-qap-and-query-coordinate-audit)
+  derives the fixed forward A/B/C factor operator, its rank deficiency,
+  helper obstruction, and unresolved six-section query map. Phase 9.21.48
+  verifies all 333 expanded-row identities; see the
+  [factor-identity certificate](sapling-spend-expanded-row-factor-identities.json).
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
@@ -79,9 +80,9 @@ and provenance; it is the source record for the focused reports below.
   [Phase 9.21.46](sapling-circuit-implementation.md#phase-92146--alternate-witness-spend-qap-comparison)
   records the alternate-witness QAP fingerprints, quotient checks, and
   persistent official H accumulation mismatch.
-  [Phase 9.21.48](sapling-spend-authoritative-reference.md#phase-92148--complete-expanded-row-factor-identities)
-  documents the exact 333-row factors and remaining unresolved global
-  coefficient/query transformation.
+  [Phase 9.21.49](sapling-spend-authoritative-reference.md#phase-92149--global-spend-qap-and-query-coordinate-audit)
+  documents the global A/B/C operator and the remaining unresolved H/query
+  transformation.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution and little-endian position interpretation;
   Phase 9.21.43 establishes relation equivalence for the captured exports,
@@ -155,9 +156,10 @@ and provenance; it is the source record for the focused reports below.
   independently recomputes production H, and direct official-query H
   accumulation differs for both. The other five mapped witness accumulations
   were compared only for baseline. Parameter-to-circuit binding and ceremony
-  validity remain unverified. Phase 9.21.48 records exact factor identities
-  for all 333 expanded rows, raw residual scales, and the still unresolved
-  fixed QAP/query transformation and A_G2-section limitation. Phase 9.21.43 establishes relation equivalence for the captured
+  validity remain unverified. Phase 9.21.49 derives the fixed forward A/B/C
+  map and its rank deficiency, and records the unresolved H/query
+  transformation and A_G2-section limitation. Phase 9.21.48 records exact
+  factors for all 333 expanded rows and raw residual scales. Phase 9.21.43 establishes relation equivalence for the captured
   production and pinned-reference matrices without establishing QAP/query
   equivalence.
   Phase 9.21.37 records the insecure full-size synthetic Spend setup and its

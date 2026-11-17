@@ -98,6 +98,36 @@ def _qap_vectors(
     return polynomials, quotient
 
 
+def _rank_mod(matrix: list[list[int]]) -> int:
+    rows = [[value % FIELD for value in row] for row in matrix]
+    pivot_row = 0
+    for column in range(len(rows[0])):
+        pivot = next(
+            (index for index in range(pivot_row, len(rows)) if rows[index][column]),
+            None,
+        )
+        if pivot is None:
+            continue
+        rows[pivot_row], rows[pivot] = rows[pivot], rows[pivot_row]
+        inverse = pow(rows[pivot_row][column], FIELD - 2, FIELD)
+        rows[pivot_row] = [value * inverse % FIELD for value in rows[pivot_row]]
+        for index in range(len(rows)):
+            if index == pivot_row:
+                continue
+            scale = rows[index][column]
+            if scale:
+                rows[index] = [
+                    (value - scale * pivot_value) % FIELD
+                    for value, pivot_value in zip(
+                        rows[index], rows[pivot_row], strict=True
+                    )
+                ]
+        pivot_row += 1
+        if pivot_row == len(rows):
+            break
+    return pivot_row
+
+
 class SaplingSpendQAPTransformationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -226,6 +256,109 @@ class SaplingSpendQAPTransformationTests(unittest.TestCase):
         local_polynomials, local_h = _qap_vectors(local)
         self.assertNotEqual(upstream_polynomials, local_polynomials)
         self.assertNotEqual(upstream_h, local_h)
+
+    def test_global_extended_factor_map_is_fixed_but_not_invertible(self):
+        counts = self.audit["row_correspondence"]["row_counts"]
+        expanded = self.audit["expanded_row_factor_certificate"]
+        global_map = self.audit["global_coordinate_transformation"]
+        self.assertEqual(counts["one_to_one_pairs"], 98_775)
+        self.assertEqual(
+            counts["native_a_b_c"]
+            + counts["a_b_factor_swap"]
+            + counts["valid_factor_normalization"],
+            98_442,
+        )
+        self.assertEqual(
+            expanded["factor_map_classes"],
+            {
+                "linear_constraint_c_to_a": 74,
+                "pkd_affine_swap": 251,
+                "unit_b_affine_shift": 8,
+            },
+        )
+
+        pkd = [[0, 1, 0], [1, 0, 0], [1, 0, 1]]
+        linear_to_c = [[0, 0, 0], [0, 0, 0], [-1, 0, 0]]
+        unit_b = [[-1, 0, 0], [0, 1, 0], [0, 0, -1]]
+        helper_factors = [
+            [1, 0, 0, -1, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0],
+        ]
+        helper = [
+            [1, 0, 0, -1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 1, 0, 0, 1, 0],
+        ]
+        self.assertEqual(_rank_mod(pkd), 3)
+        self.assertEqual(_rank_mod(linear_to_c), 1)
+        self.assertEqual(_rank_mod(unit_b), 3)
+        self.assertEqual(_rank_mod(helper_factors), 3)
+        self.assertEqual(_rank_mod(helper), 5)
+
+        factor_rank = 3 * 98_442 + 3 * 251 + 74 + 3 * 8 + 3
+        operator_rank = (
+            3 * 98_442
+            + 3 * 251
+            + 74
+            + 3 * 8
+            + 5
+        )
+        codomain_dimension = 3 * 98_777
+        extended_domain_dimension = codomain_dimension + 98_646
+        self.assertEqual(factor_rank, 296_180)
+        self.assertEqual(codomain_dimension - factor_rank, 151)
+        self.assertEqual(operator_rank, 296_182)
+        self.assertEqual(codomain_dimension - operator_rank, 149)
+        self.assertEqual(extended_domain_dimension - operator_rank, 98_795)
+        self.assertEqual(global_map["factor_operator"]["R_rank"], factor_rank)
+        self.assertEqual(
+            global_map["factor_operator"]["augmented_rank"], operator_rank
+        )
+        self.assertEqual(
+            global_map["factor_operator"]["augmented_kernel_dimension"], 98_795
+        )
+        self.assertEqual(global_map["qap_polynomials"]["domain_size"], 131_072)
+        self.assertEqual(
+            set(global_map["official_query_sections"]),
+            {"IC", "H", "L", "A", "B_G1", "B_G2"},
+        )
+        self.assertEqual(
+            global_map["verification_equation"]["preserved_by_available_mapping"],
+            "Unresolved; no complete query-point and proof-coordinate "
+            "transformation exists in the evidence.",
+        )
+        self.assertEqual(
+            global_map["verification"]["focused_tests_passed"], 50
+        )
+        self.assertEqual(
+            global_map["verification"]["focused_test_subtests_passed"], 346
+        )
+        self.assertEqual(
+            global_map["verification"]["focused_regression_rerun"]["tests_passed"],
+            49,
+        )
+        self.assertEqual(
+            global_map["verification"]["focused_regression_rerun"]["tests_deselected"],
+            1,
+        )
+
+    def test_helper_residual_map_requires_a_witness_dependent_coefficient(self):
+        # With h = P-S, g_root=f_root-V*h and g_position=h.
+        # The V*h monomial is outside the span of constant row combinations.
+        helper_residuals = {
+            ("f_root",): 1,
+            ("V", "f_anchor"): -1,
+        }
+        constant_row_span = {("f_root",), ("f_anchor",)}
+        self.assertIn(("V", "f_anchor"), helper_residuals)
+        self.assertNotIn(("V", "f_anchor"), constant_row_span)
 
     def test_malformed_row_maps_and_invalid_scalings_are_rejected(self):
         rows = (

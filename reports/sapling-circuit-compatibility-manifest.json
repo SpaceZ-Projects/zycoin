@@ -1236,7 +1236,7 @@
       "interpretation": "The two systems are each satisfied and independently quotient-divisible, but their exact canonical QAP vectors are not equal. The exact causes of the differences have not been isolated. The compatibility blocker is the absence of a validated row/variable/QAP transformation across the two matrix encodings; these vector differences alone do not establish semantic incompatibility or parameter-to-circuit binding."
     },
     "spend_qap_transformation_audit": {
-      "phase": "9.21.48",
+      "phase": "9.21.49",
       "semantic_relation_equivalence": "Evidence-supported for the pinned exports under the accepted variable map and explicit auxiliary projection; not a formal source-level proof.",
       "qap_equivalence": "Unverified. All eight complete canonical vectors differ; exact coefficient-level counts are recorded below.",
       "proving_query_compatibility": "Unverified. No complete public linear transformation from the local A/B/C variable polynomials and auxiliary space to the pinned Bellman proving queries has been established.",
@@ -1258,6 +1258,104 @@
           "-1": 4
         },
         "complete_query_transformation": "Unresolved"
+      },
+      "global_coordinate_transformation": {
+        "status": "Partial fixed A/B/C factor operator derived; complete invertible QAP and query transformation unresolved",
+        "variable_map": {
+          "direction": "x_local = M x_upstream",
+          "helper_equation": "P = T + sum(2^i*d_i, i=0..31) - A",
+          "inverse_helper_equation": "T = P - sum(2^i*d_i, i=0..31) + A",
+          "dimension": 98646,
+          "rank": 98646,
+          "kernel_dimension": 0
+        },
+        "factor_operator": {
+          "equation": "Q_upstream = R * Q_local * M + S",
+          "row_alignment_fingerprint_sha256": "f502b0f22dece3829d6e2e1e198ca8d98d82e233e9eb1a4dcded3a399f6ae17d",
+          "factor_identity_certificate_sha256": "be5f65ef3c902b9f2cc707856c0cba4b910efa724680a6989d8abf692cd6b3f8",
+          "R_dimensions": [296331, 296331],
+          "R_rank": 296180,
+          "R_kernel_dimension": 151,
+          "augmented_operator_dimensions": [296331, 394977],
+          "augmented_rank": 296182,
+          "augmented_left_nullity": 149,
+          "augmented_kernel_dimension": 98795,
+          "block_counts": {
+            "invertible_factor_matched_rows": 98442,
+            "pkd_affine_swap_rows_rank_3": 251,
+            "linear_constraint_c_to_a_rows_rank_1": 74,
+            "unit_b_affine_rows_rank_3": 8,
+            "helper_pair_rank_in_R": 3,
+            "helper_pair_rank_in_augmented_operator": 5
+          },
+          "extended_factor_operator_note": "Ranks treat row-factor coordinates and appended variable coordinates as independent inputs; they are not the rank of the assignment-space relation.",
+          "row_factor_maps": {
+            "same_orientation": "U_A=alpha*L_A; U_B=beta*L_B; U_C=alpha*beta*L_C",
+            "swapped_orientation": "U_A=alpha*L_B; U_B=beta*L_A; U_C=alpha*beta*L_C",
+            "pkd": "U_A=L_B+ONE; U_B=L_A; U_C=L_C+L_A",
+            "linear_to_c": "U_A=0; U_B=0; U_C=-L_A; L_B=ONE; L_C=0",
+            "unit_b": "U_A=lambda*L_A+u; U_B=L_B=ONE; U_C=lambda*L_C+u; L_C=0; lambda=+/-1",
+            "helper_root": "U_A=L_root_A-L_position_A; U_B=L_root_B; U_C=0",
+            "helper_anchor": "U_A=A; U_B=ONE; U_C=A+L_position_A"
+          }
+        },
+        "qap_polynomials": {
+          "domain_size": 131072,
+          "constraints": 98777,
+          "dummy_input_rows": 8,
+          "padding_rows": 32287,
+          "coefficient_operator": "P_upstream,t = W^-1 * (E * (sum_s R_ts * Q_local,s * M + S_t) + D_upstream,t), for t in {A,B,C}",
+          "evaluation_operator": "For x_upstream, factor evaluations on constraint rows are (R * Q_local * M + S) * x_upstream; append the same eight input dummy rows and zero padding before interpolation.",
+          "invertibility": "The constraint-factor operator is rank-deficient. W is invertible, but interpolation cannot restore the 149-dimensional constraint-coordinate cokernel."
+        },
+        "helper_residual_pair": {
+          "equation": "[g_root,g_position]^T = [[1,-V],[0,-1]] * [f_root,f_anchor]^T",
+          "pointwise_rank": 2,
+          "determinant": "-1",
+          "fixed_over_assignment_space": false,
+          "constant_2x2_residual_map": "Disproved for the isolated helper pair because the required off-diagonal coefficient is -V."
+        },
+        "h_quotient": {
+          "equation": "H_upstream(x)=quo_Z(A_upstream(x)*B_upstream(x)-C_upstream(x)) for satisfying x",
+          "fixed_linear_H_coordinate_map": "Unresolved",
+          "identity_map": "Disproved by retained baseline and zero-value-alternating witness comparisons",
+          "arbitrary_assignment_validity": "Quotient divisibility is guaranteed only for satisfying assignments"
+        },
+        "official_query_sections": {
+          "IC": "Unresolved; public variable indices agree, but no complete combined-query point map is derived.",
+          "H": "Unresolved; no fixed coefficient operator is established, and direct identity accumulation differs for both retained witnesses.",
+          "L": "Unresolved; the combined private query has no established transformation from the factor operator.",
+          "A": "Unresolved; the factor operator is non-invertible and the official sections do not expose C_G1 separately.",
+          "B_G1": "Unresolved; no complete inverse factor/query map is established.",
+          "B_G2": "Unresolved; swapped rows require A_G2 in the direct inverse construction, but the official parameter file contains no A_G2 section."
+        },
+        "verification_equation": {
+          "equation": "e(pi_A,pi_B)=e(alpha*G1,beta*G2)*e(IC(x),gamma*G2)*e(pi_C,delta*G2)",
+          "preserved_by_available_mapping": "Unresolved; no complete query-point and proof-coordinate transformation exists in the evidence."
+        },
+        "verification": {
+          "focused_tests_passed": 50,
+          "focused_test_subtests_passed": 346,
+          "focused_test_duration_seconds": 9.89,
+          "focused_regression_rerun": {
+            "tests_passed": 49,
+            "tests_deselected": 1,
+            "subtests_passed": 346,
+            "duration_seconds": 1.97,
+            "excluded_test": "test_local_output_qap_matches_qap_rebuilt_from_pinned_rows"
+          },
+          "ordinary_factor_rows_checked": 98442,
+          "ordinary_factor_row_mismatches": 0,
+          "ordinary_factor_check_duration_seconds": 2.513,
+          "compileall": "Passed",
+          "json_validation": "Passed",
+          "ruff_select_e4_e7_e9_f": "Passed",
+          "git_diff_check": "Passed",
+          "spend_witness_synthesis": "Not performed",
+          "output_qap_rebuild_regression": "Ran as part of the selected query-mapping module; 8.04 seconds"
+        },
+        "parameter_to_circuit_binding": "Unverified",
+        "ceremony_validity": "Unverified"
       },
       "row_correspondence": {
         "source_artifact_sha256": "44a14939955a9a82a24f4013bb0b9144a1810b648d6e4d9d3643117330b58ecc",

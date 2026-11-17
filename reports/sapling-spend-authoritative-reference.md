@@ -1565,3 +1565,226 @@ Verification: the new focused certificate test passed **1 test and 333
 subtests in 0.31 s**. No witness synthesis, production change, Output change,
 setup/parameter change, proving-gate change, or synthetic setup regression
 was performed in this phase.
+
+### Phase 9.21.49 — Global Spend QAP and query-coordinate audit
+
+This read-only derivation uses the retained production and pinned Bellman
+matrices, variable correspondence v7, row correspondence, and the complete
+expanded-row factor certificate. No Spend witness or Spend circuit synthesis
+was performed. The selected query-mapping test module also ran its existing
+Output-only QAP rebuild regression (8.04 s). The retained
+matrix fingerprints remain production
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9` and
+Bellman
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The 98,777 × 98,646 matrices therefore remain distinct. The retained row
+mapping fingerprint is
+`f502b0f22dece3829d6e2e1e198ca8d98d82e233e9eb1a4dcded3a399f6ae17d`;
+the variable mapping fingerprint is
+`26f48aae194b8f6f76958b369bd3740f269c1ef06967270c23e0ee4ae4a1c656`.
+
+#### One global fixed A/B/C factor operator
+
+Let `m=98,777`, `n=98,646`, and write each constraint matrix as an
+`m × n` coefficient matrix. Let `x_U` be the pinned-reference assignment
+coordinates and `x_L=M x_U` the local coordinates. The map `M` is identity
+on the 8 public/ONE and 98,637 common auxiliary coordinates, with
+`P=T+Σ(i=0..31)2^i d_i-A` for the two unmatched helpers. Its inverse is
+`T=P-Σ(i=0..31)2^i d_i+A`; thus `M` has rank 98,646 and zero kernel.
+
+Stack the local matrices as
+`Q_L=[Q_A,L; Q_B,L; Q_C,L] ∈ F^(3m×n)`. The paired-row order, factor
+scalings, factor swaps, 333 expanded-row identities, and two helper rows
+define a fixed sparse `R ∈ F^(3m×3m)` and a fixed variable-shift matrix
+`S ∈ F^(3m×n)` such that
+
+```text
+Q_U = R Q_L M + S
+```
+
+`R` includes the recorded row permutation. This equation is coefficient
+identity over the whole assignment space, not a witness-specific fit. The
+98,442 ordinary factor-matched rows were checked directly against all
+retained A/B/C terms: **98,442 verified, 0 mismatches**. Their maps are:
+
+```text
+same orientation:     U_A=αL_A, U_B=βL_B, U_C=αβL_C
+swapped orientation:  U_A=αL_B, U_B=βL_A, U_C=αβL_C
+```
+
+All their two-factor blocks are invertible. Exact observed profiles are
+69,840 identity rows; 251 unsized swaps with `α=β=1`; 18,754 swapped
+normalizations `α=-1, β=1`; 9,533 swapped normalizations
+`α=2, β=(p+1)/2`; and 64 same-orientation normalizations `α=-1, β=1`,
+where `p` is the scalar-field modulus. In every case `U_C=αβL_C`.
+
+The other paired rows use the verified formulas:
+
+| Class | Count | `R` block and shift | Factor-block rank |
+|---|---:|---|---:|
+| `pk_d` selection | 251 | `U_A=L_B+ONE`, `U_B=L_A`, `U_C=L_C+L_A` | 3 |
+| Linear-to-C | 74 | `U_A=U_B=0`, `U_C=-L_A`, `L_B=ONE`, `L_C=0` | 1 |
+| Unit-B affine | 8 | `U_A=λL_A+u`, `U_B=L_B=ONE`, `U_C=λL_C+u`, `L_C=0`; four `λ=1`, four `λ=-1` | 3 |
+
+The two helper rows are included by cross-row factor equations:
+
+```text
+source root:   U_A=L_root_A-L_position_A, U_B=L_root_B, U_C=0
+source anchor: U_A=A, U_B=ONE, U_C=A+L_position_A
+```
+
+`S` contains the explicit `ONE`, `u`, anchor, and ONE shifts in these
+identities. The extended map is fixed; the entries of `S` are coefficients
+of named variables, not witness values. The `u` vectors and every term for
+the 333 rows are retained in the
+[factor certificate](sapling-spend-expanded-row-factor-identities.json).
+
+The exact ranks for this constructed operator are:
+
+| Operator | Domain → codomain | Rank | Kernel | Left nullity |
+|---|---:|---:|---:|---:|
+| Factor-only `R` | 296,331 → 296,331 | 296,180 | 151 | 151 |
+| Extended `[R S]` | 394,977 → 296,331 | 296,182 | 98,795 | 149 |
+
+The ranks follow from the row blocks: `R` has rank
+`3·98,442 + 3·251 + 74 + 3·8 + 3 = 296,180`. The helper pair contributes
+rank 3 in `R` and rank 5 after its two independent anchor/ONE shifts are
+included. The 74 C-to-A rows each lose two factor coordinates; the source
+root C coordinate in the helper pair is identically zero. The augmented
+operator therefore remains non-surjective and non-invertible. These are
+ranks of the extended factor-coordinate operator with factor and appended
+variable coordinates treated as independent—not the rank of the assignment
+map `M`, and not a proof that no different global operator could exist.
+
+#### Induced A/B/C evaluation vectors and polynomials
+
+For each factor side `t∈{A,B,C}`, partition `R` into `m×m` blocks `R_ts`
+and `S` into `m×n` blocks `S_t`. For every upstream-coordinate assignment
+`x_U`, the constraint-row evaluations are exactly
+
+```text
+q_U,t(x_U) = Σ(s∈{A,B,C}) R_ts Q_L,s M x_U + S_t x_U
+```
+
+so the A, B, and C evaluation-vector transformations are fixed, linear in
+`x_U`, and valid for arbitrary assignments. Their transformations include
+cross-side terms (A may depend on local B or C) and fixed shift terms; they
+are not three independent diagonal scalings.
+
+The standard Spend QAP has `N=131,072`, 98,777 constraint rows, 8 input
+dummy rows, and 32,287 zero-padding rows. Let `E` embed the constraint rows
+into the first `m` evaluation slots, `D_U,t` hold the unchanged dummy-input
+rows and padding, and `W[i,j]=ω^(ij)` be the invertible domain evaluation
+matrix. The complete coefficient-family equation for each factor is
+
+```text
+P_U,t = W^-1 ( E ( Σ_s R_ts Q_L,s M + S_t ) + D_U,t )
+```
+
+and the local family is `P_L,s=W^-1(E Q_L,s+D_L,s)`. This is the induced
+fixed forward polynomial-coordinate formula for A/B/C, including all
+constraint rows, public-input coordinates, helpers, and padding. It is
+non-invertible on the factor-coordinate space: interpolation by `W^-1`
+cannot recover the 149 missing constraint-factor coordinates. This derives
+the forward A/B/C transformation; it does not yield an inverse mapping from
+the available official query points to the local query points.
+
+#### H quotient and the helper residual obstruction
+
+For satisfying `x_U`, define the source factor polynomials by the preceding
+operator and then
+
+```text
+A_U(X;x)=Σ_j x_U,j P_U,A,j(X)
+B_U(X;x)=Σ_j x_U,j P_U,B,j(X)
+C_U(X;x)=Σ_j x_U,j P_U,C,j(X)
+H_U(X;x)=quo_(Z)(A_U(X;x)B_U(X;x)-C_U(X;x)),  Z=X^N-1
+h_eval_U=W H_U
+```
+
+This gives the exact H evaluations and coefficients as a quadratic
+construction from the fixed A/B/C operators. It is not a fixed linear map
+`H_U=T_H H_L`. The direct identity map is disproved by the retained baseline
+and `zero-value-alternating` comparisons, whose H vectors and official H
+accumulations differ. No other fixed H-coordinate matrix has been proved or
+disproved. Quotient divisibility applies to satisfying assignments; an
+arbitrary assignment can have a nonzero remainder.
+
+The helper term `-V` can be removed from the *factor operator* by the fixed
+cross-row A/C equations above, but not from a constant linear transformation
+of the two residual coordinates. With source residuals
+`f_root=(R-T)V`, `f_anchor=A-T` and local residuals
+`g_root=(R-A)V`, `g_position=P-S`, the exact relation is
+
+```text
+[g_root,g_position]^T = [[1,-V],[0,-1]] [f_root,f_anchor]^T
+g_root = f_root - V*f_anchor
+g_position = -f_anchor
+```
+
+The 2×2 map has pointwise rank 2 and determinant `-1`, but its off-diagonal
+coefficient varies with `V`; no constant helper-only residual matrix can
+represent it over the assignment space. The fixed factor construction
+generates the same product through `U_A(root)=L_A(root)-L_A(position)`.
+Thus the witness-dependent residual coefficient is explained, not
+reinterpreted as a fixed residual-row operation. The factor construction
+remains rank-deficient as quantified above.
+
+#### Official query sections and Groth16 equation
+
+The official file has IC 8, H 131,071, L 98,638, A 85,390, B_G1 61,300,
+and B_G2 61,300 points. The existing direct-accumulation evidence remains
+witness-specific: five non-H sections match under direct mapping for the
+baseline fixture; H differs for both baseline and alternate fixtures. These
+observations do not establish query-vector equivalence.
+
+| Section | Global-map result |
+|---|---|
+| IC | **Unresolved.** Public coordinates retain their identities, but no complete map of the combined `(βA+αB+C)/γ` group points is derived. |
+| H | **Unresolved.** The QAP quotient is computable by the quadratic formula above, but no fixed linear H-query operator is established; identity accumulation fails for both retained witnesses. |
+| L | **Unresolved.** The private `(βA+αB+C)/δ` coordinates have no proven group-point transform under the extended, non-invertible factor map. |
+| A | **Unresolved.** The fixed forward A polynomial map is derived, but the official source A_G1 section cannot be inverted through the rank-deficient global factor map; C_G1 is not provided as a separate section. |
+| B_G1 | **Unresolved.** No complete inverse map from the official A_G1/B_G1 points handles the missing factor coordinates and shifts. |
+| B_G2 | **Unresolved.** The direct inverse construction for swapped rows requires A_G2 points. The official file has B_G2 but no A_G2 section, and G1 points cannot supply G2 points. |
+
+Public linear combinations could implement a known same-group query matrix,
+but the required inverse maps and group points are not available. In
+particular, the official L/IC points combine A, B, and C using toxic setup
+scalars; the file does not expose a standalone C query or those scalars.
+The rank deficiency is an obstruction to inverting this constructed
+factor operator, not a proof that every possible transformation is
+impossible.
+
+The required verification equation is
+`e(π_A,π_B)=e(αG1,βG2)e(IC(x),γG2)e(π_C,δG2)`. No complete transformation of
+the A/B/H/L/IC query contributions or proof coordinates is available, so
+preservation of either side of this equation is **Unresolved**. The public
+input indices are preserved, but that alone does not preserve the IC
+accumulation. Parameter-to-circuit binding and ceremony validity remain
+**Unverified**.
+
+**Conclusion:** a complete, witness-independent *forward* A/B/C coefficient
+operator is established in the form `Q_U=R Q_L M+S`, and it accounts for all
+rows and variables. It is not invertible (factor rank 296,180 of 296,331;
+extended rank 296,182), and it does not establish a fixed linear H map or
+any of the six official group-query mappings. The requested complete global
+QAP/Groth16 transformation is therefore **Unresolved**, not established or
+disproven.
+
+**Smallest justified next step:** attempt an exact full-span query-coordinate
+map that accounts for the 149-dimensional constraint-factor cokernel,
+produces the needed A_G2 and L/IC combined contributions from available
+public points, and supplies a fixed H-coordinate operator. If no such map
+can be derived from the retained data, the supportable path is exact
+Bellman-matrix reproduction or a separately trusted setup bound to the
+production matrix. No toxic-waste recovery, parameter binding, or ceremony
+validity can be inferred from this algebra.
+
+The retained 98,442-row factor check passed with **0 mismatches in 2.513 s**.
+The focused algebraic and query-mapping suite passed **50 tests and 346
+subtests in 9.89 s**. `compileall`, JSON parsing, targeted Ruff E4/E7/E9/F,
+and `git diff --check` passed. No Spend synthesis, production change, setup
+change, parameter change, proving-gate change, or synthetic setup regression
+was performed. The final focused rerun excluded the existing Output-only QAP
+rebuild test and passed **49 tests and 346 subtests** (1 deselected) in
+**1.97 s**.
