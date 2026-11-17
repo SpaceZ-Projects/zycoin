@@ -82,6 +82,42 @@ zero-value conditional-anchor and production Spend satisfaction regressions.
 Targeted Ruff, `compileall`, `git diff --check`, and Pylance diagnostics for
 the changed source, facade, and test files passed with no diagnostics.
 
+### Fail-closed spent-status scan
+
+`verify_sapling_note_spent_status()` derives an `nk`-based nullifier with the
+existing Sapling note/nullifier code and scans `GetBlockRange` from the
+positioned note's creation height through a captured reported tip. The scan
+requires LWP protocol version 0.6.0 or later, consecutive block heights,
+32-byte hashes linked from the preceding block, a complete stream, and a
+tip hash stable across the scan. The range omits `poolTypes` so the protocol's
+default shielded-pool response includes Sapling spends. The dedicated
+`GetBlockRangeNullifiers` RPC exists in the pinned protocol but is deprecated
+and is not declared as implemented by configured ZEC or BTCZ networks.
+
+The result is `SPENT` only after a fully validated range reports the
+nullifier; this is endpoint evidence, not independent consensus
+authentication. A negative result is `UNSPENT` only when coverage is
+complete and the caller explicitly sets `trust_backend_for_unspent=True`.
+Without that assertion, incomplete coverage, unsupported capability, changed
+tip, protocol mismatch, malformed data, and backend failures yield
+`UNKNOWN`. Configured ZEC mainnet has verified Sapling parameters while BTCZ
+mainnet remains partial; both Lightwalletd endpoint and compact-block
+capabilities are unverified, so neither should be trusted for negative
+evidence by default. No transaction builder invokes this API.
+
+The scanner's default is bounded to 1,000 blocks; callers must opt into a
+larger bound for older notes, and scans over the bound return `UNKNOWN`.
+Coverage includes the note-creation block and ends at the endpoint's captured
+tip. The tip is checked against the streamed range and fetched again afterward
+to detect a reported reorganization during the query. A result is a
+point-in-time endpoint report, not a consensus proof, mempool check, or
+guarantee that the note remains unspent after that tip.
+
+Focused spent-status, nullifier-vector, tree/scanner, and Spend-validation
+regressions passed **18 tests**. Targeted Ruff (`E4,E7,E9,F,I`),
+`compileall`, Pylance diagnostics for both changed Python files, and
+`git diff --check` passed.
+
 ## References and provenance
 
 See the [independent Merkle verification report](sapling-merkle-reference-verification.md),

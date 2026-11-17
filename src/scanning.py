@@ -1,20 +1,32 @@
 """Stateless, bounded Lightwalletd compact-block scanners."""
 
 import inspect
+import re
 import struct
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable, Mapping, Optional, Tuple
 
 from .clients import LightwalletdClient
+from .clients.errors import LightwalletdError
 from .clients.protocol import service_pb2 as pb2
 from .coins import CoinNetworkConfig
 from .crypto import TYPE_ADDRESS, address_to_script, get_address_from_output_script
 from .note_decryption import (
     SaplingDecryptedNote as SaplingDecryptedNote,
+)
+from .note_decryption import (
     SaplingNoteDecryptionError,
-    _require_network_capability as _require_note_decryption_capability,
     decrypt_sapling_compact_output,
     normalize_viewing_key,
+)
+from .note_decryption import (
+    _require_network_capability as _require_note_decryption_capability,
+)
+from .nullifiers import (
+    SaplingNote,
+    SaplingNullifierError,
+    derive_sapling_nullifier,
 )
 from .sapling_tree import SaplingCommitmentTree, SaplingTreeError
 
@@ -51,6 +63,27 @@ class ScanCapabilities:
     transparent_scan: str
     sapling_compact_scan: str
     sapling_note_decryption: str = "Unavailable"
+    sapling_nullifier_scan: str = "Unavailable"
+
+
+class SaplingSpentStatus(str, Enum):
+    SPENT = "SPENT"
+    UNSPENT = "UNSPENT"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class SaplingSpentStatusResult:
+    status: SaplingSpentStatus
+    nullifier: bytes
+    note_height: int
+    chain_tip_height: int | None = None
+    chain_tip_hash: bytes | None = None
+    covered_from_height: int | None = None
+    covered_through_height: int | None = None
+    observed_height: int | None = None
+    backend_trusted_for_unspent: bool = False
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -222,6 +255,11 @@ def get_scan_capabilities(network):
         and network.sapling.get("zip212_activation_height") is not None
         else "Unavailable"
     )
+    nullifier_scan = (
+        "Configured; protocol support and endpoint trust required for UNSPENT"
+        if _sapling_nullifier_scan_configured(network)
+        else "Unavailable"
+    )
     return ScanCapabilities(
         coin_id=network.coin_id,
         network_id=network.network_id,
@@ -229,6 +267,21 @@ def get_scan_capabilities(network):
         transparent_scan=transparent,
         sapling_compact_scan=sapling,
         sapling_note_decryption=note_decryption,
+        sapling_nullifier_scan=nullifier_scan,
+    )
+
+
+def _sapling_nullifier_scan_configured(network):
+    return (
+        all(
+            _configured_rpc(network, rpc)
+            for rpc in ("GetBlock", "GetBlockRange", "GetLatestBlock")
+        )
+        and network.sapling.get("status")
+        in ("supported_verified_parameters", "partial")
+        and network.sapling.get("activation_height") is not None
+        and network.sapling.get("lightwalletd_compact_block_capability")
+        not in (None, "not_configured", "unsupported")
     )
 
 
@@ -260,6 +313,8 @@ def _validate_range(start_height, end_height, *, max_blocks):
 
 
 def _validate_lightd_info(info, network):
+    if not isinstance(info, pb2.LightdInfo):
+        raise ScanError("Lightwalletd returned malformed chain information")
     if not info.chainName.strip():
         raise ScanError("Lightwalletd returned an empty chain name")
     expected_chain = {
@@ -274,13 +329,28 @@ def _validate_lightd_info(info, network):
         )
 
 
+def _lightwallet_protocol_supports_shielded_ranges(info):
+    version = getattr(info, "lightwalletProtocolVersion", "")
+    if not isinstance(version, str):
+        return False
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version.strip())
+    return bool(match) and tuple(map(int, match.groups())) >= (0, 6, 0)
+
+
 def _validate_block(block, expected_height):
-    if block.height != expected_height:
+    if not all(
+        hasattr(block, name)
+        for name in ("height", "hash", "prevHash", "vtx")
+    ):
+        raise ScanError("Lightwalletd returned a malformed compact block")
+    if type(block.height) is not int or block.height != expected_height:
         raise ScanError(
             f"Lightwalletd returned block {block.height}; expected {expected_height}"
         )
     for name in ("hash", "prevHash"):
-        value = bytes(getattr(block, name))
+        value = getattr(block, name)
+        if not isinstance(value, bytes):
+            raise ScanError(f"Lightwalletd returned a malformed block {name}")
         if value and len(value) != 32:
             raise ScanError(f"Lightwalletd returned a malformed block {name}")
 
@@ -808,6 +878,288 @@ async def scan_sapling_commitment_tree(
         start_height=start_height,
         end_height=end_height,
     )
+
+
+async def verify_sapling_note_spent_status(
+    client,
+    note,
+    nk,
+    positioned_output,
+    tree_state,
+    *,
+    network,
+    trust_backend_for_unspent=False,
+    max_blocks=1000,
+    timeout=None,
+):
+    """Check a validated note's nullifier through a stable reported chain tip.
+
+    An endpoint observation can report ``SPENT``. An empty complete scan
+    yields ``UNSPENT`` only when the caller explicitly trusts that endpoint;
+    otherwise negative evidence remains ``UNKNOWN``.
+    """
+    _validate_network(client, network)
+    if not isinstance(note, SaplingNote):
+        raise TypeError("note must be a validated SaplingNote")
+    if not isinstance(positioned_output, SaplingPositionedOutput):
+        raise TypeError("positioned_output must be a SaplingPositionedOutput")
+    if not isinstance(tree_state, SaplingTreeScanResult):
+        raise TypeError("tree_state must be a SaplingTreeScanResult")
+    if type(trust_backend_for_unspent) is not bool:
+        raise TypeError("trust_backend_for_unspent must be a bool")
+    if (
+        isinstance(max_blocks, bool)
+        or not isinstance(max_blocks, int)
+        or max_blocks < 1
+    ):
+        raise ValueError("max_blocks must be a positive integer")
+
+    compact_output = positioned_output.compact_output
+    if not isinstance(compact_output, SaplingCompactOutput):
+        raise ScanError("positioned Sapling output is malformed")
+    note_height = compact_output.height
+    if (
+        isinstance(note_height, bool)
+        or not isinstance(note_height, int)
+        or note_height < 0
+    ):
+        raise ScanError("positioned Sapling output has an invalid height")
+    try:
+        nullifier = derive_sapling_nullifier(nk, note, positioned_output.position)
+    except SaplingNullifierError as exc:
+        raise ScanError(f"could not derive Sapling nullifier: {exc}") from exc
+    if not isinstance(nullifier, bytes) or len(nullifier) != 32:
+        raise ScanError("Sapling nullifier derivation returned malformed bytes")
+
+    def unknown(
+        reason,
+        *,
+        tip_height=None,
+        tip_hash=None,
+        covered_from=None,
+        covered_through=None,
+        observed_height=None,
+    ):
+        return SaplingSpentStatusResult(
+            status=SaplingSpentStatus.UNKNOWN,
+            nullifier=nullifier,
+            note_height=note_height,
+            chain_tip_height=tip_height,
+            chain_tip_hash=tip_hash,
+            covered_from_height=covered_from,
+            covered_through_height=covered_through,
+            observed_height=observed_height,
+            backend_trusted_for_unspent=trust_backend_for_unspent,
+            reason=reason,
+        )
+
+    tree = tree_state.tree
+    activation_height = network.sapling.get("activation_height")
+    if (
+        not isinstance(tree, SaplingCommitmentTree)
+        or tree.network.coin_id != network.coin_id
+        or tree.network.network_id != network.network_id
+        or type(activation_height) is not int
+        or type(tree_state.start_height) is not int
+        or tree_state.start_height != activation_height
+        or type(tree_state.end_height) is not int
+        or note_height < activation_height
+        or tree_state.end_height < note_height
+        or not isinstance(tree_state.outputs, tuple)
+        or len(tree_state.outputs) != tree.size
+        or positioned_output not in tree_state.outputs
+        or (positioned_output.coin_id, positioned_output.network_id)
+        != (network.coin_id, network.network_id)
+    ):
+        return unknown("note output or complete Sapling tree context is inconsistent")
+    try:
+        if (
+            tree.root_at(tree.size) != tree.root
+            or tree.commitment_at(positioned_output.position)
+            != note.note_commitment
+            or positioned_output.position >= len(tree_state.outputs)
+            or tree_state.outputs[positioned_output.position] != positioned_output
+        ):
+            return unknown("note commitment or position does not match tree context")
+    except (IndexError, SaplingTreeError):
+        return unknown("note position is unavailable in the supplied tree context")
+
+    if not _sapling_nullifier_scan_configured(network):
+        return unknown(
+            f"Lightwalletd Sapling nullifier scanning is not configured for "
+            f"{network.coin_id}"
+        )
+
+    tip_height = None
+    tip_hash = None
+    try:
+        info = await client.get_lightd_info(timeout=timeout)
+        _validate_lightd_info(info, network)
+        if not _lightwallet_protocol_supports_shielded_ranges(info):
+            return unknown(
+                "Lightwalletd protocol version does not establish shielded range support"
+            )
+        if info.saplingActivationHeight != activation_height:
+            return unknown(
+                "Lightwalletd Sapling activation height does not match configuration"
+            )
+
+        latest = await client.get_latest_block(timeout=timeout)
+        if not isinstance(latest, pb2.BlockID):
+            return unknown("Lightwalletd returned malformed chain-tip information")
+        tip_height = latest.height
+        if not isinstance(latest.hash, bytes):
+            return unknown("Lightwalletd returned malformed chain-tip information")
+        tip_hash = latest.hash
+        if (
+            isinstance(tip_height, bool)
+            or not isinstance(tip_height, int)
+            or tip_height < note_height
+            or len(tip_hash) != 32
+        ):
+            return unknown(
+                "Lightwalletd returned missing or inconsistent chain-tip information",
+                tip_height=tip_height if type(tip_height) is int else None,
+                tip_hash=tip_hash if len(tip_hash) == 32 else None,
+            )
+        if tip_height - note_height + 1 > max_blocks:
+            return unknown(
+                f"complete nullifier coverage exceeds max_blocks={max_blocks}",
+                tip_height=tip_height,
+                tip_hash=tip_hash,
+            )
+
+        predecessor_height = note_height - 1
+        predecessor = await client.get_block(
+            pb2.BlockID(height=predecessor_height),
+            timeout=timeout,
+        )
+        _validate_block(predecessor, predecessor_height)
+        previous_hash = bytes(predecessor.hash)
+        if len(previous_hash) != 32:
+            return unknown(
+                "Lightwalletd did not provide the note-range predecessor block",
+                tip_height=tip_height,
+                tip_hash=tip_hash,
+            )
+
+        request = pb2.BlockRange(
+            start=pb2.BlockID(height=note_height),
+            end=pb2.BlockID(height=tip_height),
+        )
+        completed = 0
+        expected_height = note_height
+        observed_height = None
+        seen_hashes = set()
+        async for block in client.get_block_range(request, timeout=timeout):
+            _validate_block(block, expected_height)
+            block_hash = bytes(block.hash)
+            block_previous_hash = bytes(block.prevHash)
+            if len(block_hash) != 32 or len(block_previous_hash) != 32:
+                raise ScanError(
+                    "Lightwalletd returned malformed nullifier-scan block hashes"
+                )
+            if block_previous_hash != previous_hash:
+                raise ScanError(
+                    "Lightwalletd nullifier-scan blocks are not hash-contiguous"
+                )
+            if block_hash in seen_hashes:
+                raise ScanError("Lightwalletd returned a duplicate nullifier-scan block")
+            seen_hashes.add(block_hash)
+            previous_hash = block_hash
+            completed += 1
+            expected_height += 1
+
+            previous_tx_index = -1
+            seen_txids = set()
+            for compact_tx in block.vtx:
+                protocol_txid = bytes(compact_tx.txid)
+                if (
+                    len(protocol_txid) != 32
+                    or protocol_txid in seen_txids
+                    or compact_tx.index <= previous_tx_index
+                ):
+                    raise ScanError(
+                        "Lightwalletd returned malformed or unordered nullifier transactions"
+                    )
+                seen_txids.add(protocol_txid)
+                previous_tx_index = compact_tx.index
+                for spend in compact_tx.spends:
+                    reported_nullifier = spend.nf
+                    if (
+                        not isinstance(reported_nullifier, bytes)
+                        or len(reported_nullifier) != 32
+                    ):
+                        raise ScanError(
+                            "Lightwalletd returned a malformed Sapling nullifier"
+                        )
+                    if (
+                        observed_height is None
+                        and reported_nullifier == nullifier
+                    ):
+                        observed_height = block.height
+
+        total = tip_height - note_height + 1
+        if completed != total:
+            raise ScanError(
+                f"Lightwalletd returned {completed} blocks for a {total}-block "
+                "nullifier coverage range"
+            )
+        if previous_hash != tip_hash:
+            raise ScanError(
+                "Lightwalletd nullifier range does not end at the reported chain tip"
+            )
+
+        tip_snapshot = await client.get_block(
+            pb2.BlockID(height=tip_height),
+            timeout=timeout,
+        )
+        _validate_block(tip_snapshot, tip_height)
+        if bytes(tip_snapshot.hash) != tip_hash:
+            raise ScanError("Lightwalletd chain tip changed during nullifier scan")
+
+        common = {
+            "nullifier": nullifier,
+            "note_height": note_height,
+            "chain_tip_height": tip_height,
+            "chain_tip_hash": tip_hash,
+            "covered_from_height": note_height,
+            "covered_through_height": tip_height,
+            "observed_height": observed_height,
+            "backend_trusted_for_unspent": trust_backend_for_unspent,
+        }
+        if observed_height is not None:
+            return SaplingSpentStatusResult(
+                status=SaplingSpentStatus.SPENT,
+                reason=(
+                    "nullifier was observed in the complete Lightwalletd range; "
+                    "endpoint evidence is not independently authenticated"
+                ),
+                **common,
+            )
+        if not trust_backend_for_unspent:
+            return SaplingSpentStatusResult(
+                status=SaplingSpentStatus.UNKNOWN,
+                reason=(
+                    "range coverage is complete, but the caller has not established "
+                    "trust in this endpoint for negative evidence"
+                ),
+                **common,
+            )
+        return SaplingSpentStatusResult(
+            status=SaplingSpentStatus.UNSPENT,
+            reason=(
+                "nullifier was absent from complete trusted endpoint coverage "
+                "through the reported chain tip"
+            ),
+            **common,
+        )
+    except (LightwalletdError, ScanError) as exc:
+        return unknown(
+            f"nullifier coverage could not be established: {exc}",
+            tip_height=tip_height,
+            tip_hash=tip_hash,
+        )
 
 
 async def scan_sapling_notes(

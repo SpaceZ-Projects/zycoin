@@ -3167,3 +3167,37 @@ tree/scanner and production Spend regressions). The combined focused suite
 passed **15 tests** in 116.6 seconds. Targeted Ruff, `compileall`,
 `git diff --check`, and Pylance diagnostics for all three changed Python
 files passed with no diagnostics.
+
+### Phase 9.21.67 — Fail-closed Sapling note spent-status verification
+
+Added `verify_sapling_note_spent_status()` to `src.scanning`. It accepts a
+validated `SaplingNote`, nullifier-deriving key, positioned output, and its
+complete `SaplingTreeScanResult`, and derives the nullifier with the existing
+`derive_sapling_nullifier()`. Using the configured Lightwalletd
+`GetBlockRange` capability and LWP v0.6.0+ shielded-range response, it scans
+from the note's creation block through the captured tip. It requires exact
+height coverage, predecessor/block hash continuity, well-formed 32-byte
+Sapling nullifiers, and a stable reported tip.
+
+The result distinguishes `SPENT`, `UNSPENT`, and `UNKNOWN`. `SPENT` means the
+nullifier appeared in the validated endpoint range; it is not independently
+consensus-authenticated. An absent nullifier is `UNSPENT` only after complete
+coverage and explicit caller opt-in with `trust_backend_for_unspent=True`.
+The default is `UNKNOWN` for negative results. Unsupported capability,
+protocol mismatch, a scan over the configured bound, incomplete or malformed
+responses, chain-tip inconsistencies, and backend failures also yield
+`UNKNOWN`. The API does not include mempool coverage or make transaction
+safety claims.
+
+Pinned LWP v0.6.0 defines `GetBlockRangeNullifiers` but deprecates it in favor
+of `GetBlockRange`; neither configured ZEC nor BTCZ currently declares the
+dedicated method. The scanner uses `GetBlockRange` with no pool filter, as the
+protocol specifies the default shielded-pool response. ZEC mainnet has
+verified Sapling parameters, while BTCZ mainnet remains partial; both
+Lightwalletd and compact-block endpoint capabilities are unverified. No
+current endpoint is trusted for negative evidence by default.
+
+Focused spent-status, nullifier-vector, tree/scanner, and Spend-validation
+regressions passed **18 tests**. Targeted Ruff (`E4,E7,E9,F,I`),
+`compileall`, Pylance diagnostics for `src/scanning.py` and its new test
+module, and `git diff --check` passed.

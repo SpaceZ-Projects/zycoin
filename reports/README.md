@@ -23,7 +23,8 @@ and provenance; it is the source record for the focused reports below.
 - [Bitcore client compatibility](bitcore-client-compatibility.md) —
   REST history, transactions, response normalization, and Socket.IO findings.
 - [Lightwalletd compatibility](lightwalletd-client-compatibility.md) —
-  compact scanning, bounded live evidence, and scanner limits.
+  compact scanning, bounded live evidence, scanner limits, and fail-closed
+  Sapling nullifier status.
 
 ## Sapling
 
@@ -128,6 +129,11 @@ and provenance; it is the source record for the focused reports below.
   context. Its focused validation/tree/scanner/Spend regressions passed
   15 tests. It preserves zero-value conditional-anchor semantics and does
   not claim consensus authentication or transaction construction.
+- [Phase 9.21.67](sapling-spend-authoritative-reference.md#phase-92167--fail-closed-sapling-note-spent-status-verification)
+  adds tri-state spent-status verification using shielded `GetBlockRange`,
+  complete chain-tip coverage, and explicit caller trust for `UNSPENT`. Its
+  focused 18-test validation does not claim endpoint consensus authentication
+  or transaction-level safety.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.

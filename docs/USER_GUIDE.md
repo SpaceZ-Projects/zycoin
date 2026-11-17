@@ -626,6 +626,26 @@ The position must be the verified global Sapling note-tree position in
 derive a value only and do not establish that the note has a valid witness or
 can be spent.
 
+`verify_sapling_note_spent_status()` in `src.scanning` derives the nullifier
+from a validated `SaplingNote`, its `nk`, and a `SaplingPositionedOutput` from
+the corresponding complete `SaplingTreeScanResult`. It scans from the note's
+creation block through a chain tip captured at query start and checked again
+after the range. `SPENT` means that the endpoint reported the nullifier;
+`UNSPENT` requires complete, stable coverage and the explicit
+`trust_backend_for_unspent=True` assertion. That assertion records your trust
+assumption; it does not authenticate the endpoint's chain data. The default is
+fail-closed: absent or incomplete evidence, unsupported protocol/capability,
+and an untrusted empty result are all `UNKNOWN`. The default scan limit is
+1,000 blocks, so older notes may need a larger explicit bound or will remain
+`UNKNOWN`.
+
+A future Spend-selection workflow must proceed only when the status is
+`UNSPENT`, the endpoint trust policy is acceptable, and the result still
+applies to the current chain tip. It must recheck after tip changes. This
+preflight is not invoked by a transaction builder: Sapling transaction
+construction, serialization, proving, signing, and broadcast remain
+unimplemented.
+
 A future spend-request contract must include, at minimum, selected notes with
 validated value and note randomness, the corresponding ZIP32 account/key,
 verified note-tree position and authentication path, a common verified anchor,

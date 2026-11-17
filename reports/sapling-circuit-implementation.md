@@ -6749,6 +6749,29 @@ Spend regressions passed **15 tests**. Targeted Ruff, `compileall`,
 and test files passed. This does not establish consensus authentication or
 wire the validator into a transaction-construction API.
 
+### Phase 9.21.67 — Fail-closed Sapling note spent-status verification
+
+Added a stateless scanner API that derives a note nullifier, scans the
+inclusive creation-height-to-tip `GetBlockRange`, checks full consecutive
+height coverage and hash continuity, validates the nullifier fields, and
+rechecks the reported tip. Results are tri-state: endpoint observation gives
+`SPENT`; `UNSPENT` requires complete stable coverage plus an explicit
+`trust_backend_for_unspent=True`; all incomplete, unsupported, malformed,
+unavailable, or untrusted-negative cases return `UNKNOWN`.
+
+The pinned protocol's dedicated nullifier-range RPC is deprecated and absent
+from both configured ZEC and BTCZ RPC lists; the implementation uses the
+existing shielded `GetBlockRange` default. ZEC has verified Sapling
+parameters; BTCZ remains partial. Both endpoint/compact-block capabilities
+are unverified, so negative results remain `UNKNOWN` by default. The
+Lightwalletd response is not independently consensus-authenticated, and no
+transaction builder invokes this API.
+
+The focused spent-status, nullifier-vector, tree/scanner, and Spend-validation
+suite passed **18 tests**. Targeted Ruff (`E4,E7,E9,F,I`), `compileall`,
+Pylance diagnostics for both changed Python files, and `git diff --check`
+passed.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

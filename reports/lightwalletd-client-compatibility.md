@@ -27,6 +27,28 @@ These are endpoint/functionality observations, not chain consensus
 authentication. The exact endpoint/network statuses are retained in the
 [per-network matrix](coin-registry-compatibility-audit.md).
 
+## Sapling nullifier status
+
+The pinned LWP v0.6.0 protocol defines `CompactTx.spends[].nf` and streams
+shielded compact blocks through `GetBlockRange`. If `poolTypes` is empty, the
+protocol specifies the legacy shielded-pool response; the scanner uses this
+form to avoid depending on optional pool filtering. The protocol also defines
+`GetBlockRangeNullifiers`, but marks it deprecated in favor of `GetBlockRange`.
+Neither ZEC nor BTCZ's configured RPC lists declares the dedicated RPC; both
+declare `GetBlockRange`.
+
+The spent-status scanner verifies a full note-height-to-tip range, block/hash
+continuity, and a stable reported tip. This establishes endpoint-reported
+coverage only. Current ZEC and BTCZ endpoint/compact-block entries are
+unverified; therefore an absent nullifier returns `UNKNOWN` unless the caller
+explicitly accepts responsibility for trusting that endpoint. No endpoint
+response is treated as independent consensus authentication.
+
+The spent-status regressions exercise observed and absent nullifiers, full
+versus incomplete ranges, protocol and capability rejection, malformed
+responses, unavailable services, and stable-tip checks. Their verification
+results are recorded in Phase 9.21.67 of the authoritative Spend report.
+
 ## Limitations and verification
 
 Ordinary compact scans do not establish note-tree positions. The full-tree
