@@ -615,7 +615,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.49):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.50):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -668,7 +668,7 @@ operator or transformation for IC, H, L, A, B_G1, or B_G2 is established.
 The known B_G2 inverse needs A_G2, which the official file lacks. Hence the
 Groth16 verification equation is not shown to be preserved. The global
 equations and exact section conclusions are recorded in
-[Phase 9.21.49 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92149--global-spend-qap-and-query-coordinate-audit).
+[Phase 9.21.50 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92150--spend-factor-map-kernel-and-quotient-spaces).
 The focused algebraic/query suite passed **50 tests and 346 subtests in
 9.89 s**; all 98,442 ordinary factor blocks passed exact comparison with
 **0 mismatches in 2.513 s**. Syntax, JSON, targeted Ruff E4/E7/E9/F, and
@@ -676,6 +676,23 @@ The focused algebraic/query suite passed **50 tests and 346 subtests in
 rebuild regression (8.04 s); no Spend synthesis was performed. A final run
 excluding that case passed **49 tests and 346 subtests** (1 deselected) in
 **1.97 s**.
+
+Phase 9.21.50 directly certifies the four exact finite-field nullspaces:
+`dim ker(R)=dim ker(R^T)=151`, `dim ker([R S])=98,795`, and
+`dim ker([R S]^T)=149`. The 74 rank-one rows and rank-three helper block
+account for the factor-map kernel; helper shifts by ONE and public anchor
+raise the augmented rank by exactly two. Quotient maps to `im(R)` and
+`im([R S])` are bijective, but neither image is the full factor codomain.
+This confirms a fixed forward A/B/C transformation, not an inverse or a
+fixed H/query transformation. The six query sections and verification
+equation remain unresolved; parameter binding and ceremony validity remain
+unverified.
+The focused Phase 9.21.50 factor-kernel/QAP/query suite passed **40 tests
+and 346 subtests** (1 Output-only case deselected) in **5.02 s**; the exact
+kernel test took **3.21 s**. Compile, JSON, targeted Ruff E4/E7/E9/F, and
+diff checks passed. No Spend synthesis was performed.
+The kernel and compatibility-manifest rerun after final report edits passed
+**20 tests and 5 subtests in 3.24 s**.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

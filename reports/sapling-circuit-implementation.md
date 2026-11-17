@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.49):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.50):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -122,6 +122,24 @@ The query-mapping module included an existing Output-only QAP rebuild
 regression (8.04 s); no Spend synthesis was run. A final rerun excluding
 that Output-only case passed **49 tests and 346 subtests** (1 deselected) in
 **1.97 s**.
+
+Phase 9.21.50 exactly characterizes the factor operators over the scalar
+field. `ker(R)` and `ker(R^T)` each have dimension 151; `ker([R S])` has
+dimension 98,795 and `ker([R S]^T)` dimension 149. Canonical sparse-basis
+fingerprints and direct multiplication checks are recorded in the
+compatibility manifest. The rank deficiency is localized to 74 rank-one
+linear-to-C blocks (two right and two left null directions each) and a
+rank-three helper block. The two added augmented-rank directions are the
+helper public-anchor and ONE shifts. `R` induces a bijection from its
+factor-space quotient to `im(R)`; this does not prove a restricted left
+inverse for the actual QAP coefficient-family span. The forward A/B/C map
+remains established, while H and all six query mappings remain unresolved.
+The Phase 9.21.50 focused factor-kernel/QAP/query suite passed **40 tests
+and 346 subtests** (1 Output-only case deselected) in **5.02 s**; the kernel
+test took **3.21 s**. Compile, JSON, targeted Ruff E4/E7/E9/F, and diff
+checks passed. No Spend synthesis was run.
+The kernel and compatibility-manifest rerun after final report edits passed
+**20 tests and 5 subtests in 3.24 s**.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 

@@ -59,6 +59,10 @@ and provenance; it is the source record for the focused reports below.
   helper obstruction, and unresolved six-section query map. Phase 9.21.48
   verifies all 333 expanded-row identities; see the
   [factor-identity certificate](sapling-spend-expanded-row-factor-identities.json).
+  [Phase 9.21.50](sapling-spend-authoritative-reference.md#phase-92150--spend-factor-map-kernel-and-quotient-spaces)
+  supplies exact sparse bases and fingerprints for all four nullspaces,
+  characterizes the image/quotient maps, and leaves H and six-section query
+  compatibility unresolved.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
@@ -83,6 +87,9 @@ and provenance; it is the source record for the focused reports below.
   [Phase 9.21.49](sapling-spend-authoritative-reference.md#phase-92149--global-spend-qap-and-query-coordinate-audit)
   documents the global A/B/C operator and the remaining unresolved H/query
   transformation.
+  Phase 9.21.50 adds the exact finite-field kernel and quotient certificates;
+  no QAP-family restricted inverse or Groth16 query transformation is yet
+  established.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution and little-endian position interpretation;
   Phase 9.21.43 establishes relation equivalence for the captured exports,

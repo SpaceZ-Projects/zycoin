@@ -1788,3 +1788,137 @@ change, parameter change, proving-gate change, or synthetic setup regression
 was performed. The final focused rerun excluded the existing Output-only QAP
 rebuild test and passed **49 tests and 346 subtests** (1 deselected) in
 **1.97 s**.
+
+### Phase 9.21.50 — Spend factor-map kernel and quotient spaces
+
+This exact finite-field analysis reuses the retained factor identities,
+variable map, and two helper equations; no Spend synthesis was performed.
+Use row-major factor coordinates `(row,A/B/C)` for both local input factors
+and upstream output factors, followed by upstream variable coordinates for
+the augmented operator. All arithmetic is in the BLS12-381 scalar field.
+The canonical sparse-basis encoding, shapes, ranks, and SHA-256 fingerprints
+are recorded in the
+[compatibility manifest](sapling-circuit-compatibility-manifest.json) and
+recomputed by the focused kernel-certificate test.
+
+The 98,442 ordinary factor blocks, 251 `pk_d` blocks, and 8 unit-B affine
+blocks are invertible. Each of the 74 linear-to-C blocks has
+`R_i=[[0,0,0],[0,0,0],[-1,0,0]]`, rank 1, right kernel
+`span(e_B,e_C)`, and left kernel `span(e_A,e_B)`. The two-row helper block,
+with local columns `(root A/B/C, position A/B/C)` and upstream rows
+`(root A/B/C, anchor A/B/C)`, is
+
+```text
+R_h = [[1,0,0,-1,0,0],
+       [0,1,0, 0,0,0],
+       [0,0,0, 0,0,0],
+       [0,0,0, 0,0,0],
+       [0,0,0, 0,0,0],
+       [0,0,0, 1,0,0]]
+```
+
+Its rank is 3, right kernel is `span(e_rootC,e_positionB,e_positionC)`,
+and left kernel is `span(e_rootC,e_anchorA,e_anchorB)`. Thus
+`dim ker(R)=dim ker(R^T)=74*2+3=151`; the block ranks sum to
+`3*98,442 + 3*251 + 74 + 3*8 + 3 = 296,180`.
+The helper coordinates are local root row 76894, local position row 32701,
+upstream root row 76893, and upstream anchor row 76894. The 74 linear-to-C
+row coordinates are taken directly from the 333-row certificate.
+The 151 right-kernel directions are exactly lost input factor directions;
+the 151 left-kernel directions are output linear functionals that vanish
+throughout `im(R)`.
+
+The two helper variable shifts add two independent output directions modulo
+`im(R)`: the public anchor shift in helper anchor-A and the `ONE` shift in
+helper anchor-B. The other helper anchor-C shift is in the image of `R`;
+the `pk_d` and unit-B affine shifts also lie in the images of their
+full-rank blocks. The helper augmented block is the displayed `R_h` with
+columns for public anchor and `ONE` appended; its exact rank is 5, versus 3
+for `R_h`. Therefore
+`rank([R S])=296,182`, `dim ker([R S])=394,977-296,182=98,795`, and
+`dim ker([R S]^T)=296,331-296,182=149`. The two added rank directions are
+explained by the actual affine helper shifts, not a row-map provenance
+anomaly.
+
+The augmented right-kernel basis consists of the 151 embedded `ker(R)`
+vectors and one vector `(z_j,e_j)` for each variable coordinate `j` except
+`ONE` (index 0) and public anchor (index 5). For each such coordinate,
+`z_j` is zero except at unit-B rows, where its local A and C entries are
+`-u_j/lambda`; this cancels `S e_j` because `lambda` is nonzero. The two
+excluded coordinates have independent nonzero projections into the helper
+cokernel. The augmented left-kernel basis consists of the 148 linear-to-C
+left-null vectors plus helper root-C; the two helper anchor-A/B null
+directions are removed by those shifts. These compact generators produce
+all four bases; each vector was directly multiplied by the applicable
+operator or transpose modulo the field. Rank-nullity and their distinct
+pivot coordinates prove independence and completeness. The four basis
+fingerprints are `97a958fd…80003`, `c93683bd…e14f5`,
+`060132ce…c02db`, and `3e57545e…4ed1`, respectively; the manifest stores
+the full SHA-256 values and canonical basis specification.
+
+The quotient-space result is exact but does not restore full-space
+invertibility:
+
+```text
+F^296331 / ker(R)  --R--> im(R)                 is a bijection (dimension 296180)
+F^394977 / ker([R S]) --[R S]--> im([R S])      is a bijection (dimension 296182)
+```
+
+Neither image is the full 296,331-dimensional output factor space; the
+cokernel dimensions are 151 and 149. Thus the fixed forward A/B/C
+coefficient formulas remain valid and witness-independent, while recovering
+arbitrary local factor coordinates from upstream coordinates is impossible
+through this operator. Whether `ker(R)` intersects the particular span of
+the retained local QAP coefficient-family columns was not evaluated here;
+the ambient rank alone does not settle injectivity on that restricted span.
+Interpolation on the `N=131,072` domain is invertible, so it preserves these
+factor-space rank and image conclusions; it neither supplies the missing
+directions nor an inverse query map.
+
+No fixed H-coordinate transformation follows from these kernel results.
+For satisfying assignments the uniform construction is
+
+```text
+H_U(X;x) = quo_(X^N-1)(
+  [Σ_s R_As F_L,s(X;M x) + S_A x]
+  [Σ_s R_Bs F_L,s(X;M x) + S_B x]
+  - [Σ_s R_Cs F_L,s(X;M x) + S_C x]
+)
+```
+
+where `F_L,s(X;M x)` are the local A/B/C polynomials. This fixed, assignment-
+uniform quadratic formula recomputes upstream H from local factor families
+and `x`; it is not a fixed linear coordinate map from `H_L` alone, and it
+does not imply a Groth16 H-query transform. Quotient divisibility is only
+guaranteed for satisfying assignments. The two retained witness mismatches
+disprove only the direct identity map, not all fixed maps on a restricted
+image.
+The six official sections IC, H, L, A, B_G1, and B_G2 remain
+**Unresolved**; no complete map preserving the Groth16 verification
+equation has been derived. In particular, a forward polynomial-family map
+does not provide missing group-query coordinates or prove
+parameter-to-circuit binding.
+
+**Conclusion:** the established factor map does induce a complete,
+witness-independent *forward A/B/C* transformation and an isomorphism
+between the corresponding quotient domain and image. The requested complete
+QAP/H/Groth16 transformation is **Unresolved**, not established or
+mathematically obstructed by the kernel alone.
+
+**Smallest justified next step:** compute the exact intersection of
+`ker(R)` with the column span of the retained local A/B/C coefficient-family
+matrix, and test for a fixed restricted left inverse. This is a read-only
+finite-field calculation on retained matrices; it requires no synthesis.
+Only if that restricted map is injective should work proceed to an exact H
+quotient-coordinate map and all six group-query sections.
+
+Verification: the focused factor-kernel, QAP, expanded-factor, query-mapping,
+and compatibility suite passed **40 tests and 346 subtests**, with one
+Output-only QAP rebuild test deselected, in **5.02 s**. The kernel test took
+**3.21 s** and directly checked the four sparse bases, their fingerprints,
+and helper ranks 3 and 5. Compile checks, JSON parsing, targeted Ruff E4/E7/E9/F,
+and `git diff --check` passed. No Spend synthesis, production or Output
+change, setup/parameter change, proving-gate change, or synthetic setup
+regression was performed. After the final report/manifest edits, the kernel
+and compatibility-manifest rerun passed **20 tests and 5 subtests in
+3.24 s**.

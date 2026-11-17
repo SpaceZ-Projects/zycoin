@@ -1233,10 +1233,10 @@
           "coverage_summary": "Spend and Output circuit, QAP, parameter-parser, and compatibility-manifest regressions."
         }
       },
-      "interpretation": "The two systems are each satisfied and independently quotient-divisible, but their exact canonical QAP vectors are not equal. The exact causes of the differences have not been isolated. The compatibility blocker is the absence of a validated row/variable/QAP transformation across the two matrix encodings; these vector differences alone do not establish semantic incompatibility or parameter-to-circuit binding."
+      "interpretation": "The two systems are each satisfied and independently quotient-divisible, but their exact canonical QAP vectors are not equal. The fixed forward A/B/C factor identity is now characterized, including its nontrivial kernel and cokernel. This does not establish a complete H/query transformation or parameter-to-circuit binding."
     },
     "spend_qap_transformation_audit": {
-      "phase": "9.21.49",
+      "phase": "9.21.50",
       "semantic_relation_equivalence": "Evidence-supported for the pinned exports under the accepted variable map and explicit auxiliary projection; not a formal source-level proof.",
       "qap_equivalence": "Unverified. All eight complete canonical vectors differ; exact coefficient-level counts are recorded below.",
       "proving_query_compatibility": "Unverified. No complete public linear transformation from the local A/B/C variable polynomials and auxiliary space to the pinned Bellman proving queries has been established.",
@@ -1260,7 +1260,7 @@
         "complete_query_transformation": "Unresolved"
       },
       "global_coordinate_transformation": {
-        "status": "Partial fixed A/B/C factor operator derived; complete invertible QAP and query transformation unresolved",
+        "status": "Fixed forward A/B/C factor operator and exact kernel/quotient certificates established; complete H and query transformation unresolved",
         "variable_map": {
           "direction": "x_local = M x_upstream",
           "helper_equation": "P = T + sum(2^i*d_i, i=0..31) - A",
@@ -1280,6 +1280,51 @@
           "augmented_rank": 296182,
           "augmented_left_nullity": 149,
           "augmented_kernel_dimension": 98795,
+          "kernel_certificates": {
+            "field_modulus": "52435875175126190479447740508185965837690552500527637822603658699938581184513",
+            "coordinate_order": "row-major A,B,C; augmented variable coordinates follow factor coordinates",
+            "helper_row_coordinates": {
+              "local_root": 76894,
+              "local_position": 32701,
+              "upstream_root": 76893,
+              "upstream_anchor": 76894,
+              "one_variable": 0,
+              "public_anchor_variable": 5
+            },
+            "ker_R": {
+              "dimension": 151,
+              "basis_sha256": "97a958fd214728baba47bcce11a3252b325b2cd1fb7a027bc917060c80480003",
+              "basis": "For each linear_to_C row, e_(local,B), e_(local,C); helper e_(root,C), e_(position,B), e_(position,C)."
+            },
+            "ker_R_transpose": {
+              "dimension": 151,
+              "basis_sha256": "c93683bd2e7fdc4df8241c95016d8dad6dc2666ed5311da11672888afb3e14f5",
+              "basis": "For each linear_to_C row, e_(upstream,A), e_(upstream,B); helper e_(root,C), e_(anchor,A), e_(anchor,B)."
+            },
+            "ker_augmented": {
+              "dimension": 98795,
+              "basis_sha256": "060132cebf9a5b8340480e9793146d1dcb8b32e86b7f11e7a9a80979fb9c02db",
+              "basis": "Embed the 151 ker(R) vectors with zero variable coordinates. For every variable coordinate j except ONE (0) and public anchor (5), include (z_j,e_j), where z_j is zero except unit-B rows, whose local A and C entries are -u_j/lambda. The two omitted variable directions have nonzero projections into coker(R)."
+            },
+            "ker_augmented_transpose": {
+              "dimension": 149,
+              "basis_sha256": "3e57545ed4e236e5e17cadc972626daf205a00476f9f36eabf83ff1fd1a84ed1",
+              "basis": "The 148 linear_to_C left-null vectors plus the helper root-C output coordinate; helper anchor A/B left-null directions are removed by the two independent columns of S modulo im(R)."
+            },
+            "basis_verification": "All listed vectors are generated in canonical sparse coordinates and directly multiplied by R, R^T, or [R S] and its transpose modulo the field. Rank-nullity and unique pivot coordinates establish linear independence and completeness."
+          },
+          "image_and_quotient_spaces": {
+            "im_R_dimension": 296180,
+            "coker_R_dimension": 151,
+            "factor_domain_mod_ker_R_dimension": 296180,
+            "induced_R_map": "F^(296331)/ker(R) -> im(R) is a well-defined bijection; it is not an isomorphism onto the full 296331-dimensional codomain.",
+            "projected_shift_rank": 2,
+            "im_augmented_dimension": 296182,
+            "coker_augmented_dimension": 149,
+            "augmented_domain_mod_kernel_dimension": 296182,
+            "induced_augmented_map": "F^(394977)/ker([R S]) -> im([R S]) is a well-defined bijection, not a surjection onto the full codomain.",
+            "nonzero_S_mod_im_R": "Two independent helper-row shifts, ONE and public anchor, account for rank([R S])-rank(R)=2; shifts in the unit-B rows lie in im(R)."
+          },
           "block_counts": {
             "invertible_factor_matched_rows": 98442,
             "pkd_affine_swap_rows_rank_3": 251,
@@ -1306,7 +1351,7 @@
           "padding_rows": 32287,
           "coefficient_operator": "P_upstream,t = W^-1 * (E * (sum_s R_ts * Q_local,s * M + S_t) + D_upstream,t), for t in {A,B,C}",
           "evaluation_operator": "For x_upstream, factor evaluations on constraint rows are (R * Q_local * M + S) * x_upstream; append the same eight input dummy rows and zero padding before interpolation.",
-          "invertibility": "The constraint-factor operator is rank-deficient. W is invertible, but interpolation cannot restore the 149-dimensional constraint-coordinate cokernel."
+          "invertibility": "The forward A/B/C map is well-defined and fixed but non-invertible on the ambient factor space. R has cokernel dimension 151; [R S] has cokernel dimension 149. W is invertible, so interpolation preserves these image and rank dimensions."
         },
         "helper_residual_pair": {
           "equation": "[g_root,g_position]^T = [[1,-V],[0,-1]] * [f_root,f_anchor]^T",
@@ -1317,6 +1362,8 @@
         },
         "h_quotient": {
           "equation": "H_upstream(x)=quo_Z(A_upstream(x)*B_upstream(x)-C_upstream(x)) for satisfying x",
+          "fixed_construction_from_local_factors": "H_U=quo_Z(([sum_s R_As*F_L,s(X;M*x)+S_A*x])*([sum_s R_Bs*F_L,s(X;M*x)+S_B*x])-[sum_s R_Cs*F_L,s(X;M*x)+S_C*x])",
+          "construction_interpretation": "A fixed assignment-uniform quadratic recomputation from local A/B/C factor families and x; not a linear H_U=T_H*H_L coordinate map.",
           "fixed_linear_H_coordinate_map": "Unresolved",
           "identity_map": "Disproved by retained baseline and zero-value-alternating witness comparisons",
           "arbitrary_assignment_validity": "Quotient divisibility is guaranteed only for satisfying assignments"
@@ -1334,6 +1381,32 @@
           "preserved_by_available_mapping": "Unresolved; no complete query-point and proof-coordinate transformation exists in the evidence."
         },
         "verification": {
+          "kernel_certificate_test": {
+            "tests_passed": 1,
+            "duration_seconds": 3.21,
+            "exact_basis_vectors_verified": {
+              "ker_R": 151,
+              "ker_R_transpose": 151,
+              "ker_augmented": 98795,
+              "ker_augmented_transpose": 149
+            },
+            "helper_block_ranks": {
+              "R": 3,
+              "augmented": 5
+            }
+          },
+          "factor_query_focused_suite": {
+            "tests_passed": 40,
+            "tests_deselected": 1,
+            "subtests_passed": 346,
+            "duration_seconds": 5.02,
+            "excluded_test": "test_local_output_qap_matches_qap_rebuilt_from_pinned_rows"
+          },
+          "post_report_kernel_manifest_rerun": {
+            "tests_passed": 20,
+            "subtests_passed": 5,
+            "duration_seconds": 3.24
+          },
           "focused_tests_passed": 50,
           "focused_test_subtests_passed": 346,
           "focused_test_duration_seconds": 9.89,
