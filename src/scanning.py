@@ -227,8 +227,12 @@ def get_scan_capabilities(network):
     """Report configured Lightwalletd capabilities without probing an endpoint."""
     if not isinstance(network, CoinNetworkConfig):
         raise TypeError("network must be a loaded coin network config")
+    lightwalletd_status = network.lightwalletd.get("status")
     lightwalletd = (
-        "Unverified"
+        "Partially Verified"
+        if _configured_rpc(network, "GetBlockRange")
+        and lightwalletd_status == "partial"
+        else "Unverified"
         if _configured_rpc(network, "GetBlockRange")
         else "Unavailable"
     )
@@ -237,15 +241,22 @@ def get_scan_capabilities(network):
         if _configured_rpc(network, "GetBlockRange")
         else "Unavailable"
     )
+    compact_capability = network.sapling.get(
+        "lightwalletd_compact_block_capability"
+    )
+    sapling_configured = (
+        network.sapling.get("status")
+        in ("supported_verified_parameters", "partial")
+        and compact_capability not in (None, "not_configured", "unsupported")
+        and _configured_rpc(network, "GetBlockRange")
+    )
     sapling = (
-        "Unverified"
-        if (
-            network.sapling.get("status")
-            in ("supported_verified_parameters", "partial")
-            and network.sapling.get("lightwalletd_compact_block_capability")
-            not in (None, "not_configured", "unsupported")
-            and _configured_rpc(network, "GetBlockRange")
-        )
+        "Verified"
+        if sapling_configured and compact_capability == "verified"
+        else "Partially Verified"
+        if sapling_configured and compact_capability == "partially_verified"
+        else "Unverified"
+        if sapling_configured
         else "Unavailable"
     )
     note_decryption = (

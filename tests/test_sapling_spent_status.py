@@ -271,6 +271,20 @@ class SaplingSpentStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(changed.status, SaplingSpentStatus.UNKNOWN)
         self.assertIn("tip changed", changed.reason)
 
+    async def test_discontinuous_block_hashes_never_establish_coverage(self):
+        broken_blocks = []
+        for block in self.blocks:
+            copy = compact_formats_pb2.CompactBlock()
+            copy.CopyFrom(block)
+            if copy.height == self.note_height + 1:
+                copy.prevHash = b"\x99" * 32
+            broken_blocks.append(copy)
+
+        result = await self._query(blocks=broken_blocks, trust=True)
+
+        self.assertEqual(result.status, SaplingSpentStatus.UNKNOWN)
+        self.assertIn("not hash-contiguous", result.reason)
+
     async def test_unsupported_capability_and_protocol_return_unknown(self):
         rpcs = tuple(
             rpc
@@ -329,19 +343,94 @@ class SaplingSpentStatusTests(unittest.IsolatedAsyncioTestCase):
         second = await self._query(trust=True)
         self.assertEqual(first, second)
 
-    async def test_btcz_and_zcash_capabilities_are_explicitly_unverified(self):
+    async def test_btcz_capability_is_partial_and_zcash_stays_unverified(self):
         configs = load_coin_configs()
-        for coin_id in ("zec", "btcz"):
-            network = configs[coin_id].get_network("mainnet")
-            with self.subTest(coin=coin_id):
-                capability = get_scan_capabilities(network)
-                self.assertIn("endpoint trust required", capability.sapling_nullifier_scan)
-                self.assertNotIn(
-                    "GetBlockRangeNullifiers",
-                    network.lightwalletd["implemented_rpcs"],
-                )
+        zec = configs["zec"].get_network("mainnet")
+        zec_capability = get_scan_capabilities(zec)
+        self.assertEqual(zec_capability.sapling_compact_scan, "Unverified")
+        self.assertIn("endpoint trust required", zec_capability.sapling_nullifier_scan)
+        self.assertNotIn("GetBlockRangeNullifiers", zec.lightwalletd["implemented_rpcs"])
+
         btcz = configs["btcz"].get_network("mainnet")
         self.assertEqual(btcz.sapling["status"], "partial")
+        self.assertEqual(btcz.sapling["activation_height"], 328500)
+        self.assertEqual(
+            btcz.sapling["lightwalletd_compact_block_capability"],
+            "partially_verified",
+        )
+        self.assertEqual(btcz.lightwalletd["status"], "partial")
+        btcz_capability = get_scan_capabilities(btcz)
+        self.assertEqual(btcz_capability.lightwalletd, "Partially Verified")
+        self.assertEqual(btcz_capability.sapling_compact_scan, "Partially Verified")
+        self.assertIn("endpoint trust required", btcz_capability.sapling_nullifier_scan)
+        self.assertNotIn(
+            "GetBlockRangeNullifiers",
+            btcz.lightwalletd["implemented_rpcs"],
+        )
+
+    async def test_btcz_missing_protocol_version_stays_unknown(self):
+        btcz = load_coin_configs()["btcz"].get_network("mainnet")
+        activation_height = btcz.sapling["activation_height"]
+        note_height = activation_height + 20
+        compact_output = replace(
+            self.positioned_output.compact_output,
+            height=note_height,
+        )
+        positioned_output = SaplingPositionedOutput(
+            compact_output=compact_output,
+            position=self.positioned_output.position,
+            coin_id=btcz.coin_id,
+            network_id=btcz.network_id,
+        )
+        tree = SaplingCommitmentTree(btcz)
+        tree.append(self.note.note_commitment)
+        tree_state = SaplingTreeScanResult(
+            outputs=(positioned_output,),
+            tree=tree,
+            start_height=activation_height,
+            end_height=note_height,
+        )
+        info = service_pb2.LightdInfo(
+            version="v1.1.1-inject-heartbeat",
+            vendor="BitcoinZ LightWalletD",
+            chainName="main",
+            saplingActivationHeight=activation_height,
+            blockHeight=note_height + 2,
+            gitCommit="5e3fd6f",
+        )
+        client = object.__new__(LightwalletdClient)
+
+        with (
+            patch.object(
+                LightwalletdClient,
+                "get_lightd_info",
+                new=AsyncMock(return_value=info),
+            ),
+            patch.object(
+                LightwalletdClient,
+                "get_latest_block",
+                new=AsyncMock(side_effect=AssertionError("must fail closed first")),
+            ) as latest_mock,
+            patch.object(
+                LightwalletdClient,
+                "get_block_range",
+                new=AsyncMock(side_effect=AssertionError("must not scan")),
+            ) as range_mock,
+        ):
+            result = await verify_sapling_note_spent_status(
+                client,
+                self.note,
+                self.nk,
+                positioned_output,
+                tree_state,
+                network=btcz,
+                trust_backend_for_unspent=True,
+            )
+
+        self.assertEqual(result.status, SaplingSpentStatus.UNKNOWN)
+        self.assertIn("protocol version", result.reason)
+        latest_mock.assert_not_awaited()
+        range_mock.assert_not_called()
 
 
 if __name__ == "__main__":

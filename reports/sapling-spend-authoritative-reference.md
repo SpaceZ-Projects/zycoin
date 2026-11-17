@@ -3201,3 +3201,46 @@ Focused spent-status, nullifier-vector, tree/scanner, and Spend-validation
 regressions passed **18 tests**. Targeted Ruff (`E4,E7,E9,F,I`),
 `compileall`, Pylance diagnostics for `src/scanning.py` and its new test
 module, and `git diff --check` passed.
+
+## Phase 9.21.68 — BitcoinZ Lightwalletd interoperability audit
+
+This phase refines the earlier endpoint-wide **Unverified** classification
+with bounded live evidence; it does not upgrade the endpoint to verified
+LWP-compatible or consensus-authenticated status.
+
+The configured BTCZ endpoint (`lightd.btcz.rocks:443`) returned a blank
+`lightwalletProtocolVersion`, so
+`verify_sapling_note_spent_status()` correctly returns `UNKNOWN` before
+requesting a tip or range. The endpoint's software version is not a protocol
+version and is not used as a substitute. Its self-reported commit prefix
+matches public Lightwalletd source, but this does not establish deployed
+binary identity.
+
+Bounded live reads confirmed linked inclusive block ranges, Sapling compact
+output/spend fields, and direct `GetTreeState` responses. They also exposed a
+material incompatibility: sampled output-bearing blocks reported tree size
+zero, despite containing Sapling outputs. The matched server reads that size
+from verbose Core `getblock`; the pinned BitcoinZ Core JSON source does not
+emit the expected `trees` member. The local full-tree scanner therefore must
+reject these ranges. A pre-activation range failed because the matched
+Lightwalletd parser rejects non-Overwintered transactions; this does not
+establish that the underlying block is malformed.
+
+| Claim | Status | Evidence boundary |
+|---|---|---|
+| Endpoint reachability and `GetLatestBlock` | **Verified for bounded probes** | Direct tip/block hashes agreed at the probed height; no consensus authentication. |
+| LWP v0.6.0 declaration | **Unverified** | Protocol-version field was blank; software version cannot establish LWP compatibility. |
+| Sampled compact Sapling fields and block linkage | **Partially Verified** | Bounded ranges had linked hashes and parseable Sapling fields; completeness is not established. |
+| Per-block commitment-tree sizes for witness construction | **Unsupported for reliable scanning** | Sampled output-bearing blocks reported zero; the tree scanner rejects the mismatch. |
+| `GetTreeState` | **Partially Verified** | Direct responses existed but were not independently decoded/authenticated and are not configured in ZyCoin's BTCZ client. |
+| BTCZ `UNSPENT` evidence | **Blocked / fail-closed** | The scanner returns `UNKNOWN` at the blank-version gate; endpoint data is not independently authenticated. |
+
+Local regression coverage checks the blank BTCZ protocol-version result
+before tip/range access, compact-field serialization/parsing, zero tree-size
+rejection, activation-boundary handling, malformed or missing shielded
+metadata, and broken block-hash linkage. The focused spent-status and coin
+registry run passed **65 tests** and **103 subtests**. These local tests do
+not certify endpoint completeness or consensus authenticity. No transaction
+was submitted and no prolonged monitoring was performed. See the [BTCZ
+Lightwalletd interoperability audit](btcz-lightwalletd-interoperability-audit.md)
+for pinned-source details and exact live ranges.

@@ -6360,6 +6360,46 @@ gated.
 - The unchanged `src/r1cs.py` Ruff baseline remains **45 findings**:
   13 UP007, 12 UP006, 9 UP045, 8 UP037, 2 UP035, and 1 SIM102.
 
+## Phase 9.21.68 — BitcoinZ Lightwalletd interoperability
+
+The configured BTCZ Lightwalletd endpoint returned an empty
+`lightwalletProtocolVersion`. The fail-closed spent-status API therefore
+returns `UNKNOWN` before requesting a tip or range; the endpoint's software
+version is not treated as an LWP protocol declaration. Bounded live probes
+confirmed linked block ranges and parseable Sapling compact output/spend
+fields, but sampled output-bearing blocks reported tree size zero. The
+full-tree scanner rejects this inconsistency, so these responses cannot be
+used to construct BTCZ note positions or establish spent-status coverage.
+
+Pinned source inspection found that the matched Lightwalletd revision reads
+`trees.sapling.size` from verbose Core `getblock`, while the pinned BitcoinZ
+Core JSON output does not provide that member. `GetTreeState` responded to
+bounded direct probes but is not configured in ZyCoin's BTCZ client and was
+not independently decoded or authenticated. The pre-activation block-range
+failure is consistent with the server parser's Overwinter-only transaction
+handling; it is not evidence that the underlying block is malformed.
+
+BTCZ Lightwalletd and compact scanning are **Partially Verified** only for
+the bounded operations observed. LWP v0.6.0 compatibility and complete
+range/tree metadata remain **Unverified**; reliable tree-size metadata is
+**Unsupported** for the sampled endpoint behavior. BTCZ negative spent
+status remains fail-closed as **UNKNOWN**. No endpoint response is treated
+as consensus-authenticated, and BitcoinZ Sapling spending remains gated.
+The exact capability matrix and source/live evidence are recorded in the
+[BTCZ interoperability audit](btcz-lightwalletd-interoperability-audit.md).
+
+### Phase 9.21.68 verification
+
+- `tests/test_sapling_spent_status.py` and `tests/test_coin_registry.py`:
+  **65 passed, 103 subtests passed**. This verifies local behavior only, not
+  live endpoint compatibility.
+- `compileall` and `git diff --check` passed. Targeted Ruff passed with
+  pre-existing `I001` import-order findings excluded; that unchanged import
+  block was not modified. Pylance reported no diagnostics in changed source
+  files or `tests/test_sapling_spent_status.py`; warnings in
+  `tests/test_coin_registry.py` are unused parameters in existing mock
+  callbacks, outside the added test.
+
 ### Phase 9.21.54 — Spend H-map algorithm assessment
 
 The retained local and Bellman matrix exports establish the exact

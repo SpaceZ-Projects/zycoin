@@ -101,9 +101,13 @@ complete and the caller explicitly sets `trust_backend_for_unspent=True`.
 Without that assertion, incomplete coverage, unsupported capability, changed
 tip, protocol mismatch, malformed data, and backend failures yield
 `UNKNOWN`. Configured ZEC mainnet has verified Sapling parameters while BTCZ
-mainnet remains partial; both Lightwalletd endpoint and compact-block
-capabilities are unverified, so neither should be trusted for negative
-evidence by default. No transaction builder invokes this API.
+mainnet remains partial. BTCZ's sampled compact Sapling fields are
+partially verified, but its endpoint reports no LWP protocol version and its
+sampled output-bearing blocks report incorrect zero tree sizes. The spent
+status API therefore returns `UNKNOWN` for BTCZ before scanning; neither
+endpoint is trusted for negative evidence by default. No transaction builder
+invokes this API. See the [BTCZ Lightwalletd interoperability audit](btcz-lightwalletd-interoperability-audit.md)
+for source and live evidence.
 
 The scanner's default is bounded to 1,000 blocks; callers must opt into a
 larger bound for older notes, and scans over the bound return `UNKNOWN`.

@@ -18,10 +18,11 @@ assign note positions.
 The audit recorded successful live Lightwalletd information/latest-block,
 bounded transparent/Sapling scanning, `GetTaddressTransactions`, and
 `GetTransaction` checks for BitcoinZ and Zcash mainnet. Twenty-block checks
-returned 14 BitcoinZ and 6 Zcash Sapling compact outputs. BitcoinZ's bounded
-real-chain scan returned 51 compact outputs over heights 1865913–1865932 and
-retrieved a transaction at height 1865916. Other configured networks lack
-Lightwalletd support or endpoints. Testnet has no configured endpoint.
+previously recorded 14 BitcoinZ and 6 Zcash Sapling compact outputs. A
+re-probe of the retained BitcoinZ range 1865913–1865932 returned 51 compact
+outputs and 28 Sapling spends and retrieved a transaction at height 1865916.
+Other configured networks lack Lightwalletd support or endpoints. Testnet has
+no configured endpoint.
 
 These are endpoint/functionality observations, not chain consensus
 authentication. The exact endpoint/network statuses are retained in the
@@ -39,24 +40,29 @@ declare `GetBlockRange`.
 
 The spent-status scanner verifies a full note-height-to-tip range, block/hash
 continuity, and a stable reported tip. This establishes endpoint-reported
-coverage only. Current ZEC and BTCZ endpoint/compact-block entries are
-unverified; therefore an absent nullifier returns `UNKNOWN` unless the caller
-explicitly accepts responsibility for trusting that endpoint. No endpoint
-response is treated as independent consensus authentication.
+coverage only. ZEC's endpoint/compact-block capability remains unverified.
+BTCZ compact Sapling fields are partially verified, but the live endpoint
+does not report an LWP protocol version and reports zero Sapling tree sizes
+even in output-bearing sampled blocks. Its spent-status result therefore
+remains `UNKNOWN` before scanning. Even a complete scan would require explicit
+caller trust for `UNSPENT`; no endpoint response is independent consensus
+authentication. See the [BTCZ interoperability audit](btcz-lightwalletd-interoperability-audit.md).
 
 The spent-status regressions exercise observed and absent nullifiers, full
 versus incomplete ranges, protocol and capability rejection, malformed
-responses, unavailable services, and stable-tip checks. Their verification
-results are recorded in Phase 9.21.67 of the authoritative Spend report.
+responses, unavailable services, hash continuity, and stable-tip checks.
+Their verification results are recorded in Phases 9.21.67–68 of the
+authoritative Spend report.
 
 ## Limitations and verification
 
 Ordinary compact scans do not establish note-tree positions. The full-tree
 scanner requires activation-boundary, block-order/hash continuity,
 per-block-tree-size, range-tip, and ending-block consistency checks; mocks
-cover missing ranges and changed/reorganized responses. No live endpoint was
-independently verified as a consensus source. Lightwalletd-reported hashes and
-tree sizes are not cryptographic consensus proofs.
+cover missing ranges and changed/reorganized responses. The BTCZ endpoint's
+zero tree sizes fail the scanner's output-count consistency check. No live
+endpoint was independently verified as a consensus source. Lightwalletd-
+reported hashes and tree sizes are not cryptographic consensus proofs.
 
 See the [Sapling tree and witness report](sapling-commitment-trees-and-witnesses.md)
 and [historical compatibility record](coin-registry-compatibility-audit.md).

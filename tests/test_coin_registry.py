@@ -1885,11 +1885,14 @@ class SaplingTreeScannerTests(unittest.IsolatedAsyncioTestCase):
         start,
         end,
         *,
+        network=None,
         latest_height=None,
         latest_hash=None,
         predecessor_hash=None,
         end_snapshot_hash=None,
     ):
+        if network is None:
+            network = self.network
         client = object.__new__(LightwalletdClient)
         if latest_height is None:
             latest_height = end
@@ -1941,7 +1944,7 @@ class SaplingTreeScannerTests(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(
                 return_value=service_pb2.LightdInfo(
                     chainName="main",
-                    saplingActivationHeight=self.network.sapling["activation_height"],
+                    saplingActivationHeight=network.sapling["activation_height"],
                 )
             ),
         ), patch.object(
@@ -1964,7 +1967,7 @@ class SaplingTreeScannerTests(unittest.IsolatedAsyncioTestCase):
         ):
             return await scan_sapling_commitment_tree(
                 client,
-                network=self.network,
+                network=network,
                 start_height=start,
                 end_height=end,
                 max_blocks=end - start + 1,
@@ -2186,6 +2189,104 @@ class SaplingTreeScannerTests(unittest.IsolatedAsyncioTestCase):
                 activation,
                 activation,
                 latest_hash=b"\x99" * 32,
+            )
+
+    async def test_btcz_compact_range_fields_and_tree_metadata_fail_closed(self):
+        network = load_coin_configs()["btcz"].get_network("mainnet")
+        activation = network.sapling["activation_height"]
+        commitment = bytes.fromhex(self.fixture["commitments"][0])
+        output = compact_formats_pb2.CompactSaplingOutput(
+            cmu=commitment,
+            ephemeralKey=b"\x31" * 32,
+            ciphertext=b"\x32" * 52,
+        )
+        compact_tx = compact_formats_pb2.CompactTx(
+            index=0,
+            txid=b"\x33" * 32,
+            spends=[
+                compact_formats_pb2.CompactSaplingSpend(nf=b"\x34" * 32),
+            ],
+            outputs=[output],
+        )
+        block = compact_formats_pb2.CompactBlock(
+            height=activation,
+            hash=b"\x11" * 32,
+            prevHash=b"\x01" * 32,
+            chainMetadata=compact_formats_pb2.ChainMetadata(
+                saplingCommitmentTreeSize=0,
+            ),
+            vtx=[compact_tx],
+        )
+        parsed_block = compact_formats_pb2.CompactBlock.FromString(
+            block.SerializeToString()
+        )
+        parsed_tx = parsed_block.vtx[0]
+        self.assertEqual(bytes(parsed_tx.spends[0].nf), b"\x34" * 32)
+        self.assertEqual(bytes(parsed_tx.outputs[0].cmu), commitment)
+        self.assertEqual(bytes(parsed_tx.outputs[0].ephemeralKey), b"\x31" * 32)
+        self.assertEqual(bytes(parsed_tx.outputs[0].ciphertext), b"\x32" * 52)
+
+        with self.assertRaisesRegex(ScanError, "tree size"):
+            await self._scan(
+                (parsed_block,),
+                activation,
+                activation,
+                network=network,
+            )
+        with self.assertRaisesRegex(ScanCapabilityError, "from Sapling activation"):
+            await self._scan(
+                (parsed_block,),
+                activation + 1,
+                activation + 1,
+                network=network,
+            )
+
+        malformed_output_block = compact_formats_pb2.CompactBlock()
+        malformed_output_block.CopyFrom(parsed_block)
+        malformed_output_block.vtx[0].outputs[0].ephemeralKey = b"\x31" * 31
+        with self.assertRaisesRegex(ScanError, "malformed Sapling compact output"):
+            await self._scan(
+                (malformed_output_block,),
+                activation,
+                activation,
+                network=network,
+            )
+
+        disconnected = compact_formats_pb2.CompactBlock(
+            height=activation + 1,
+            hash=b"\x22" * 32,
+            prevHash=b"\x99" * 32,
+            chainMetadata=compact_formats_pb2.ChainMetadata(
+                saplingCommitmentTreeSize=0,
+            ),
+        )
+        empty_activation_block = compact_formats_pb2.CompactBlock(
+            height=activation,
+            hash=b"\x11" * 32,
+            prevHash=b"\x01" * 32,
+            chainMetadata=compact_formats_pb2.ChainMetadata(
+                saplingCommitmentTreeSize=0,
+            ),
+        )
+        with self.assertRaisesRegex(ScanError, "hash-contiguous"):
+            await self._scan(
+                (empty_activation_block, disconnected),
+                activation,
+                activation + 1,
+                network=network,
+            )
+
+        missing_metadata = compact_formats_pb2.CompactBlock(
+            height=activation,
+            hash=b"\x11" * 32,
+            prevHash=b"\x01" * 32,
+        )
+        with self.assertRaisesRegex(ScanCapabilityError, "tree sizes"):
+            await self._scan(
+                (missing_metadata,),
+                activation,
+                activation,
+                network=network,
             )
 
 

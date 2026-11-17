@@ -36,7 +36,7 @@
         "socket_path": "/socket.io/"
       },
       "lightwalletd": {
-        "status": "configured_unverified",
+        "status": "partial",
         "endpoints": [
           "lightd.btcz.rocks:443"
         ],
@@ -112,7 +112,7 @@
           "sapling-spend.params",
           "sapling-output.params"
         ],
-        "lightwalletd_compact_block_capability": "endpoint_unverified",
+        "lightwalletd_compact_block_capability": "partially_verified",
         "verification_sources": [
           "https://github.com/btcz/bitcoinz/blob/a25305eec6cd18d4f5b61f67c655743503093b1f/src/chainparams.cpp",
           "https://github.com/btcz/bitcoinz/blob/a25305eec6cd18d4f5b61f67c655743503093b1f/src/consensus/upgrades.cpp",

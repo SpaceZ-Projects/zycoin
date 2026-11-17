@@ -25,6 +25,9 @@ and provenance; it is the source record for the focused reports below.
 - [Lightwalletd compatibility](lightwalletd-client-compatibility.md) —
   compact scanning, bounded live evidence, scanner limits, and fail-closed
   Sapling nullifier status.
+- [BitcoinZ Lightwalletd Sapling interoperability audit](btcz-lightwalletd-interoperability-audit.md) —
+  pinned-source comparison and bounded live evidence for BTCZ compact blocks,
+  tree metadata, and fail-closed spent status.
 
 ## Sapling
 

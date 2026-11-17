@@ -555,6 +555,7 @@ class CoinNetworkConfig:
         )
         if compact_capability is not None and compact_capability not in {
             "verified",
+            "partially_verified",
             "endpoint_unverified",
             "not_configured",
             "unsupported",

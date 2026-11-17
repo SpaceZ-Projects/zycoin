@@ -228,6 +228,15 @@ plaintext prefix, not the complete ciphertext, AEAD tag, or memo.
 commitment. `None` from `decrypt_sapling_compact_output` means no valid note
 was found for that key. A returned compact note is not AEAD-authenticated.
 
+For BitcoinZ, bounded reads from the configured Lightwalletd endpoint returned
+Sapling compact output and spend fields, but its LWP protocol-version field was
+empty and sampled output-bearing blocks reported a zero Sapling tree size. The
+full-tree scanner rejects that metadata mismatch; do not use this endpoint to
+derive note positions or conclude a note is unspent. Its software version is
+not a substitute for an LWP version, and endpoint responses are not
+independently consensus-authenticated. See the [BTCZ Lightwalletd audit](../reports/btcz-lightwalletd-interoperability-audit.md)
+for the bounded evidence and capability statuses.
+
 ## Sapling commitment-tree positions and witnesses
 
 `SaplingCommitmentTree` implements the 32-level Sapling commitment tree and
