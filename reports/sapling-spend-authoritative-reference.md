@@ -2486,3 +2486,61 @@ and production-safe Bellman-exact BLAKE2s path are resolved and the full
 verification stages pass. No code was changed, Spend proving remains gated,
 and official parameter-to-circuit binding and ceremony validity remain
 **Unverified**.
+
+### Phase 9.21.56 — Source-faithful Spend temporal-to-canonical allocation bridge
+
+Added the isolated test-only mapping in
+[`tests/sapling_spend_temporal_mapping.py`](../tests/sapling_spend_temporal_mapping.py).
+It takes the source `SpendReferenceR1CS` allocation event order as immutable
+input, keeps ONE at index 0, maps temporal public handles to canonical
+positions 1–7 in their inputization order, then maps auxiliary `Aux(i)` handles
+to columns `8+i`. Canonical target construction allocates public handles
+before auxiliaries, satisfying ordinary `R1CS` and `QAP` ordering without
+changing the source system or its expressions. Every row is copied in source
+order with its original label; each A/B/C linear combination is rebuilt only
+with remapped handles. The returned mapping also remaps nested result records
+and assembly handles.
+
+The bridge fails closed for invalid ONE position/assignment, duplicate or
+missing allocations, inconsistent public/auxiliary bookkeeping, incorrect
+public annotation order, invalid canonical-column metadata, and foreign or
+missing handles. Focused tests cover these rejection cases, deterministic
+mapping, source immutability, remapped assignments, ordered A/B/C expressions,
+labels, and the canonical QAP public/auxiliary boundary.
+
+#### Exact retained-trace verification
+
+The retained pinned Bellman trace records 98,777 rows, 8 inputs including ONE,
+and 98,638 auxiliaries. Public inputization occurred at temporal allocation
+events 1,030, 1,031, 29,078, 29,079, 76,811, 98,644, and 98,645. These map,
+respectively, to canonical columns 1–7; all auxiliaries map in their Bellman
+`Aux(i)` allocation order to columns 8–98,645. The retained trace also records
+the satisfying baseline assignment. The source export SHA-256 is
+`b9a1bab4df36059e3c324cd07c0baa96062501bc266cf46005ab0d7c35751046`; the
+allocation-provenance export SHA-256 is
+`a39e4d2d815dca24eead67996d94732dc9a12b13ac3f1c4881f5e5dadddf8feb`.
+
+The opt-in regression streamed the retained matrix rows, reconstructed all
+98,646 temporal allocation handles and assignments, and applied the bridge's
+linear-combination remapper to every A/B/C expression. All 296,331 remapped
+expressions exactly matched an independent conversion from Bellman's
+`Input(i)`/`Aux(i)` identities. Row order and counts matched; the canonical
+matrix fingerprint was exactly
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`
+(98,777 × 98,646). The handle map was one-to-one and all mapped witness
+assignments agreed. No Bellman exporter or full Spend synthesis was rerun.
+
+**Verification result:** the test-only allocation bridge is independently
+verified against the retained full Bellman matrix for this pinned trace and
+assignment. This does not migrate or replace production Spend. Production
+witness/API compatibility, production staging/commit behavior, all-witness
+invariance, official parameter-to-circuit binding, ceremony validity, QAP
+query compatibility, and Spend proving remain separate and unverified.
+
+#### Phase 9.21.56 verification
+
+- Focused bridge regressions: **7 passed, 1 opt-in test skipped** in 0.003 s.
+- Retained full-trace bridge regression: **1 passed** in 1,213.888 s
+  (20 min 13.888 s); no synthesis or Bellman export was performed.
+- Targeted Ruff and `compileall` passed. `git diff --check` is recorded after
+  the report updates in the final task verification.

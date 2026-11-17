@@ -6417,6 +6417,24 @@ migration runs. No migration was implemented, Spend proving remains gated,
 and ceremony validity and parameter-to-circuit binding remain
 **Unverified**. See the [authoritative migration audit](sapling-spend-authoritative-reference.md#phase-92155--production-migration-feasibility-for-the-source-faithful-spend-circuit).
 
+### Phase 9.21.56 — Verified temporal-to-canonical Spend allocation bridge
+
+Added a test-only bridge that preserves Bellman temporal allocation in the
+source system and materializes an ordinary canonical R1CS with ONE, public
+inputs, then auxiliaries. It verifies all source handles, the seven late
+public-input positions, auxiliary order, assignments, and every A/B/C term
+against the retained full Bellman trace. The canonical matrix has 98,777 rows,
+98,646 columns, and the retained fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The bridge remains test-only; production migration, witness/API adaptation,
+official parameter binding, and proving readiness are not established.
+
+Focused regressions passed (**7 passed, 1 opt-in skipped**); the full retained
+trace mapping passed (**1 passed in 1,213.888 s**). Targeted Ruff and
+`compileall` passed. See the
+[authoritative report](sapling-spend-authoritative-reference.md#phase-92156--source-faithful-spend-temporal-to-canonical-allocation-bridge)
+for mapping semantics, exact evidence, and remaining blockers.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

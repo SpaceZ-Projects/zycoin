@@ -84,6 +84,10 @@ and provenance; it is the source record for the focused reports below.
   audits replacing production Spend with the test-only source-faithful
   circuit, identifying the temporal-input/QAP and public-witness/API
   integration blockers while keeping official parameter binding separate.
+  [Phase 9.21.56](sapling-spend-authoritative-reference.md#phase-92156--source-faithful-spend-temporal-to-canonical-allocation-bridge)
+  implements and independently verifies a test-only temporal-to-canonical
+  mapping against all variables, assignments, and ordered A/B/C expressions
+  in the retained full Spend matrix; production replacement remains unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
