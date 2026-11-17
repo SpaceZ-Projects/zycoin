@@ -15,8 +15,40 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
-import sapling_spend_reference_port
-from sapling_spend_reference_port import (
+from src.blake2s_gadget import _NegatedBit, _read_bit
+from src.bls12_381 import SCALAR_MODULUS
+from src.jubjub import (
+    CURVE_D,
+    FIELD_MODULUS,
+    IDENTITY,
+    Point,
+    find_group_hash,
+)
+from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
+from src.r1cs import (
+    _MATRIX_FINGERPRINT_DOMAIN,
+    _MATRIX_SERIALIZATION_FORMAT,
+    R1CS,
+    R1CSError,
+    Variable,
+)
+from src.sapling_gadgets import (
+    _pedersen_montgomery_tables,
+    make_merkle_path_witness,
+    make_note_commitment_witness,
+    sapling_fixed_base_generator,
+)
+from tests import sapling_spend_reference_port
+from tests.bellman_blake2s_reference import _add as _bellman_add
+from tests.bellman_blake2s_reference import (
+    _constant_word,
+    constrain_bellman_blake2s_reference,
+)
+from tests.bellman_blake2s_reference import _MultiEq as _BellmanMultiEq
+from tests.bellman_blake2s_reference import _Negated as _BellmanNegated
+from tests.bellman_blake2s_reference import _xor_bit as _bellman_xor_bit
+from tests.sapling_spend_groth16_adapter import adapt_source_faithful_spend
+from tests.sapling_spend_reference_port import (
     EdwardsPointWitnessVariables,
     SpendReferenceR1CS,
     SpendReferenceWitness,
@@ -45,38 +77,6 @@ from sapling_spend_reference_port import (
     spend_fixed_base_tables,
     spend_pedersen_montgomery_tables,
 )
-
-from src.blake2s_gadget import _NegatedBit, _read_bit
-from src.bls12_381 import SCALAR_MODULUS
-from src.jubjub import (
-    CURVE_D,
-    FIELD_MODULUS,
-    IDENTITY,
-    Point,
-    find_group_hash,
-)
-from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
-from src.r1cs import (
-    _MATRIX_FINGERPRINT_DOMAIN,
-    _MATRIX_SERIALIZATION_FORMAT,
-    R1CS,
-    R1CSError,
-    Variable,
-)
-from src.sapling_gadgets import (
-    _pedersen_montgomery_tables,
-    make_merkle_path_witness,
-    make_note_commitment_witness,
-    sapling_fixed_base_generator,
-)
-from tests.bellman_blake2s_reference import _add as _bellman_add
-from tests.bellman_blake2s_reference import (
-    _constant_word,
-    constrain_bellman_blake2s_reference,
-)
-from tests.bellman_blake2s_reference import _MultiEq as _BellmanMultiEq
-from tests.bellman_blake2s_reference import _Negated as _BellmanNegated
-from tests.bellman_blake2s_reference import _xor_bit as _bellman_xor_bit
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
@@ -1656,6 +1656,53 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
                 }
             ),
         )
+
+        adapted = adapt_source_faithful_spend(system, assembly)
+        expected_assignment = (
+            1,
+            *(
+                _full_spend_trace_assignment(record)
+                for record in public_records
+            ),
+            *(
+                _full_spend_trace_assignment(record)
+                for record in auxiliary_records
+            ),
+        )
+        self.assertEqual(
+            adapted.system.matrix_fingerprint(),
+            "cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127",
+        )
+        self.assertEqual(adapted.qap.variable_count, 98_646)
+        self.assertEqual(adapted.qap.public_input_count, 7)
+        self.assertEqual(adapted.qap.auxiliary_variable_count, 98_638)
+        self.assertEqual(adapted.qap.domain.size, 131_072)
+        self.assertEqual(adapted.assignment_values, expected_assignment)
+        self.assertEqual(
+            adapted.public_inputs,
+            tuple(
+                _full_spend_trace_assignment(record)
+                for record in public_records
+            ),
+        )
+        self.assertEqual(
+            adapted.auxiliary_assignments,
+            tuple(
+                _full_spend_trace_assignment(record)
+                for record in auxiliary_records
+            ),
+        )
+        self.assertEqual(
+            adapted.assembly.public_inputs,
+            adapted.system.variables[1:8],
+        )
+
+        evaluations = adapted.qap.evaluations(adapted.assignment)
+        polynomials = adapted.qap.polynomials(adapted.assignment)
+        fft = adapted.qap.domain.fft_domain
+        self.assertEqual(tuple(fft.fft(polynomials.a)), evaluations.a)
+        self.assertEqual(tuple(fft.fft(polynomials.b)), evaluations.b)
+        self.assertEqual(tuple(fft.fft(polynomials.c)), evaluations.c)
 
         anchor_variable = assembly.conditional_anchor.anchor_variable
         anchor_value = system.witness_value(anchor_variable)

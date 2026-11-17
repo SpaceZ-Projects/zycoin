@@ -2597,3 +2597,49 @@ readiness gates, and proving were not changed. Remaining gaps include the
 missing diversifier bytes and source key material in the isolated API, derived
 field parity beyond retained witnesses, and production integration; witness
 validation alone does not establish production readiness.
+
+### Phase 9.21.58 — Source-faithful Spend generic Groth16 adapter
+
+Added the test-only adapter in
+[`tests/sapling_spend_groth16_adapter.py`](../tests/sapling_spend_groth16_adapter.py).
+It accepts only the pinned source R1CS and a complete source assembly, checks
+the seven public handles and their order, component-to-public-handle
+consistency, ownership and completeness of nested handles/expressions, the
+pinned system shape, and source-R1CS satisfaction. It then uses the verified
+temporal-to-canonical bridge to remap the assembly, checks the canonical
+matrix fingerprint, and builds the existing generic `QAP` and `QAPAssignment`
+with implicit ONE, seven ordered public inputs, and 98,638 auxiliary values.
+The generic QAP independently validates the complete assignment.
+
+On the retained pinned baseline trace, the adapter produced the exact
+98,777-row, 98,646-variable canonical matrix with fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The assignment matched ONE/public/auxiliary values from the retained trace;
+QAP domain size was 131,072. The generic A/B/C evaluation and polynomial
+interfaces ran, and FFT of each returned polynomial reproduced its domain
+evaluations. This verifies the adapter-to-generic-QAP interface for this
+retained circuit and witness; it is not an independent Bellman QAP comparison.
+
+Adapter boundary tests reject wrong API types, duplicate or reordered public
+handles, foreign handles, incomplete assembly data, and inconsistent
+component public-input references. The full-trace adapter regression passed
+**1 test in 2,439.190 s** using the retained JSON trace and one complete
+Python source-faithful Spend synthesis; no Bellman export was performed.
+Adapter boundary plus temporal-mapping suites
+passed **13 tests with 1 opt-in test skipped** in 0.004 s, and the generic QAP
+suite passed **11 tests** in 0.007 s. Targeted Ruff, `compileall`,
+`git diff --check`, and adapter-file Pylance diagnostics passed.
+
+The broad Spend reference-port suite also ran: **68 tests, 12 skipped, 1
+error** in 191.954 s. The error is the existing IVK vector test accessing
+`ivk_blake2s_vectors`, which its default setup does not initialize; that test
+body and fixture setup were not changed here.
+
+Compatibility is established only at the test-only assembly → canonical R1CS
+→ generic QAP-assignment boundary. The adapter imports the test-only reference
+port and allocation bridge and is not production-safe as-is. It does not load
+official parameters, expand or authenticate compact query sections, assemble
+proof elements, or verify proofs. Parameter/circuit binding, ceremony
+validity, production API compatibility, and proving readiness remain
+**Unverified**. No production Spend or Output code, parameters, setup, or
+readiness gate changed.

@@ -6454,6 +6454,37 @@ Production integration and validation of omitted diversifier/source-key
 inputs remain open. See the
 [authoritative validation inventory](sapling-spend-authoritative-reference.md#phase-92157--source-faithful-spend-witness-validation).
 
+### Phase 9.21.58 — Source-faithful Spend generic Groth16 adapter
+
+Added a test-only adapter from the source-faithful Spend assembly through the
+verified temporal-to-canonical bridge to ZyCoin's generic `R1CS`, `QAP`, and
+`QAPAssignment` interfaces. It validates the seven ordered public handles,
+cross-component public references, all nested handle ownership and assembly
+completeness, the pinned dimensions, and source satisfaction before mapping.
+It then confirms the canonical 98,777 × 98,646 matrix fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127` and
+constructs the implicit-ONE, seven-public, 98,638-auxiliary QAP assignment.
+
+The retained-trace adapter regression passed **1 test in 2,439.190 s** using
+the retained JSON trace and one complete Python source-faithful Spend
+synthesis; no Bellman export was performed. It verified assignment values, QAP
+satisfaction, the 131,072 domain, and A/B/C evaluation/polynomial interfaces
+by FFT round-trip. Adapter boundary plus temporal-mapping regressions passed
+**13 tests with 1 opt-in test skipped** in 0.004 s; generic QAP regressions
+passed **11 tests** in 0.007 s. The broad Spend reference suite had **68
+tests, 12 skipped, and 1 error** in 191.954 s: an existing IVK vector test
+expects `ivk_blake2s_vectors`, absent from its default setup. The failing test
+body and fixture setup were not changed here. Targeted Ruff,
+`compileall`, `git diff --check`, and adapter-file Pylance diagnostics passed.
+
+This establishes test-only assembly/QAP-assignment compatibility, not
+proof/query compatibility or production readiness. The adapter depends on
+test-only source and mapping modules; official parameter parsing, query
+binding, ceremony validity, proof assembly, and verification were not exercised.
+Production Spend and Output, parameters, setup, and readiness gates are
+unchanged. See the
+[authoritative adapter audit](sapling-spend-authoritative-reference.md#phase-92158--source-faithful-spend-generic-groth16-adapter).
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

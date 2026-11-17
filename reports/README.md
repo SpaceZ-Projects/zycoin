@@ -91,6 +91,11 @@ and provenance; it is the source record for the focused reports below.
   [Phase 9.21.57](sapling-spend-authoritative-reference.md#phase-92157--source-faithful-spend-witness-validation)
   adds source-backed host admission checks to the isolated witness path while
   retaining all circuit constraints; retained-baseline matrix parity passes.
+  [Phase 9.21.58](sapling-spend-authoritative-reference.md#phase-92158--source-faithful-spend-generic-groth16-adapter)
+  adapts the source-faithful assembly through the verified allocation bridge
+  into the generic QAP assignment API; retained-trace matrix, assignments,
+  satisfaction, and A/B/C evaluation/polynomial interfaces pass. Production
+  and official-parameter compatibility remain unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
