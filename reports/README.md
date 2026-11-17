@@ -96,6 +96,11 @@ and provenance; it is the source record for the focused reports below.
   into the generic QAP assignment API; retained-trace matrix, assignments,
   satisfaction, and A/B/C evaluation/polynomial interfaces pass. Production
   and official-parameter compatibility remain unverified.
+  [Phase 9.21.59](sapling-spend-authoritative-reference.md#phase-92159--spend-blake2s-host-dependency-separation)
+  switches source-faithful host IVK hashing to the production-safe witness
+  helper. The existing production circuit helper differs in source-mode
+  ordered A/B expressions and annotations, so test-only circuit synthesis
+  remains necessary; Spend migration and readiness remain unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.

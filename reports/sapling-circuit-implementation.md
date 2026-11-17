@@ -6485,6 +6485,45 @@ Production Spend and Output, parameters, setup, and readiness gates are
 unchanged. See the
 [authoritative adapter audit](sapling-spend-authoritative-reference.md#phase-92158--source-faithful-spend-generic-groth16-adapter).
 
+### Phase 9.21.59 — Spend BLAKE2s host dependency separation
+
+The source-faithful Spend witness admission path now calls the production
+`bytes_to_bits_le` and `make_blake2s_witness` helpers for IVK host hashing.
+It preserves the `ak.encode() || nk.encode()` preimage, 32-byte digest,
+`Zcashivk` personalization, and low-251-bit little-endian interpretation.
+The focused admission test checks the exact helper invocation and compares
+the result to the standard-library BLAKE2s output.
+
+Circuit synthesis remains on the independent test-only Bellman BLAKE2s
+transcription. The production helper is semantically close but not exact in
+source mode: with preconstrained inputs and no output materialization, both
+systems had 21,518 rows, 21,473 variables, and equal assignments, yet the
+ordered matrices differed at row 614 by an A/B operand swap. Constraint
+labels also differ immediately (space/bracket production labels versus the
+source slash-separated annotations). Exact Spend A/B/C order and annotations
+therefore prevent replacing the transcription with the existing production
+helper. No constraint helper or hash fixture was changed.
+
+Verification: host-IVK tests **2 passed / 17.500 s**; production
+IVK/nullifier retained-vector and matrix regressions **4 passed / 9.128 s**;
+source IVK **2 passed / 7.443 s**, source nullifier **2 passed / 6.179 s**,
+and nullifier multipacking **2 passed / 7.319 s**. The retained component
+fingerprints are IVK `5953027d2a1b56fcfc57ef3432083b7c800a9db7693a7f88bfc8a353e9c68b69`,
+nullifier `20f63b47b5102a57ea023edc7452b3f9e7004ea34a5a53e2402984c17e89ab32`,
+and multipacking `d4b682f3441cc17495557468a1bfdccb053fe9800fcabb96a6f3cb97269403ab`.
+The full Spend matrix was not re-synthesized; the retained 98,777 × 98,646
+fingerprint remains
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`, not
+re-measured in this phase.
+
+The missing `ivk_blake2s_vectors` field is an independent test setup defect:
+only `SAPLING_IVK_REFERENCE_ONLY=1` populates it, but the vector test runs
+under default setup too. Focused IVK vectors pass in the reference-only
+environment; fixtures were not altered. Targeted Ruff, `compileall`,
+`git diff --check`, and Pylance syntax checks passed. Remaining
+test-only circuit dependencies mean this is host-hash separation, not a
+production-ready Spend dependency boundary.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

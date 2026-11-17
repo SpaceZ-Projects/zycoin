@@ -2741,6 +2741,22 @@ secrets.
 - The unchanged `src/r1cs.py` Ruff baseline remains **45 findings**:
   13 UP007, 12 UP006, 9 UP045, 8 UP037, 2 UP035, and 1 SIM102.
 
+## Phase 9.21.59 — Spend BLAKE2s dependency status
+
+The isolated source-faithful Spend witness admission path uses ZyCoin's
+production-safe BLAKE2s host witness helper for IVK derivation, with the
+exact `Zcashivk` personalization, 32-byte digest, and low-251-bit
+little-endian interpretation. Focused host/vector tests pass. The circuit
+constraint path remains dependent on the test-only Bellman transcription:
+the existing production gadget has the same tested IVK row/variable counts
+and assignments under matched options, but it does not preserve the source
+path's ordered A/B expressions or annotations. This is not a full Spend
+circuit migration; no full Spend synthesis was rerun, and the retained
+98,777 × 98,646 source matrix fingerprint remains
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`
+without a new full-matrix measurement. Spend proving remains gated and
+official parameter binding and ceremony validity remain **Unverified**.
+
 ### Phase 9.21.54 — Spend H-map exact-method status
 
 The retained Spend exports verify the quotient's shifted cross-correlation

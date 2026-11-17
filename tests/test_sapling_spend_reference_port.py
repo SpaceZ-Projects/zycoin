@@ -15,7 +15,12 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
-from src.blake2s_gadget import _NegatedBit, _read_bit
+from src.blake2s_gadget import (
+    _NegatedBit,
+    _read_bit,
+    bytes_to_bits_le,
+    make_blake2s_witness,
+)
 from src.bls12_381 import SCALAR_MODULUS
 from src.jubjub import (
     CURVE_D,
@@ -165,6 +170,37 @@ class SpendReferenceWitnessValidationTests(unittest.TestCase):
                         witness
                     )
                 )
+
+    def test_ivk_admission_uses_shared_blake2s_witness_helper(self):
+        nullifier_key = sapling_fixed_base_generator(
+            "proof_generation_key"
+        ).multiply(self.witness.nsk)
+        preimage = self.witness.ak.encode() + nullifier_key.encode()
+        with patch.object(
+            sapling_spend_reference_port,
+            "make_blake2s_witness",
+            wraps=make_blake2s_witness,
+        ) as host_hash:
+            self.assertIsNone(
+                sapling_spend_reference_port._validate_spend_reference_witness(
+                    self.witness
+                )
+            )
+        host_hash.assert_called_once_with(
+            bytes_to_bits_le(preimage),
+            b"Zcashivk",
+        )
+        self.assertEqual(
+            make_blake2s_witness(
+                bytes_to_bits_le(preimage),
+                b"Zcashivk",
+            ).digest,
+            blake2s(
+                preimage,
+                digest_size=32,
+                person=b"Zcashivk",
+            ).digest(),
+        )
 
     def test_rejects_non_subgroup_keys_and_diversifier_bases(self):
         non_subgroup_point = (

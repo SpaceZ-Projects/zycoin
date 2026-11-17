@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import lru_cache
-from hashlib import blake2s
 from typing import TypeAlias
 
-from src.blake2s_gadget import CircuitBit, _NegatedBit, _read_bit
+from src.blake2s_gadget import (
+    CircuitBit,
+    _NegatedBit,
+    _read_bit,
+    bytes_to_bits_le,
+    make_blake2s_witness,
+)
 from src.bls12_381 import SCALAR_MODULUS
 from src.bls12_381 import SCALAR_MODULUS as CIRCUIT_FIELD_MODULUS
 from src.jubjub import (
@@ -2190,11 +2195,10 @@ def _validate_spend_reference_witness(witness: SpendReferenceWitness) -> None:
     nullifier_key = sapling_fixed_base_generator(
         "proof_generation_key"
     ).multiply(witness.nsk)
-    ivk_digest = blake2s(
-        witness.ak.encode() + nullifier_key.encode(),
-        digest_size=32,
-        person=b"Zcashivk",
-    ).digest()
+    ivk_digest = make_blake2s_witness(
+        bytes_to_bits_le(witness.ak.encode() + nullifier_key.encode()),
+        b"Zcashivk",
+    ).digest
     ivk = int.from_bytes(ivk_digest, "little") & ((1 << 251) - 1)
     transmission_key = witness.g_d.multiply(ivk)
     note_commitment = make_note_commitment_witness(

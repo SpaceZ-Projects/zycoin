@@ -2643,3 +2643,64 @@ proof elements, or verify proofs. Parameter/circuit binding, ceremony
 validity, production API compatibility, and proving readiness remain
 **Unverified**. No production Spend or Output code, parameters, setup, or
 readiness gate changed.
+
+### Phase 9.21.59 — Spend BLAKE2s host dependency separation
+
+The test-only source-faithful Spend witness admission path now uses the
+production-safe `bytes_to_bits_le` and `make_blake2s_witness` helpers from
+[`src/blake2s_gadget.py`](../src/blake2s_gadget.py) for IVK host derivation.
+It hashes `ak.encode() || nk.encode()` using the 32-byte BLAKE2s digest and
+the exact eight-byte `Zcashivk` personalization, then interprets the digest
+little-endian and retains its low 251 bits. A focused test checks the helper
+call's preimage and personalization and compares its digest with
+`hashlib.blake2s`. No separate host-side nullifier digest is used by this
+admission path; nullifier derivation remains a circuit operation.
+
+The circuit constraint path still calls the independent test-only
+[`tests/bellman_blake2s_reference.py`](../tests/bellman_blake2s_reference.py)
+transcription for IVK and nullifier synthesis. The existing production circuit
+helper is not an exact drop-in for source-mode synthesis. A direct IVK
+comparison with 512 preconstrained input bits and output materialization
+disabled produced 21,518 rows and 21,473 variables on each side, with equal
+assignments, but the ordered matrix serialization differed. The first
+A/B/C difference was at row 614: production used A=`2*column 530`,
+B=`column 581`; the source transcription used A=`2*column 581`,
+B=`column 530`. The first constraint-label difference was also immediate:
+production used `computation of ivk block[0] final round[0] ...`, while the
+source transcription used the slash-separated
+`computation of ivk/final block/round 0/mixing invocation 1/...` annotation.
+The source path's complemented-XOR operand ordering and exact annotations
+must be retained; the matrix fingerprint alone would not capture the label
+difference. Therefore circuit constraints were not migrated and no new hash
+implementation was added.
+
+Focused host-IVK tests passed **2 tests in 17.500 s**. Production helper
+vector/matrix regressions passed **4 tests in 9.128 s**. Source-faithful IVK
+vector/trace tests passed **2 tests in 7.443 s**, nullifier tests passed
+**2 tests in 6.179 s**, and nullifier multipacking trace/vector tests passed
+**2 tests in 7.319 s**. The retained source component results include:
+IVK, 22,566 rows × 22,519 columns,
+`5953027d2a1b56fcfc57ef3432083b7c800a9db7693a7f88bfc8a353e9c68b69`;
+nullifier, 22,566 × 22,519,
+`20f63b47b5102a57ea023edc7452b3f9e7004ea34a5a53e2402984c17e89ab32`;
+and nullifier multipacking, 22,568 × 22,526,
+`d4b682f3441cc17495557468a1bfdccb053fe9800fcabb96a6f3cb97269403ab`.
+The full 98,777-row Spend circuit was not re-synthesized: no circuit
+constraint code changed, and the retained full matrix fingerprint remains
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`;
+this phase did not independently remeasure that full fingerprint.
+
+The existing `ivk_blake2s_vectors` missing-setup error is independent of the
+hash-helper change. The test class initializes that mapping only in the
+`SAPLING_IVK_REFERENCE_ONLY=1` setup branch; the default setup branch does
+not, while the vector test still runs. The IVK vector/trace tests pass in the
+reference-only environment. No fixture or setup branch was changed to hide
+the default-suite error.
+
+Targeted Ruff, `compileall`, `git diff --check`, and Pylance syntax checks
+passed. Pylance reported only unused-local warnings in the touched Python
+files; the warnings were unrelated to this change. Host-side hashing now
+uses the production-safe helper, but the circuit-level test-only dependency
+remains necessary for exact ordered matrix and annotation parity. This does
+not establish Spend production migration, official parameter binding,
+ceremony validity, or proving readiness.
