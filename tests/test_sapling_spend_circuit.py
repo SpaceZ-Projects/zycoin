@@ -659,6 +659,53 @@ class SaplingSpendCircuitTests(unittest.TestCase):
             with self.subTest(invalid_field=index), self.assertRaises(R1CSError):
                 constrain_sapling_spend(R1CS(), invalid)
 
+    def test_nullifier_mismatch_is_rejected_before_mutation_and_system_reused(self):
+        witness = _circuit_witness(generate_pinned_test_witness(0))
+        invalid_nullifier = bytes((witness.nullifier[0] ^ 1,)) + witness.nullifier[1:]
+        invalid_integer = int.from_bytes(invalid_nullifier, "little")
+        invalid_inputs = (
+            *witness.public_inputs[:5],
+            invalid_integer & ((1 << 254) - 1),
+            invalid_integer >> 254,
+        )
+        invalid = replace(
+            witness,
+            nullifier=invalid_nullifier,
+            public_inputs=invalid_inputs,
+        )
+        system = R1CS()
+
+        def snapshot():
+            return (
+                system.serialize(),
+                system.variables,
+                tuple(system.witness_value(variable) for variable in system.variables),
+                system.constraints,
+                system.public_input_count,
+                system.public_inputs(),
+                system._private_allocations_started,
+                system.is_fresh,
+            )
+
+        before = snapshot()
+        with self.assertRaisesRegex(
+            R1CSError,
+            "Sapling Spend nullifier does not match constrained PRF",
+        ):
+            constrain_sapling_spend(system, invalid)
+        self.assertEqual(snapshot(), before)
+
+        assembly = constrain_sapling_spend(system, witness)
+        self.assertEqual(assembly.constraint_count, 98_777)
+        self.assertEqual(len(system.variables), 98_646)
+        self.assertEqual(system.public_input_count, 7)
+        self.assertEqual(system.public_inputs(), witness.public_inputs)
+        self.assertEqual(
+            system.matrix_fingerprint(),
+            "f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9",
+        )
+        self.assertTrue(system.is_satisfied())
+
     def test_spend_admission_rejects_invalid_upstream_host_preconditions(self):
         reference = generate_pinned_test_witness(0)
         witness = _circuit_witness(reference)

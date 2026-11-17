@@ -6643,6 +6643,37 @@ Ruff, `compileall`, and `git diff --check` passed. No full synthesis or
 official-query export was repeated, and no production circuit, parameter,
 or proving gate changed.
 
+### Phase 9.21.63 — Spend nullifier validation before mutation
+
+Moved the production nullifier check into `_prepare_witness`. It hashes the
+already validated derived `nk` and prepared `rho` encodings with BLAKE2s-256
+and personalization `Zcash_nf`, then compares the result with the supplied
+32-byte nullifier. The existing error type/message is preserved. The check
+now occurs before public-input allocation, variable/assignment allocation,
+or constraint enforcement; the circuit BLAKE2s and multipacking relations
+are unchanged.
+
+The regression snapshots serialized rows/labels/ordered expressions,
+variables, assignments, public inputs, allocation state, and freshness.
+A mismatched nullifier with correspondingly packed public chunks is rejected
+with an identical before/after snapshot. A subsequent valid assembly on the
+same R1CS succeeds and remains satisfied at **98,777 rows × 98,646
+variables**, seven public inputs, with the original production fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+
+The separate verifier differences remain unresolved by design: it rejects
+zero IVK, while production accepts the derived zero/identity-`pk_d` edge
+despite the address API's nonzero-IVK/nonidentity-key requirements; and it
+requires anchor equality even when zero value makes the pinned circuit's
+anchor equation conditional. The IVK admission gap should be fixed in a
+separate focused change. Any zero-value anchor membership requirement belongs
+to the higher-level transaction policy unless separately established; neither
+the verifier nor the circuit was changed here.
+
+Focused tests passed (**7 passed, 53 subtests**); targeted Ruff,
+`compileall`, Pylance diagnostics, and `git diff --check` passed. No Output,
+parameter, proving-gate, or source-faithful Spend implementation changed.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

@@ -2995,3 +2995,66 @@ in the production Spend, BLAKE2s, temporal-mapping, or adapter files; the
 source-reference composer retained one existing unused-local warning.
 No production code, circuit, parameter, or proving gate changed in this
 audit.
+
+### Phase 9.21.63 — Production Spend nullifier preflight
+
+The nullifier comparison now happens in `_prepare_witness`, before the first
+R1CS mutation. After the existing host checks derive and validate `nk`,
+note commitment, position, and `rho`, preflight computes BLAKE2s-256 with
+personalization `Zcash_nf` over `nk.encode() || rho.encode()` and compares
+those bytes with `witness.nullifier`. This reuses the already-derived
+`expected_nk` and `rho.rho`; it does not change hash parameters or replace
+the circuit constraints. Jubjub representation bits used by the circuit are
+the little-endian 255-bit `v` representation followed by `u` parity, which
+packs to the same compressed point bytes. The existing pinned witness
+confirmed that this host preflight digest equals its circuit nullifier.
+
+The comparison preserves the existing `R1CSError` message,
+`Sapling Spend nullifier does not match constrained PRF`. It runs before
+public inputs are allocated, variables/assignments are appended, or
+constraints are enforced. The previous post-hash `bits_to_bytes_le` check was
+removed; the circuit BLAKE2s and nullifier multipacking constraints remain
+unchanged.
+
+The focused regression supplies a different 32-byte nullifier and matching
+packed public chunks, so the nullifier relation is the inconsistent field.
+It snapshots serialized R1CS structure (rows, labels, ordered expressions,
+and allocation names), variable identities, every assignment, public-input
+count and values, private-allocation state, and freshness. The call raises
+the expected error and the entire snapshot remains identical. A valid
+assembly then succeeds on that same `R1CS`: **98,777 rows**, **98,646
+variables**, seven public inputs, satisfied constraints, and unchanged
+production fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+
+#### Related verifier validation differences
+
+1. **IVK:** `verify_spend_reference_witness` requires
+   `0 < ivk < 2^251`; production `_prepare_witness` allows
+   `0 <= ivk < 2^251`. The production path checks the IVK derivation but
+   does not reject the zero result or the resulting identity `pk_d`.
+   `src/addresses.py` requires a nonzero 251-bit IVK and rejects an identity
+   Sapling transmission key, so zero is outside the accepted payment-address
+   API/protocol boundary. Production assembly can therefore admit the
+   mathematically possible zero-IVK/identity-key case if the truncated hash
+   derives zero. This rare edge is **not fixed here**. A separate change
+   should reject zero IVK and identity `pk_d` in host preflight, with focused
+   admission tests, without changing the circuit relation.
+2. **Anchor:** `verify_spend_reference_witness` always requires the supplied
+   anchor to equal the computed root. Production only requires equality when
+   `value != 0`, matching the pinned conditional relation
+   `(root - anchor) * value = 0`. A mismatched anchor at zero value is
+   therefore accepted by production and satisfies this circuit relation;
+   the circuit does not establish whether an anchor is a recognized tree
+   root. Do not tighten the circuit or weaken the independent verifier in
+   this change. If transaction-level Sapling policy requires root membership
+   for zero-value spends, enforce it separately at that higher-level
+   boundary; this assembly audit does not establish that policy.
+
+Focused validation passed: **7 tests and 53 subtests** in 83.80 seconds,
+covering nullifier preflight/system reuse, malformed witness inputs,
+upstream host-admission rules, nonfresh-system rejection, and the independent
+Spend verifier. Targeted Ruff, `compileall`, Pylance diagnostics for the
+changed Python files, and `git diff --check` passed. No circuit equations,
+Output code, parameters, proving gates, or independent verifier behavior
+changed.

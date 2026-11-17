@@ -11,7 +11,6 @@ from hashlib import blake2s
 
 from .blake2s_gadget import (
     CircuitBit,
-    bits_to_bytes_le,
     constrain_sapling_ivk,
     constrain_sapling_nullifier_hash,
 )
@@ -242,6 +241,13 @@ def _prepare_witness(witness: SaplingSpendWitness) -> _PreparedSpendWitness:
     rho = make_sapling_nullifier_rho_witness(
         note_commitment.commitment, witness.position
     )
+    expected_nullifier = blake2s(
+        _pack_point_repr(expected_nk) + _pack_point_repr(rho.rho),
+        digest_size=32,
+        person=b"Zcash_nf",
+    ).digest()
+    if witness.nullifier != expected_nullifier:
+        raise R1CSError("Sapling Spend nullifier does not match constrained PRF")
     nullifier_packing = make_sapling_nullifier_multipacking_witness(
         witness.nullifier
     )
@@ -470,8 +476,6 @@ def constrain_sapling_spend(
         input_bits_preconstrained=True,
         materialize_output=False,
     )
-    if bits_to_bytes_le(nullifier_bits, system) != witness.nullifier:
-        raise R1CSError("Sapling Spend nullifier does not match constrained PRF")
     constrain_sapling_nullifier_multipacking(
         system,
         nullifier_bits,
