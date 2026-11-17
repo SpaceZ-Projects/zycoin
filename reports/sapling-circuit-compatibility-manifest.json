@@ -1465,6 +1465,85 @@
             "satisfying_assignment_condition": "On the reachable satisfying set, each coordinate of h_U(x)-T_H*h_L(M*x) must vanish on the complete satisfying-assignment variety; finite witness samples do not establish this.",
             "exact_factorization_result": "Not computed; no existence result, counterexample, rank, kernel, or fingerprint is claimed.",
             "retained_tensor_status": "The baseline local and Bellman matrix/witness exports and factor certificates are retained, but the 131071-by-4865565981 quotient coefficient tensors and raw alternate-witness QAP vectors are not materialized. A structured exact row-space/factorization computation is required.",
+            "structured_algorithm_investigation": {
+              "phase": "9.21.54",
+              "status": "No feasible deterministic exact full-affine solver established; solver not implemented; existence remains Unresolved.",
+              "verified_degree_structure": {
+                "formula": "h_k=sum_(r+s=N+k) a_r(z)*b_s(z), 0<=k<N-1",
+                "reindexed_formula": "h_k=sum_(i=0..N-2-k) a_(N-1-i)(z)*b_(i+k+1)(z)",
+                "interpretation": "Shifted cross-correlation in polynomial-degree coordinates; N-1-k bilinear factor products for coefficient k.",
+                "scope_limit": "This does not establish a global Toeplitz/Hankel or low-rank representation in assignment-monomial coordinates. C is below degree N and absent from these quotient coefficients, but remains required for divisibility."
+              },
+              "retained_evaluation_factor_sparsity": {
+                "local_term_occurrences_ABC": [258843, 118737, 186665],
+                "bellman_term_occurrences_ABC": [312166, 99918, 212492],
+                "local_max_terms_per_row_ABC": [577, 64, 235],
+                "bellman_max_terms_per_row_ABC": [688, 64, 256],
+                "interpretation": "Sparse evaluation-domain factor inputs are verified from the retained exports; no sparse/low-rank decomposition of the expanded H coefficient tensors is established."
+              },
+              "resource_dimensions": {
+                "N": 131072,
+                "free_assignment_coordinates": 98645,
+                "degree_at_most_two_monomials": 4865565981,
+                "H_tensor_entries": 637734598695651,
+                "H_tensor_bytes_at_32_bytes_per_entry": "20407507158260832",
+                "dense_T_H_entries": 17179607041,
+                "dense_T_H_bytes_at_32_bytes_per_entry": 549747425312,
+                "anti_diagonal_factor_pairs": 8589869056,
+                "stacked_output_dimension": 262142,
+                "dense_stacked_elimination_basis_bytes_at_32_bytes_per_entry": 2198989701248,
+                "transpose_product_coordinate_count": 4865565981,
+                "transpose_product_bytes_at_32_bytes_per_entry": 155698111392
+              },
+              "approach_assessment": [
+                {
+                  "method": "Exact FFT/convolution evaluation",
+                  "decides_full_affine_condition": false,
+                  "complexity": "O(N log N) field operations per supplied assignment; deterministic interpolation over the complete monomial basis would require up to 4865565981 monomial coordinates with 131071 output coordinates each absent a further certificate.",
+                  "certificate": "No row-space inclusion or inconsistency certificate; assignment evaluations are rank-one monomial probes."
+                },
+                {
+                  "method": "Structured arbitrary monomial-space products",
+                  "decides_full_affine_condition": false,
+                  "complexity": "Lift monomial weights to a symmetric matrix Q on homogeneous coordinates, duplicating off-diagonal monomial weights. For general dense Q, C*Q reduces to bilinear contractions a_r^T Q b_s over up to 8589869056 anti-diagonal pairs; no low-rank Q representation is established. C^T*y has 4865565981 scalar outputs.",
+                  "certificate": "The implicit formulas are exact, but do not provide a feasible general-purpose Krylov product or verified inclusion certificate."
+                },
+                {
+                  "method": "Incremental exact sparse/block elimination",
+                  "decides_full_affine_condition": true,
+                  "complexity": "Worst-case scan visits 4865565981 monomial columns; a dense basis over 262142 stacked output coordinates is about 2198989701248 bytes at 32 bytes per entry. Evaluation sparsity does not guarantee sparse elimination.",
+                  "certificate": "Can produce an exact rank comparison if completed; current resource bounds do not justify running it."
+                },
+                {
+                  "method": "Symbolic polynomial identity/factorization",
+                  "decides_full_affine_condition": true,
+                  "complexity": "Requires a candidate T_H or an exact inconsistency certificate; a dense T_H has 17179607041 field entries. No compressed candidate or identity verifier is derived.",
+                  "certificate": "Would be independently verifiable coefficientwise if a compressed exact representation were found."
+                }
+              ],
+              "implementation": "Not implemented: no investigated approach has a justified practical resource bound and an exact certificate path. Random sampling and floating-point rank are not used.",
+              "verification": {
+                "focused_tests": {
+                  "modules": [
+                    "tests.test_sapling_spend_factor_kernel",
+                    "tests.test_sapling_spend_qap_transformations",
+                    "tests.test_sapling_circuit_compatibility_manifest"
+                  ],
+                  "passed": 29,
+                  "elapsed_seconds": 3.14
+                },
+                "compileall": "Passed",
+                "manifest_JSON": "Passed",
+                "targeted_Ruff": "Passed",
+                "git_diff_check": "Passed",
+                "factorization_computation": "Not run; not counted as passing."
+              },
+              "satisfying_assignment_domain": {
+                "definition": "All finite-field mapped assignments with ONE=1 satisfying every retained local and Bellman R1CS equation under the established helper projections.",
+                "condition": "Every coordinate of h_U(x)-T_H*h_L(M*x) must vanish on the complete finite-field satisfying set, equivalently its complete finite-field vanishing ideal.",
+                "status": "Not computed independently; retained witness fingerprints do not characterize the full satisfying set."
+              }
+            },
             "helper_term_relation": "The -V term belongs to the helper residual-coordinate relation. C does not contribute directly to high-degree H quotient coefficients; -V is not by itself a demonstrated obstruction to H tensor factorization.",
             "verification": {
               "factor_kernel_H_tensor_assessment": {"tests_passed": 3, "elapsed_seconds": 3.071},

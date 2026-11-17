@@ -75,6 +75,11 @@ and provenance; it is the source record for the focused reports below.
   [Phase 9.21.53](sapling-spend-authoritative-reference.md#phase-92153--exact-coefficient-tensor-criterion-for-a-spend-h-map)
   records the exact finite-field tensor-factorization criterion; the required
   structured row-space computation remains outstanding.
+  [Phase 9.21.54](sapling-spend-authoritative-reference.md#phase-92154--structured-exact-spend-h-map-algorithm-assessment)
+  verifies the degree-index cross-correlation reduction and retained
+  evaluation-factor sparsity, assesses exact alternatives and their resource
+  costs, and records why no bounded certificate-producing solver was
+  implemented; full-affine and satisfying-domain existence remain unresolved.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
@@ -102,7 +107,9 @@ and provenance; it is the source record for the focused reports below.
   Phase 9.21.50 adds exact finite-field kernel and quotient certificates;
   Phase 9.21.51 adds the QAP-family restricted inverse; Phases 9.21.52–53
   record the unresolved linear H-coordinate assessment and its exact
-  factorization criterion. No Groth16 query transformation is established.
+  factorization criterion. Phase 9.21.54 assesses structured exact algorithms
+  and their resource limits; no solver or Groth16 query transformation is
+  established.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution and little-endian position interpretation;
   Phase 9.21.43 establishes relation equivalence for the captured exports,

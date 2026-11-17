@@ -6360,6 +6360,26 @@ gated.
 - The unchanged `src/r1cs.py` Ruff baseline remains **45 findings**:
   13 UP007, 12 UP006, 9 UP045, 8 UP037, 2 UP035, and 1 SIM102.
 
+### Phase 9.21.54 — Spend H-map algorithm assessment
+
+The retained local and Bellman matrix exports establish the exact
+degree-index cross-correlation formula for the high quotient coefficients.
+Their evaluation-domain A/B/C term-occurrence counts are respectively
+258,843/118,737/186,665 and 312,166/99,918/212,492. This sparsity does not
+establish a sparse or low-rank expanded quadratic H tensor: inverse FFT
+interpolation and the assignment-variable coefficient maps remain part of
+the tensor.
+
+Exact FFT evaluation is practical for an individual assignment but only
+checks rank-one monomial inputs. A general exact row-space decision still
+needs all 4,865,565,981 degree-at-most-two coordinates or a verified
+compressed contraction/elimination certificate. The direct tensor has
+637,734,598,695,651 entries; a dense H map would have 17,179,607,041
+entries. No deterministic bounded-resource exact solver or certificate
+representation was established, so no solver was added. Full-affine H-map
+existence and the separately defined satisfying-assignment-only question
+remain **Unresolved**. No synthesis or H-query-point work was performed.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

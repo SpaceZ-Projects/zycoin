@@ -410,6 +410,50 @@ class SaplingSpendFactorKernelTests(unittest.TestCase):
         self.assertIn("C_U=T_H*C_L", tensor["full_affine_assignment_condition"])
         self.assertIn("Not computed", tensor["exact_factorization_result"])
         self.assertIn("Unresolved", h_audit["existence_result"])
+        algorithms = tensor["structured_algorithm_investigation"]
+        self.assertEqual(algorithms["phase"], "9.21.54")
+        self.assertIn("not implemented", algorithms["status"])
+        structure = algorithms["verified_degree_structure"]
+        self.assertIn("sum_(r+s=N+k)", structure["formula"])
+        self.assertIn("cross-correlation", structure["interpretation"])
+        self.assertIn("does not establish", structure["scope_limit"])
+        sparsity = algorithms["retained_evaluation_factor_sparsity"]
+        self.assertEqual(
+            sparsity["local_term_occurrences_ABC"],
+            [258843, 118737, 186665],
+        )
+        self.assertEqual(
+            sparsity["bellman_term_occurrences_ABC"],
+            [312166, 99918, 212492],
+        )
+        resources = algorithms["resource_dimensions"]
+        self.assertEqual(
+            resources["degree_at_most_two_monomials"], 4_865_565_981
+        )
+        self.assertEqual(
+            resources["H_tensor_entries"], 637_734_598_695_651
+        )
+        self.assertEqual(resources["dense_T_H_entries"], 17_179_607_041)
+        approaches = {
+            entry["method"]: entry for entry in algorithms["approach_assessment"]
+        }
+        self.assertFalse(
+            approaches["Exact FFT/convolution evaluation"][
+                "decides_full_affine_condition"
+            ]
+        )
+        self.assertTrue(
+            approaches["Incremental exact sparse/block elimination"][
+                "decides_full_affine_condition"
+            ]
+        )
+        self.assertEqual(
+            algorithms["implementation"].split(":", 1)[0], "Not implemented"
+        )
+        self.assertEqual(
+            algorithms["satisfying_assignment_domain"]["status"],
+            "Not computed independently; retained witness fingerprints do not characterize the full satisfying set.",
+        )
         witnesses = h_audit["retained_witness_evidence"]
         self.assertFalse(witnesses["baseline"]["identity_map_matches"])
         self.assertFalse(witnesses["zero_value_alternating"]["identity_map_matches"])

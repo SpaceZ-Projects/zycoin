@@ -2741,6 +2741,24 @@ secrets.
 - The unchanged `src/r1cs.py` Ruff baseline remains **45 findings**:
   13 UP007, 12 UP006, 9 UP045, 8 UP037, 2 UP035, and 1 SIM102.
 
+### Phase 9.21.54 — Spend H-map exact-method status
+
+The retained Spend exports verify the quotient's shifted cross-correlation
+structure in polynomial-degree coordinates, but do not establish global
+Toeplitz/Hankel structure or a low-rank representation in assignment
+monomial coordinates. Individual exact FFT evaluation does not decide the
+full affine tensor row-space condition. The deterministic exact alternatives
+assessed require either billions of monomial-column visits, multi-terabyte
+dense elimination state, or an as-yet-unavailable compressed bilinear
+contraction certificate.
+
+No exact H-coordinate map or nonexistence certificate is available. The
+full-affine condition, and independently the condition on all finite-field
+satisfying assignments, remain **Unresolved**. This work does not establish
+H-query compatibility, Groth16 verification-equation preservation, Spend
+parameter binding, or Spend proving readiness. No Spend synthesis or
+H-query-point transformation was performed.
+
   ## Phase 9.21.27 — Authentic Output proving-query MSM validation
 
   The test-only

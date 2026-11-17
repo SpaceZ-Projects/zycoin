@@ -2237,3 +2237,86 @@ QAP math **11 tests in 0.006 s**, and compatibility manifest **19 tests in
 Ruff, and `git diff --check` passed. No synthesis or query-point operation
 was run. The tensor factorization itself remains **Unresolved** and was not
 counted as a passed computation.
+
+### Phase 9.21.54 — Structured exact Spend H-map algorithm assessment
+
+This phase evaluates exact full-affine algorithms from the retained sparse
+local and Bellman matrix exports, row correspondence, and factor certificates.
+It performs no circuit synthesis, Bellman export, setup operation, or
+H-query-point analysis. The existence decision remains **Unresolved**; no
+solver or certificate is claimed.
+
+For `N=131,072`, define the coefficient vectors of the interpolated A and B
+polynomials by affine forms `a_r(z)` and `b_s(z)`, where `z` contains the
+fixed `ONE=1` coordinate and all 98,645 free assignment coordinates. Every
+high-degree quotient coefficient is exactly
+
+```text
+h_k(z) = sum_(r+s=N+k) a_r(z)b_s(z),  0 <= k < N-1.
+```
+
+Reindexing `i=N-1-r` gives
+`h_k=sum_(i=0..N-2-k) a_(N-1-i)b_(i+k+1)`. This is a shifted
+cross-correlation (anti-diagonal convolution) in the *polynomial-degree
+indices*. It proves a triangular convolution structure for each quadratic
+form, with `N-1-k` factor products in coordinate `k`. It does not imply that
+the monomial-coordinate tensor is globally Toeplitz/Hankel or low rank:
+its entries also contain the retained A/B variable coefficient vectors.
+The `C` family is absent from these high coefficients because its degree is
+below `N`; it remains necessary for divisibility on satisfying assignments.
+
+The retained matrices confirm sparse evaluation-domain factor inputs, not a
+sparse expanded H tensor. The local export has A/B/C term-occurrence counts
+`258,843 / 118,737 / 186,665`; the Bellman export has
+`312,166 / 99,918 / 212,492`. Maximum terms in one local A/B/C row are
+`577 / 64 / 235`, and in one Bellman row `688 / 64 / 256`. The factor
+coefficient sequences are obtained by exact inverse FFT of these row
+evaluations (with Bellman's dummy input rows). No retained artifact verifies a
+further sparse, low-rank, Kronecker, or shared-subspace decomposition of the
+full quadratic coefficient tensors. The 333 expanded factor identities and
+the restricted inverse concern the A/B/C factor coordinates; neither is an
+H-tensor factorization.
+
+Exact-method assessment:
+
+| Method | Exact full-affine decision? | Bottleneck / certificate |
+|---|---|---|
+| FFT/convolution evaluation | Evaluates `h(x)` exactly for a supplied assignment in `O(N log N)` field operations; does not decide tensor row-space inclusion. | It probes only homogenized rank-one monomial inputs. Deterministic interpolation over all pairs would require processing 4,865,565,981 monomials, each with a 131,071-coordinate output, absent additional structure. |
+| Structured `C`/`C^T` products | The formula gives exact implicit products. Lift monomial weights to a symmetric matrix `Q` on the homogeneous coordinates (duplicating each off-diagonal monomial weight); then `(C Q)_k` is a sum of bilinear contractions `a_r^T Q b_s` over `N(N-1)/2 = 8,589,869,056` anti-diagonal pairs. General dense `Q` has no verified low-rank representation. | `C^T y` has 4,865,565,981 field coordinates (at least 155.7 GB at 32 bytes each). The formulas are exact, but do not give a feasible matrix-free Krylov product or independently checkable inclusion certificate. |
+| Incremental sparse/block elimination | A deterministic scan of every monomial column would decide the stacked-matrix rank condition over the exact field. | It must visit up to 4,865,565,981 columns. A dense basis over the 262,142 stacked output coordinates can require about 2.20 TB at 32 bytes per entry; evaluation sparsity is not a certificate that elimination remains sparse. |
+| Symbolic polynomial identity / factorization | A proposed `T_H` can be checked by proving equality of every quadratic coefficient, including constant and linear terms. An exact inconsistency certificate could prove nonexistence. | No compressed candidate for `T_H` or exact identity engine is derived. A dense `T_H` contains 17,179,607,041 field entries (about 549.7 GB); direct coefficient verification remains infeasible without further structure. |
+
+These are algorithmic limits of the investigated representations, not a
+mathematical proof that a map does or does not exist. Random sampling,
+floating-point rank, and witness fingerprints were not used as substitutes
+for an exact decision. No bounded deterministic algorithm with practical
+resource bounds and a verifiable output certificate was established, so no
+partial solver was added.
+
+The satisfying-assignment question is separate. Its exact domain is the
+finite-field set of all mapped assignments with `ONE=1` satisfying every
+retained R1CS equation on both sides (with the established helper projections).
+The restricted-domain condition is that every coordinate of
+`h_U(x)-T_H h_L(Mx)` vanish on that entire set, equivalently on its complete
+finite-field vanishing ideal. The retained one- and two-witness fingerprints
+do not characterize that set; no ideal-membership computation was attempted.
+
+**Conclusion:** the degree-index convolution reduction is established, but
+the full affine row-space inclusion computation and the satisfying-domain
+question remain **Unresolved**. No exact transformation, counterexample,
+rank, kernel, or tensor fingerprint is claimed. No H-query-point work was
+performed.
+
+**Smallest justified next step:** derive and independently verify a
+compressed representation for the bilinear coefficient contractions that
+supports exact arbitrary-monomial-space elimination (or a structurally
+restricted candidate `T_H` with an exact all-coefficient identity check).
+Until such a representation has explicit memory/time bounds and a
+certificate verifier, retain the unresolved status rather than launching a
+full tensor scan.
+
+Verification: the focused factor-kernel, Spend QAP transformation, and
+compatibility-manifest tests passed **29 tests in 3.140 s**. `compileall`,
+manifest JSON parsing, targeted Ruff for the modified test, and
+`git diff --check` passed. No factorization, witness synthesis, or query-point
+transformation was run; none is counted as a passing computation.
