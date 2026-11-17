@@ -401,6 +401,14 @@ class SaplingSpendFactorKernelTests(unittest.TestCase):
             h_audit["evaluation_and_polynomial_coordinates"]["h_coefficient_count"],
             131_071,
         )
+        tensor = h_audit["tensor_factorization"]
+        self.assertEqual(tensor["target_dimensions"], [131_071, 131_071])
+        self.assertEqual(
+            tensor["assignment_coordinates"]["degree_at_most_two_monomials"],
+            4_865_565_981,
+        )
+        self.assertIn("C_U=T_H*C_L", tensor["full_affine_assignment_condition"])
+        self.assertIn("Not computed", tensor["exact_factorization_result"])
         self.assertIn("Unresolved", h_audit["existence_result"])
         witnesses = h_audit["retained_witness_evidence"]
         self.assertFalse(witnesses["baseline"]["identity_map_matches"])

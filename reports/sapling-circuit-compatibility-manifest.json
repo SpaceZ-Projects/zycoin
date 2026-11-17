@@ -1236,7 +1236,7 @@
       "interpretation": "The two systems are each satisfied and independently quotient-divisible, but their exact canonical QAP vectors are not equal. The fixed forward A/B/C factor identity is now characterized, including its nontrivial kernel and cokernel. This does not establish a complete H/query transformation or parameter-to-circuit binding."
     },
     "spend_qap_transformation_audit": {
-      "phase": "9.21.52",
+      "phase": "9.21.53",
       "semantic_relation_equivalence": "Evidence-supported for the pinned exports under the accepted variable map and explicit auxiliary projection; not a formal source-level proof.",
       "qap_equivalence": "Canonical matrix/QAP identity is not claimed. A fixed A/B/C coefficient-family map and restricted inverse are established on the retained production family; H and official-query compatibility remain unresolved.",
       "proving_query_compatibility": "Unverified. No complete public linear transformation from the local A/B/C variable polynomials and auxiliary space to the pinned Bellman proving queries has been established.",
@@ -1452,6 +1452,34 @@
             "evaluation_relation": "h_eval_U = W H_U, with W the same invertible domain evaluation matrix used for A/B/C interpolation."
           },
           "linear_map_test_condition": "A witness-independent linear T_H would require h_U(x)=T_H h_L(M*x) for every satisfying assignment. For an identity over the full assignment space, every degree-at-most-two coefficient vector of h_U must equal T_H times the corresponding local vector; linear terms may be homogenized using the fixed ONE coordinate.",
+          "tensor_factorization": {
+            "field": "BLS12-381 scalar field",
+            "target_dimensions": [131071, 131071],
+            "assignment_coordinates": {
+              "including_ONE": 98646,
+              "free_coordinates_with_ONE_fixed": 98645,
+              "degree_at_most_two_monomials": 4865565981
+            },
+            "quotient_coefficient_formula": "For k=0..N-2, h_k(x)=sum_(r+s=N+k) A_r(x)*B_s(x). Since C has degree < N, subtracting C changes the remainder but not these quotient coefficients.",
+            "full_affine_assignment_condition": "After substituting x_L=M*x_U and fixing ONE=1, form C_L and C_U with one column per degree-at-most-two assignment monomial and one row per H coefficient. A fixed T_H exists on the full affine assignment space iff C_U=T_H*C_L, equivalently rank([C_L; C_U])=rank(C_L).",
+            "satisfying_assignment_condition": "On the reachable satisfying set, each coordinate of h_U(x)-T_H*h_L(M*x) must vanish on the complete satisfying-assignment variety; finite witness samples do not establish this.",
+            "exact_factorization_result": "Not computed; no existence result, counterexample, rank, kernel, or fingerprint is claimed.",
+            "retained_tensor_status": "The baseline local and Bellman matrix/witness exports and factor certificates are retained, but the 131071-by-4865565981 quotient coefficient tensors and raw alternate-witness QAP vectors are not materialized. A structured exact row-space/factorization computation is required.",
+            "helper_term_relation": "The -V term belongs to the helper residual-coordinate relation. C does not contribute directly to high-degree H quotient coefficients; -V is not by itself a demonstrated obstruction to H tensor factorization.",
+            "verification": {
+              "factor_kernel_H_tensor_assessment": {"tests_passed": 3, "elapsed_seconds": 3.071},
+              "spend_QAP_transformations": {"tests_passed": 7, "elapsed_seconds": 0.006},
+              "groth16_QAP_math": {"tests_passed": 11, "elapsed_seconds": 0.006},
+              "compatibility_manifest": {"tests_passed": 19, "elapsed_seconds": 0.148},
+              "total_tests_passed": 40,
+              "compileall": "Passed",
+              "Pylance_syntax": "Passed",
+              "JSON": "Passed",
+              "targeted_Ruff": "Passed",
+              "git_diff_check": "Passed",
+              "Spend_synthesis": "Not run"
+            }
+          },
           "existence_result": "Unresolved; no exact coefficient-tensor factorization, counterexample over the satisfying-witness set, or T_H matrix has been established.",
           "helper_term_assessment": "The helper residual relation has witness-dependent coefficient -V, ruling out a constant helper-only residual-row transform. The fixed cross-row A/B/C operator and S offsets already encode the factor relation; -V has not been proved to be the sole obstruction to a linear H map.",
           "retained_witness_evidence": {

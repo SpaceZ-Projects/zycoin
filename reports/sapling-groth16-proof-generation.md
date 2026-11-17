@@ -615,7 +615,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.52):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.53):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -721,11 +721,22 @@ is not proven to be the sole H obstruction. No H query points or Groth16
 verification-equation transformation were attempted. Resolving linear-map
 existence requires an exact symmetric quadratic coefficient-family
 factorization or an inconsistency certificate. See
-[Phase 9.21.52 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92152--restricted-spend-h-coordinate-transformation-assessment).
+[Phase 9.21.53 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92153--exact-coefficient-tensor-criterion-for-a-spend-h-map).
 Focused factor-kernel/H-assessment, QAP transformation, and compatibility
 manifest regressions passed **29 tests** (3 in 3.216 s, 7 in 0.012 s, and 19
 in 0.128 s). Compileall, Pylance syntax, JSON, targeted Ruff, and diff checks
 passed. No Spend synthesis or query-point transformation was run.
+
+Phase 9.21.53 states the exact full-affine-space tensor condition
+`C_U=T_H C_L`; the tensors would have 131,071 output coordinates and
+4,865,565,981 monomial columns. The structured exact factorization has not
+been computed, so no H-map existence, rank, kernel, or official H-query
+compatibility conclusion is claimed. A/B/C factor invertibility on the
+retained family is not evidence of H invertibility. Focused factor-kernel,
+Spend QAP transformation, generic Groth16 QAP, and compatibility-manifest
+regressions passed **40 tests** (3 in 3.071 s, 7 in 0.006 s, 11 in 0.006 s,
+19 in 0.148 s). Compileall, Pylance syntax, JSON, targeted Ruff, and diff
+checks passed; no synthesis or query-point operation was run.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

@@ -2156,3 +2156,84 @@ compatibility-manifest regressions passed **19 tests in 0.128 s** (29 total).
 Python compileall, Pylance syntax, manifest JSON parsing, targeted Ruff, and
 `git diff --check` passed. No Spend synthesis or query-point transformation
 was run.
+
+### Phase 9.21.53 — Exact coefficient-tensor criterion for a Spend H map
+
+This phase makes the existence test precise over the BLS12-381 scalar field.
+It uses the retained QAP matrix exports, factor certificate, and variable
+map; no circuit synthesis or setup/query operation was performed.
+
+For `N=131,072`, write the ascending-degree factor polynomials as
+`A(X;x)=Σ_{r=0}^{N-1}a_r(x)X^r` and
+`B(X;x)=Σ_{s=0}^{N-1}b_s(x)X^s`. For `0≤k<N-1`, Euclidean division by
+`Z=X^N-1` gives the exact quotient-coordinate formula
+
+```text
+h_k(x) = [X^(N+k)] (A(X;x)B(X;x)-C(X;x))
+       = Σ_(r+s=N+k) a_r(x)b_s(x).
+```
+
+`C` has degree below `N` and therefore does not enter the high-degree
+quotient coefficients; it enforces divisibility for satisfying assignments.
+The evaluation vector is `W h`, with a zero coefficient at degree `N-1`
+before the 131,072-point FFT.
+
+Fix `ONE=1` and let the other 98,645 coordinates be `w`. Each `a_r` and
+`b_s` is affine-linear in `w`; consequently `h(w)` has degree at most two.
+Let `C_L` and `C_U` denote the matrices whose rows are the 131,071 quotient
+coordinate polynomials and whose columns are the 4,865,565,981 monomials of
+degree at most two, after applying `x_L=M x_U` to the local family. A single
+fixed linear map exists on the full affine assignment space **if and only
+if**
+
+```text
+C_U = T_H C_L
+equivalently rowspace(C_U) ⊆ rowspace(C_L)
+equivalently rank([C_L; C_U]) = rank(C_L).
+```
+
+This is the necessary-and-sufficient finite-field tensor-factorization
+condition. The satisfying-assignment-only question is weaker: every
+coordinate of `h_U-T_H h_L` must vanish on the entire satisfying-assignment
+set. The baseline and alternate fingerprints alone cannot establish that
+condition or a full-space tensor factorization.
+
+The retained files contain the baseline local and Bellman matrix/witness
+exports and the factor certificates, but not materialized `C_L`/`C_U`
+tensors or raw alternate QAP vectors. A dense representation would contain
+`637,734,598,695,651` field entries (over 20 PB at 32 bytes per entry).
+No structured exact row-space solver or coefficient-tensor reduction has
+been run, and no exact finite-field counterexample has been found. Thus
+existence remains **Unresolved**, not established or disproven. No
+`T_H`, rank, kernel, image, invertibility result, or fingerprint is claimed.
+The factor-family inverse remains valid only on its 98,646-dimensional
+retained A/B/C span and supplies no missing H tensor certificate.
+
+The helper residual `-V` is an obstruction to a constant helper-only
+residual-row map, but `C` does not appear in the quotient coefficient formula
+above. The `-V` term is not itself a demonstrated obstruction to H tensor
+factorization; the factorization differences in the A/B families and their
+mixed quadratic terms must be tested directly.
+
+**Conclusion:** the exact necessary-and-sufficient condition is recorded,
+but the requested existence computation is **Unresolved**. The previously
+recorded baseline and `zero-value-alternating` hashes still disprove only
+the identity map. The official H query points and Groth16 verification
+equation were not examined.
+
+**Next justified step:** implement a structured exact finite-field
+row-space/factorization test for `C_U` versus `C_L`, exploiting the
+high-convolution and sparse A/B coefficient operators rather than
+materializing the tensors. Return either a verified `T_H` representation or
+an exact row-space inconsistency certificate. For the satisfying-set-only
+claim, separately certify vanishing modulo the complete R1CS solution
+variety. Only if a fixed `T_H` is established should its action on official
+H query points be considered.
+
+Verification: factor-kernel/H-tensor assessment passed **3 tests in
+3.071 s**, Spend QAP transformations **7 tests in 0.006 s**, generic Groth16
+QAP math **11 tests in 0.006 s**, and compatibility manifest **19 tests in
+0.148 s** (**40 tests total**). Compileall, Pylance syntax, JSON, targeted
+Ruff, and `git diff --check` passed. No synthesis or query-point operation
+was run. The tensor factorization itself remains **Unresolved** and was not
+counted as a passed computation.

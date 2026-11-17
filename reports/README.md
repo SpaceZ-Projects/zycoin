@@ -72,6 +72,9 @@ and provenance; it is the source record for the focused reports below.
   derives the fixed quadratic H recomputation and records why the restricted
   A/B/C inverse does not establish a linear H-coordinate map. Existence of
   such a map remains unresolved; no query-point transformation was attempted.
+  [Phase 9.21.53](sapling-spend-authoritative-reference.md#phase-92153--exact-coefficient-tensor-criterion-for-a-spend-h-map)
+  records the exact finite-field tensor-factorization criterion; the required
+  structured row-space computation remains outstanding.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
@@ -97,9 +100,9 @@ and provenance; it is the source record for the focused reports below.
   documents the global A/B/C operator and the remaining unresolved H/query
   transformation.
   Phase 9.21.50 adds exact finite-field kernel and quotient certificates;
-  Phase 9.21.51 adds the QAP-family restricted inverse; Phase 9.21.52 records
-  the unresolved linear H-coordinate assessment. No Groth16 query
-  transformation is established.
+  Phase 9.21.51 adds the QAP-family restricted inverse; Phases 9.21.52–53
+  record the unresolved linear H-coordinate assessment and its exact
+  factorization criterion. No Groth16 query transformation is established.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution and little-endian position interpretation;
   Phase 9.21.43 establishes relation equivalence for the captured exports,

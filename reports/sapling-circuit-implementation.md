@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.52):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.53):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -176,6 +176,19 @@ Focused factor-kernel/H-assessment, QAP transformation, and compatibility
 manifest regressions passed **29 tests** (3 in 3.216 s, 7 in 0.012 s, and 19
 in 0.128 s). Compileall, Pylance syntax, JSON, targeted Ruff, and diff checks
 passed; no Spend synthesis was run.
+
+Phase 9.21.53 gives the exact necessary-and-sufficient full-assignment
+condition `C_U=T_H C_L` for the degree-at-most-two H coefficient tensors,
+with 131,071 output coordinates and 4,865,565,981 assignment monomials.
+The tensors are not materialized, and no structured finite-field row-space
+test or inconsistency certificate has been produced; linear H-map existence
+remains **Unresolved**. The baseline and alternate hashes reject the
+identity map only. The `-V` helper coefficient is not established as the
+cause of tensor-factorization failure. No H query points were examined.
+Focused factor-kernel/H-tensor assessment, Spend QAP, generic Groth16 QAP,
+and compatibility-manifest regressions passed **40 tests** (3 in 3.071 s,
+7 in 0.006 s, 11 in 0.006 s, 19 in 0.148 s). Compileall, Pylance syntax,
+JSON, targeted Ruff, and diff checks passed; no synthesis was run.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 
