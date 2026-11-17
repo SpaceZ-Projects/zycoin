@@ -49,11 +49,14 @@ Thus exact canonical QAP equivalence is **Unverified**, not established by
 the satisfying assignments or parameter serialization match. Phase 9.21.35
 traces the differences to 48,546 moved rows, 251 A/B swaps, 28,351
 nonuniform factor normalizations, 333 expanded-relation-only matches, and
-the explicit helper projection. Semantic relation equivalence is
-evidence-supported for the pinned exports under the accepted mapping and
-projection, but is not a formal source-level proof. No transformation of
-the complete variable-indexed QAP polynomials and the resulting A/B/IC/L
-proving queries has been demonstrated. The observed differences alone do
+the explicit helper projection. Phase 9.21.43 establishes algebraic
+relation equivalence for the captured production and pinned-reference
+matrices under the accepted variable map and helper projections, using
+polynomial row comparisons rather than witness satisfaction alone. This is
+not a proof that every production synthesis execution emits that same
+matrix. No transformation of the complete variable-indexed QAP polynomials
+and the resulting A/B/IC/L proving queries has been demonstrated. The
+observed differences alone do
 not prove semantic incompatibility or rule out accidental equality at the
 hidden setup point. Spend parameter-to-circuit binding and ceremony validity
 remain **Unverified**; `phase1radix2m17` and the exact ceremony-era Spend
@@ -95,19 +98,45 @@ fingerprints differ: production
 `f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`,
 reference
 `cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
-Production matrix identity is therefore not established. The audit mapped
-all 8 public/ONE variables and 98,637 auxiliaries; mapped assignments matched
+Exact ordered matrix identity is disproved for these captured exports. The
+audit mapped all 8 public/ONE variables and 98,637 auxiliaries; mapped
+assignments matched
 for the baseline, zero-value/alternating-path, and `u64::MAX`/all-right
 witnesses, and all 98,777 production rows were satisfied for each. Production
 was synthesized once; the two variant assignments were checked against that
-matrix. The allocation map shows 53,901 mapped auxiliaries in different
+captured matrix, without independently resynthesizing production for the
+variants. The allocation map shows 53,901 mapped auxiliaries in different
 columns and 52,520 displaced in relative order. The ordered-row artifact
 pairs 98,775 rows (69,840 exact factors, 251 A/B swaps, 28,351 invertible
-factor normalizations, 333 expanded-relation matches); the anchor/position
-helper correspondence and complete equivalence remain unresolved. The
+factor normalizations, 333 expanded-relation matches). Phase 9.21.43 resolves
+the anchor/position helper correspondence by projecting source `T` through
+`T=A` and the local packed position through `P=Σ2^i d_i`; relation
+equivalence is established for the captured matrices under that map. Exact
+matrix identity and production matrix-shape invariance across fresh
+synthesis executions remain unestablished. The
 focused audit passed 1 test in 675.458 seconds. No proof was generated and
 the Spend proving gate remains closed; QAP/query compatibility,
 parameter-to-circuit binding, and ceremony validity remain **Unverified**.
+
+**Phase 9.21.43 relation-equivalence verdict:** the captured canonical
+matrices both have 98,777 rows and 98,646 columns, but their fingerprints
+differ, so ordered matrix identity is **disproved for these exports**.
+The exact row-polynomial correspondence pairs 98,775 rows; the two source-only
+anchor rows reduce to the local conditional-anchor row by uniquely setting
+`T=A`, and the local position row uniquely sets
+`P=Σ(i=0..31)2^i d_i`. This establishes the same satisfying relation over
+shared semantic variables after existentially projecting those helper
+variables. It is not a column permutation or canonical QAP equivalence.
+Three-witness assignment compatibility is supporting evidence, not the
+proof of relation equivalence. General production synthesis shape,
+all eight QAP-vector identity, proving-query compatibility, parameter binding,
+and ceremony validity remain **Unverified**. The complete discrepancy table,
+artifact hashes, row/variable counts, and algebraic derivations are in
+[Phase 9.21.43 of the implementation report](sapling-circuit-implementation.md#phase-92143--production-spend-relation-equivalence-investigation).
+The focused relation tests passed 8 tests / 17 subtests (0.013 s), mapping
+and provenance tests passed 43 tests (0.035 s), and pinned-Bellman
+Merkle/anchor differential tests passed 4 tests (137.703 s). Ruff's 11
+findings were in unchanged audit/test helpers; syntax and diff checks passed.
 
 The Phase 9.21.38 full-vector check independently accumulated every official
 IC/H/L/A/B_G1/B_G2 section using ZyCoin's complete MSM and a separate Bellman
@@ -523,7 +552,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.17):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.43):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -532,13 +561,13 @@ shows upstream rows 76893–76894 (`(root - rt) * note_value = 0` and
 `rt = public_anchor`) reduce to the local conditional-anchor row 76894 by
 substitution; the local packed-position reconstruction is a redundant
 auxiliary relation because the upstream circuit uses the same Boolean path
-directions directly in little-endian order. Thus the audit supports semantic
-equivalence of the pinned exported R1CS relations under role mapping and
-auxiliary projection, but is not a formal source-level proof or verification
-of arbitrary production synthesis paths. The v7 mapping and row artifact
-remain unchanged. Exact ordered matrix alignment, formal/complete circuit
-equivalence, QAP/query compatibility, authentic proving-key/verification-key
-compatibility, and production proof generation remain **Unverified**.
+directions directly in little-endian order. Algebraic relation equivalence
+of the captured production and pinned-reference matrices is established under
+role mapping and auxiliary projection. This does not establish that arbitrary
+production synthesis executions emit the same matrix. The v7 mapping and row
+artifact remain unchanged. Exact ordered matrix alignment, QAP/query
+compatibility, authentic proving-key/verification-key compatibility, and
+production proof generation remain **Unverified**.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

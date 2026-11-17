@@ -253,11 +253,13 @@ and 98,646 columns, with fingerprint
 `f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
 The verified pinned source matrix has the same dimensions but fingerprint
 `cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
-Therefore, **production matrix identity is not established**.
+Therefore, exact ordered matrix identity is **disproved for these captured
+exports**.
 
 The audit synthesized production once with the baseline witness. It reused
-that witness-independent production matrix for the zero-value/alternating-
-direction and `u64::MAX`/all-right fixtures, validating each production host
+that captured production matrix (without a fresh production synthesis) for
+the zero-value/alternating-direction and `u64::MAX`/all-right fixtures,
+validating each production host
 witness and transferring its source assignments through the reviewed v7
 semantic variable map. All 98,777 production rows were satisfied under each
 of the three mapped assignments. Across each fixture, all 8 public/ONE
@@ -266,9 +268,8 @@ per implementation remains unmatched. Production column 32,621 is the
 little-endian packed Merkle path position. The source's `Aux(76805)` at column
 76,813 is the conditional-anchor copy of the public anchor. Production's
 additional position-reconstruction row and the source's two conditional-
-anchor rows remain unmatched as individual rows; an earlier algebraic audit
-supports their projected-relation equivalence, not a formal whole-circuit
-equivalence claim.
+anchor rows remain unmatched as individual rows; Phase 9.21.43 resolves them
+through explicit helper projections for the captured matrices.
 
 Among mapped auxiliaries, 53,901 use different canonical columns and 52,520
 are displaced in relative allocation order. The largest displacement is in
@@ -286,10 +287,9 @@ The retained row correspondence pairs 98,775 of 98,777 rows without
 ambiguity: 69,840 have exact A/B/C factors, 251 swap A/B, 28,351 use invertible
 factor normalizations, and 333 match only after expanding `A*B-C`. Of paired
 rows, 48,546 move index. These are ordering/factorization differences in the
-paired equations; the two unmatched anchor rows and the helper projection
-remain unresolved as complete-circuit correspondence. No semantic mismatch
-was found in the mapped-row audit, but exact ordered matrix identity and
-formal equivalence are not established.
+paired equations. At the end of Phase 9.21.42, the helper projection had not
+yet been integrated into a complete relation verdict; see Phase 9.21.43
+below. Exact ordered matrix identity is disproved for these exports.
 
 The focused production audit passed **1 test** in **675.458 seconds**:
 one production synthesis, two reused production-matrix witness evaluations,
@@ -298,6 +298,44 @@ fixture diversifier for production host-witness reconstruction. No production
 Spend or Output circuit, setup, parameter, or proving gate changed. Exact
 production QAP/query compatibility, official-parameter binding, and
 ceremony validity remain **Unverified**.
+
+### Phase 9.21.43 — Production Spend relation equivalence
+
+The captured production and pinned Bellman matrices have different ordered
+matrices, but the same constrained relation under the documented semantic
+variable map and helper projections. Of 98,777 rows, 98,775 have unique
+polynomial correspondences: 69,840 exact-factor matches, 251 A/B swaps,
+28,351 nonzero factor normalizations, and 333 expanded `A*B-C` matches.
+The source-only anchor variable `T` is uniquely fixed by `T=A`; substituting
+it into `(R-T)V=0` yields production's `(R-A)V=0`. The local-only packed
+position `P` is uniquely fixed by `P=Σ(i=0..31)2^i d_i`, so it adds no
+restriction beyond the source's 32 little-endian Boolean direction bits.
+Together these derivations establish relation equivalence for the captured
+matrices; they do not depend solely on the three tested assignments.
+
+**Exact matrix identity is disproved for the captured exports:** both are
+98,777 × 98,646, but production fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`
+differs from Bellman's
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The 48,546 moved rows, 53,901 mapped auxiliaries in different columns, all
+public-input positions, and allocation-order causes are itemized in the
+[implementation report's Phase 9.21.43 discrepancy table](sapling-circuit-implementation.md#phase-92143--production-spend-relation-equivalence-investigation).
+
+This verdict applies to the captured production matrix. Production was
+synthesized once; the two alternate witness assignments were evaluated
+against that same matrix. Whether every fresh production synthesis emits the
+same matrix remains unresolved. Exact QAP/query equivalence, official
+parameter-to-circuit binding, and ceremony validity remain **Unverified**.
+No production code, setup, parameter, or proving gate changed.
+
+Focused validation passed: semantic-projection tests **8 tests / 17
+subtests** in **0.013 s**; variable/row/provenance correspondence tests
+**43 tests** in **0.035 s**; and pinned-Bellman Merkle/anchor differential
+tests **4 tests** in **137.703 s**. Python syntax compilation and
+`git diff --check` passed. Ruff reported 11 findings in unchanged audit/test
+helpers; these were not modified. The 675.458-second production audit is the
+retained Phase 9.21.42 result and was not rerun.
 
 ## Historical incremental porting sequence (completed)
 

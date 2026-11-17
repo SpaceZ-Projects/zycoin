@@ -36,20 +36,30 @@ and provenance; it is the source record for the focused reports below.
   including independent full Bellman matrix exports for the two added
   witnesses. [Phase 9.21.42](sapling-spend-authoritative-reference.md#phase-92142--production-spend-audit-against-the-reference)
   records the read-only production audit: dimensions match the reference, but
-  the fingerprints differ, so production matrix identity is not established.
+  the fingerprints differ, so ordered matrix identity is disproved for those
+  captured exports.
+  [Phase 9.21.43](sapling-spend-authoritative-reference.md#phase-92143--production-spend-relation-equivalence)
+  establishes relation equivalence for those captured matrices under the
+  mapped variables and explicit anchor/position projections; ordered matrix
+  identity is disproved for the exports, and production matrix-shape
+  invariance across fresh synthesis runs remains unresolved.
   Official-parameter compatibility remains unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
   [Phase 9.21.42](sapling-circuit-implementation.md#phase-92142--production-spend-audit-against-the-source-reference)
   records the production/reference fingerprints, three-witness assignment
-  checks, and allocation/row differences; exact production matrix identity
-  remains unverified.
+  checks, and allocation/row differences; the captured matrices have
+  different ordered matrix identities.
+  [Phase 9.21.43](sapling-circuit-implementation.md#phase-92143--production-spend-relation-equivalence-investigation)
+  gives the discrepancy-by-discrepancy algebraic relation proof for the
+  captured matrices, including the `T=A` anchor and `P=Σ2^i d_i` position
+  projections. Exact ordered matrix and QAP identity remain unverified.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
-  documents the anchor substitution, little-endian position interpretation,
-  and evidence-supported semantic equivalence of the pinned exports; exact
-  ordered matrix alignment and formal/source-level equivalence remain
-  unverified. [Phase 9.21.33](sapling-circuit-implementation.md#phase-92133--independent-spend-parameter-point-compatibility)
+  documents the anchor substitution and little-endian position interpretation;
+  Phase 9.21.43 establishes relation equivalence for the captured exports,
+  while arbitrary production synthesis paths remain unverified.
+  [Phase 9.21.33](sapling-circuit-implementation.md#phase-92133--independent-spend-parameter-point-compatibility)
   records exact Bellman 0.15/Python parser equality for all Spend IC and query
   point encodings. [Phase 9.21.34](sapling-circuit-implementation.md#phase-92134--independent-sapling-spend-qap-compatibility)
   independently compares complete satisfying-witness QAPs: both quotient
@@ -60,8 +70,9 @@ and provenance; it is the source record for the focused reports below.
   Phase 9.21.37 run passed 205 tests with 1 skipped. [Phase 9.21.35](sapling-circuit-implementation.md#phase-92135--spend-qap-transformations-and-proving-query-semantics)
   traces the QAP differences to row permutations, A/B swaps and nonuniform
   scaling, expanded-relation matches, and the explicit helper projection.
-  Semantic relation equivalence is evidence-supported for the pinned exports;
-  proving-query compatibility remains unverified.
+  Phase 9.21.43 establishes relation equivalence for the captured production
+  and pinned-reference matrices, but proving-query compatibility and
+  production matrix-shape invariance remain unverified.
   [Phase 9.21.36](sapling-circuit-implementation.md#phase-92136--sapling-spend-circuit-specific-setup-requirements)
   records the exact local matrix/QAP identity, reusable Groth16 components,
   parameter layout, and missing ceremony prerequisites.
@@ -111,6 +122,8 @@ and provenance; it is the source record for the focused reports below.
   field/curve primitives, pinned pairing-vector verification, and performance
   and security limitations.
 - [Sapling Groth16 proof-generation readiness](sapling-groth16-proof-generation.md) —
+  Phase 9.21.43 establishes relation equivalence for the captured production
+  and pinned-reference matrices without establishing QAP/query equivalence.
   Phase 9.21.37 records the insecure full-size synthetic Spend setup and its
   full-vector MSM limitation. Phase 9.21.35 analyzes the relation-preserving Spend QAP rewrites and the
   unresolved proving-query transformation; Phase 9.21.34 records the

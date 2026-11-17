@@ -79,18 +79,19 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.34):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.43):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
 unmatched anchor formulations have the same projected relation and that the
 local packed-position reconstruction is a redundant uniquely satisfiable
 auxiliary relation. Together with the matched-row polynomial comparisons,
-this supports semantic equivalence of the pinned exported R1CS relations
-under the accepted role mapping and auxiliary projection. This is not a
-formal source-level proof or a claim that arbitrary production synthesis
-paths have been independently verified. Exact ordered Spend matrix alignment
-and Groth16 compatibility remain **Unverified**.
+the Phase 9.21.43 analysis establishes algebraic relation equivalence for the
+captured production and pinned-reference matrices under the accepted role
+mapping and helper projection. It is not a proof that every possible
+production synthesis execution emits that same matrix. Exact ordered matrix
+identity is disproved for the captured exports; QAP/Groth16 compatibility
+remains **Unverified**.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 
@@ -101,16 +102,18 @@ its fingerprint is
 `f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`;
 the independently verified source fingerprint is
 `cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
-**Production matrix identity is not established.**
+**Exact ordered matrix identity is disproved for these captured exports;**
+the relation projection is analyzed in Phase 9.21.43 below.
 
 The production matrix was synthesized once for the pinned baseline witness.
 For the zero-value/alternating-direction and `u64::MAX`/all-right fixtures,
-the same witness-independent matrix was reused: each production host witness
-passed `_prepare_witness`, every source assignment was translated through the
+that same production matrix was reused; production was not independently
+resynthesized for either variant. Each host witness passed
+`_prepare_witness`, every source assignment was translated through the
 reviewed variable map, the local Merkle-position helper was assigned from the
 32 direction bits, and all 98,777 production rows were evaluated. All three
-assignments satisfy the production matrix. The two variant Bellman full-matrix
-exports completed with the pinned TestConstraintSystem hash
+assignments satisfy the captured production matrix. The two variant Bellman
+full-matrix exports completed with the pinned TestConstraintSystem hash
 `d37c738e83df5d9b0bb6495ac96abf21bcb2697477e2c15c2c7916ff7a3b6a89`.
 The source canonical fingerprint and full row comparisons for these fixtures
 were established by the Phase 9.21.40–41 reference differentials.
@@ -129,25 +132,25 @@ Bellman uses hierarchical namespace/label annotations.
 
 The v7 semantic map attributes the column/order differences to these stages:
 
-| Semantic stage | Mapped auxiliaries | Different columns | Relative order displaced |
-|---|---:|---:|---:|
-| `ak.representation` | 774 | 352 | 352 |
-| `authorization-key` | 5 | 3 | 3 |
-| `authorization-randomizer` | 252 | 252 | 252 |
-| `diversifier-base` | 21 | 15 | 15 |
-| `g-d.representation` | 774 | 774 | 774 |
-| `merkle-authentication-path` | 44,192 | 44,192 | 42,811 |
-| `nk.fixed-base-multiplication` | 750 | 498 | 498 |
-| `nk.representation` | 774 | 352 | 352 |
-| `note-commitment` | 6 | 6 | 6 |
-| `note-commitment-randomness` | 1,002 | 750 | 750 |
-| `note-content.pedersen` | 982 | 982 | 982 |
-| `nullifier-rho` | 98 | 66 | 66 |
-| `pk-d.representation` | 774 | 774 | 774 |
-| `pk-d.scalar-multiplication` | 3,252 | 2,750 | 2,750 |
-| `randomized-authorization-key` | 772 | 520 | 520 |
-| `rho.representation` | 774 | 352 | 352 |
-| `value-commitment` | 1,263 | 1,263 | 1,263 |
+| Semantic stage | Mapped auxiliaries | Different columns | Relative order displaced | Within-stage sequence positions differing |
+|---|---:|---:|---:|---:|
+| `ak.representation` | 774 | 352 | 352 | 352 |
+| `authorization-key` | 5 | 3 | 3 | 0 |
+| `authorization-randomizer` | 252 | 252 | 252 | 0 |
+| `diversifier-base` | 21 | 15 | 15 | 15 |
+| `g-d.representation` | 774 | 774 | 774 | 352 |
+| `merkle-authentication-path` | 44,192 | 44,192 | 42,811 | 42,811 |
+| `nk.fixed-base-multiplication` | 750 | 498 | 498 | 498 |
+| `nk.representation` | 774 | 352 | 352 | 352 |
+| `note-commitment` | 6 | 6 | 6 | 6 |
+| `note-commitment-randomness` | 1,002 | 750 | 750 | 498 |
+| `note-content.pedersen` | 982 | 982 | 982 | 0 |
+| `nullifier-rho` | 98 | 66 | 66 | 66 |
+| `pk-d.representation` | 774 | 774 | 774 | 352 |
+| `pk-d.scalar-multiplication` | 3,252 | 2,750 | 2,750 | 2,750 |
+| `randomized-authorization-key` | 772 | 520 | 520 | 519 |
+| `rho.representation` | 774 | 352 | 352 | 352 |
+| `value-commitment` | 1,263 | 1,263 | 1,263 | 947 |
 
 This table lists stages with at least one differing column; other mapped
 stages preserve the same indices and relative order. In the Merkle stage, the
@@ -159,6 +162,13 @@ Merkle-stage allocation displacement. Production also allocates all seven
 public inputs at entry, while Bellman inputizes `rk`, `cv`, `anchor`, and the
 nullifier chunks after 1,029, 29,075, 76,806, and 98,638 auxiliaries,
 respectively; the canonical public-input positions and values still match.
+The final column compares the ordered semantic-role sequences within each
+gadget, independently of global column offsets. Representation stages differ
+because the local strict-field helper allocates little-endian bit/run roles in
+a different sequence from Bellman's strict representation gadget; scalar
+multiplication and point-addition stages similarly interleave their
+intermediate coordinates differently. The v7 crosswalk records the exact
+role/context on each side; these counts do not infer identity from assignments.
 
 The saved ordered-row correspondence pairs 98,775 of 98,777 rows with no
 ambiguous matches. It classifies 69,840 rows as exact A/B/C factors, 251 as
@@ -174,19 +184,18 @@ identity.
 The two unmatched source rows are 76,893 `(root - T) * value = 0` and 76,894
 `anchor = T`. Production projects out `T` and enforces
 `(root - anchor) * value = 0`; its separate row 32,701 reconstructs the
-packed path position. The prior algebraic audit supports the same projected
-relation and a uniquely determined packed position, but the incomplete
-variable map and different ordered matrices leave formal whole-circuit
-equivalence unresolved.
+packed path position. The direct algebraic projection is detailed in Phase
+9.21.43 below; this audit by itself did not prove whole-matrix relation
+equivalence.
 
 | Finding | Classification |
 |---|---|
 | Matrix dimensions and public-input values/positions | Exact match |
 | 98,637 mapped auxiliary identities and assignments | Exact match on the mapped subset |
 | Allocation columns/order and paired row indices/factors | Ordering-only difference |
-| Conditional-anchor and packed-position helper correspondence | Unresolved; projected-relation equivalence is evidence-supported |
-| Complete ordered matrix identity | Unresolved / not established; fingerprints differ |
-| Demonstrated semantic relation mismatch | None found in the mapped-row audit; this is not a formal equivalence proof |
+| Conditional-anchor and packed-position helper correspondence | Resolved by the Phase 9.21.43 projection proof for the captured matrices |
+| Complete ordered matrix identity | Disproved for these captured exports; fingerprints and ordered rows differ |
+| Relation of the captured matrices | Established under the Phase 9.21.43 variable map and helper projection |
 
 The focused audit passed 1 test in 675.458 seconds. It performed one complete
 production synthesis, reused its matrix for the two variant assignments, and
@@ -196,18 +205,117 @@ production circuit, Output path, setup, parameter, or proving gate changed.
 Production Spend matrix identity, exact QAP/query compatibility, and
 official-parameter binding remain **Unverified**.
 
+### Phase 9.21.43 — Production Spend relation-equivalence investigation
+
+This is a read-only analysis of the production matrix captured in Phase
+9.21.42 against the pinned Sapling/Bellman matrix. It changes no circuit,
+fixture, parameter, or proving gate. The evidence includes the v7 variable
+crosswalk (SHA-256
+`efa67820fdbaf0410cc1fad7380f2468173fedc5fa25ae8366ed0e067124046f`), the
+ordered-row artifact (SHA-256
+`44a14939955a9a82a24f4013bb0b9144a1810b648d6e4d9d3643117330b58ecc`),
+row-map fingerprint
+`f502b0f22dece3829d6e2e1e198ca8d98d82e233e9eb1a4dcded3a399f6ae17d`, and
+coefficient fingerprint
+`883e9561c0f159bafc17f65977d1311f30f8f6e39bf66569fde51c85a24c3a32`.
+
+| Source operation and location | Production operation and affected elements | Algebraic/evidence finding | Classification |
+|---|---|---|---|
+| `Spend::synthesize`: `ak`, `ak not small order`, then `ar` (`sapling-crypto/src/circuit.rs`) | `constrain_sapling_spend` calls the randomized-authorization helper (`src/sapling_spend_circuit.py:322`; `src/sapling_gadgets.py:1362`) | `ak`/`ar` semantic identities map, but the source performs the small-order check before `ar` decomposition. Production allocates the randomizer bits before its helper's key checks. The related mapped auxiliaries are displaced; 4 `ak` and 16 small-order rows and 252 `ar` rows move. | Allocation/row-order difference; no relation mismatch in mapped rows. |
+| `nsk`, `nk`, `ak.repr`, `nk.repr` and fixed-base multiplication (`circuit.rs`) | Production key stages in `constrain_sapling_spend`; fixed-base and strict-representation helpers in `src/sapling_gadgets.py` | The 750 `nk` multiplication and 774-variable representation groups are role-mapped. Their internal intermediate order differs in the multiplication/representation gadgets; associated rows match by exact factors, swaps, nonzero rescaling, or expanded polynomial. | Ordering/factorization difference; relation preserved in the captured rows. |
+| `g_d`, `pk_d`, then value commitment and point representations (`circuit.rs`) | `constrain_sapling_spend` value stage (`:405`) and note stage (`:422`) | Source performs the value commitment before `g_d`/`pk_d` representation. Production orders `pk_d` representation ahead of the value stage and emits `g_d` representation in the note helper. This explains the `g_d.representation`, `pk-d.representation`, and `value-commitment` column displacements and 776 + 776 + 1,265 moved paired rows. The `g_d` point-check group also has 15 of 21 intermediates in different columns. `pk_d` scalar-multiplication rows have a different intermediate allocation order, with mapped relations retained. | Stage/allocation/row ordering difference; no unmatched mapped equation. |
+| Value bits and `expose_value_commitment`; note-content Pedersen hash; `rcm` randomization (`circuit.rs`) | `constrain_sapling_value_commitment` (`:405`) and `constrain_note_commitment` (`:422`) | Both use the same 64 little-endian value bits and commitment equations. Source allocates/decomposes `rcm` after hashing note contents; production preallocates its randomness bits before that relation. The 982 Pedersen rows pair after factor comparison; 252 `rcm` and 982 note-content rows are moved by stage order. | Allocation/row-order difference; relation preserved in the captured rows. |
+| Per-level `position bit`, path element, conditional reversal, and Merkle hash (`circuit.rs:327–397`) | `constrain_merkle_authentication_path` (`src/sapling_spend_circuit.py:443`; `src/sapling_gadgets.py:2945`) | All 32 Boolean direction bits map to their source level and are reused for the nullifier position. The source allocates each direction with its path level; production first allocates packed `P` and its bit decomposition, then path levels. Thus 44,192 mapped Merkle auxiliaries differ in columns and 42,811 differ in within-stage sequence; 44,223 paired rows move. The extra local row enforces only `P = Σ 2^i d_i`. | Ordering difference plus a uniquely determined local helper; no added restriction after existentially projecting `P`. |
+| Conditional anchor allocation and inputization (`circuit.rs:382–397`) | `constrain_sapling_conditional_anchor` (`src/sapling_gadgets.py:3028, 3043`) | Source rows are `(R-T)V=0` and `A-T=0`; production has `(R-A)V=0`. `A-T=0` uniquely forces `T=A`, so both directions of the projection agree, including `V=0`. `T` is not the local packed position. | Two source rows to one production row; projected relations are equivalent. |
+| `g^position`, `rho`, `rho.repr`, nullifier BLAKE2s, 254+2-bit multipacking (`circuit.rs`) | `constrain_sapling_nullifier_rho` (`src/sapling_gadgets.py:1274`), then nullifier hash/packing in `src/sapling_spend_circuit.py:455,475` | The position multiplication consumes the mapped direction bits in little-endian order. Nullifier public chunks remain inputs 6 and 7; BLAKE2s and packing constraints map through the row crosswalk. `rho` point intermediates and representation bits have allocation-order offsets. | Allocation-order difference; no semantic mismatch found in these mapped relations. |
+
+The following allocation census expands the stage counts from Phase 9.21.42.
+“Sequence differences” counts mapped role positions that differ after
+restricting both sides to that semantic stage; it is not inferred from
+witness assignments.
+
+| Semantic stage | Mapped auxiliaries | Columns differ | Within-stage sequence differences | Concrete cause |
+|---|---:|---:|---:|---|
+| `authorization-key` | 5 | 3 | 0 | Upstream curve/check allocations precede `ar`; production allocates the public-key coordinates at entry and `ar` bits before its helper. |
+| `authorization-randomizer` | 252 | 252 | 0 | The little-endian bit sequence is preserved; its global allocation offset differs because upstream checks `ak` first. |
+| `randomized-authorization-key` | 772 | 520 | 519 | Fixed-base multiplication and point-addition intermediates are allocated in different local/source order. |
+| `ak.representation` | 774 | 352 | 352 | Strict point-representation bit/run allocations differ in sequence. |
+| `diversifier-base` | 21 | 15 | 15 | The `g_d` point-check/non-small-order intermediates differ in allocation order. |
+| `g-d.representation` | 774 | 774 | 352 | Source representation follows value commitment; production emits it inside the later note helper, with internal role-order differences. |
+| `nk.fixed-base-multiplication` | 750 | 498 | 498 | Fixed-base window/accumulator intermediate allocation order differs. |
+| `nk.representation` | 774 | 352 | 352 | Strict point-representation bit/run allocations differ in sequence. |
+| `note-commitment` | 6 | 6 | 6 | Note-hash/randomization point-addition coordinates are allocated in different order. |
+| `note-commitment-randomness` | 1,002 | 750 | 498 | Production allocates `rcm` bits before note hashing; upstream allocates them after the note-content hash, and multiplication intermediates also differ in order. |
+| `note-content.pedersen` | 982 | 982 | 0 | Its within-stage semantic order matches; preceding allocation timing shifts every column. |
+| `nullifier-rho` | 98 | 66 | 66 | Position fixed-base multiplication and the note-point addition use different intermediate allocation order. |
+| `pk-d.representation` | 774 | 774 | 352 | Source representation follows value commitment; production places it before that stage, with internal role-order differences. |
+| `pk-d.scalar-multiplication` | 3,252 | 2,750 | 2,750 | Variable-base multiplication's window/selection intermediates are allocated in different order. |
+| `rho.representation` | 774 | 352 | 352 | Strict point-representation bit/run allocations differ in sequence. |
+| `value-commitment` | 1,263 | 1,263 | 947 | Production places this stage after `pk_d` representation; source emits it first, and internal point/multiplication intermediates differ. |
+
+Across all 98,777 rows per matrix, the artifact pairs 98,775 rows without
+ambiguity: 69,840 identical factor rows, 251 A/B swaps, 28,351 invertible
+factor normalizations, and 333 rows whose expanded `A*B-C` polynomials match
+(all with unit scale). Each accepted pairing is checked as a polynomial
+identity over the explicit semantic variable map; it is not inferred from
+whether the tested assignments satisfy the row. The 48,546 row-index moves
+are accounted for by source stage: `ak` 4, `ak not small order` 16, `ar`
+252, `rcm` 252, note-content hash 982, `g_d` representation 776, `pk_d`
+representation 776, value commitment 1,265, and Merkle authentication 44,223.
+There are two unmatched rows per side: the source's conditional-root and
+anchor-inputization rows are resolved by the `T=A` projection; production's
+position reconstruction row is resolved by the unique `P=Σ2^i d_i` helper.
+
+The variable map covers all 8 public/ONE variables and 98,637 of the 98,638
+auxiliaries. The remaining source auxiliary is `T=Aux(76805)`; the remaining
+production auxiliary is packed position `P` at column 32,621. The full
+relation map is not a column permutation: it maps shared semantic variables
+and uses the two explicit helper projections. For the anchor,
+`(R-T)V=0` with `A-T=0` is equivalent after eliminating `T` to
+`(R-A)V=0`. For position, the 32 Boolean constraints and
+`P-Σ(i=0..31)2^i d_i=0` give each direction vector exactly one local packed
+scalar; `P` is not otherwise used. Therefore the captured matrices have the
+same satisfying relation over their common semantic variables after
+existentially projecting the local/source-only helper variables.
+
+| Claim | Verdict |
+|---|---|
+| Exact ordered matrix equivalence | **Disproved for the captured exports.** Dimensions match (98,777 × 98,646), but fingerprints differ: production `f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`; Bellman `cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`. Allocation and row order also differ directly. |
+| Algebraic relation equivalence of the captured production and Bellman matrices | **Established under the documented semantic map and the `T=A` / `P=Σ2^i d_i` projections.** This rests on exact mapped row-polynomial comparisons and the helper derivations, not merely on matching satisfying witnesses. |
+| Assignment compatibility | **Verified for three valid fixtures only.** All mapped assignments agree and satisfy the captured production matrix; these checks supplement, but do not establish, relation equivalence. |
+| Every production synthesis execution / arbitrary witness | **Unresolved.** Phase 9.21.42 synthesized the production matrix once and reused it for the two variant assignments. Matrix shape invariance across fresh production synthesis executions was not independently measured here. |
+| Canonical QAP/query identity, official parameter binding, ceremony validity | **Unverified.** Relation equivalence does not imply equality of row-basis QAP vectors or proving queries. |
+
+Focused validation passed: semantic-projection tests **8 tests / 17
+subtests** in **0.013 s**; variable/row/provenance correspondence tests
+**43 tests** in **0.035 s**; and pinned-Bellman Merkle/anchor differential
+tests **4 tests** in **137.703 s**. The production audit's **1 test /
+675.458 s** result is retained from Phase 9.21.42 and was not repeated.
+Python syntax compilation and `git diff --check` passed. Ruff reported 11
+findings in the unchanged audit/test helpers; no code files were modified, so
+these unrelated findings were left unchanged.
+
+The smallest next evidence step is a test-only fresh production synthesis for
+one existing alternate fixture (preferably zero value with alternating
+directions), asserting the same matrix fingerprint and dimensions before
+reusing the fixed-matrix relation proof. The prior full production audit took
+675.458 seconds, so this check is materially expensive; it is not a
+production implementation change and is not required to resolve the
+captured-matrix algebraic comparison. No source-divergent rewrite is
+justified by current evidence.
+
 **Spend QAP/query status (Phases 9.21.34–35):** both complete deterministic
 assignments satisfy their respective matrices, mapped helper correspondence
 is explicit, and independent quotient-divisibility checks pass. The
 transformation audit accounts for row permutations, A/B swaps, nonuniform
 factor normalizations, 333 expanded-relation-only matches, and the unmatched
-conditional-anchor/packed-position helpers. Those transformations support
-the projected relation but do not preserve the canonical QAP vectors: all
-eight vectors differ. No exact transformation of the variable-indexed
-QAP/query basis has been established. Semantic relation equivalence is
-evidence-supported for the pinned exports but is not a formal source-level
-proof; exact QAP equivalence, proving-query compatibility, parameter-to-
-circuit binding, and ceremony validity remain **Unverified**.
+conditional-anchor/packed-position helpers. Those transformations preserve the captured projected relation, as detailed
+above, but do not preserve the canonical QAP vectors: all eight vectors
+differ. No exact transformation of the variable-indexed QAP/query basis has
+been established. Relation equivalence for the captured matrices is
+established by Phase 9.21.43, but exact QAP equivalence, proving-query
+compatibility, parameter-to-circuit binding, and ceremony validity remain
+**Unverified**.
 
 **Spend circuit-specific setup status (Phases 9.21.36–37):** the local setup
 identity is the 98,777-row, 98,646-column matrix with fingerprint
@@ -397,7 +505,7 @@ These are distinct claims:
 
 | Claim | Status |
 |---|---|
-| Semantic relation equivalence | Evidence-supported for the pinned exports under the accepted variable map and helper projection; not a formal source-level proof. |
+| Semantic relation equivalence | Established for the captured production and pinned-reference matrices under the accepted variable map and helper projection; not a proof of arbitrary production synthesis paths. |
 | Exact canonical QAP equivalence | **Unverified**; all eight vectors differ. |
 | Proving-query compatibility | **Unverified**; no complete transform for A/B G1/G2, IC, and L queries has been established. |
 | Parameter-to-circuit binding | **Unverified**; point serialization compatibility does not bind parameters to this QAP. |
@@ -767,12 +875,13 @@ invalid assignments; the pinned upstream anchor equations are separately
 evaluated from their exported relation. These are focused subrelation
 witness tests, not fresh full Bellman circuit runs for each boundary value.
 
-The full pinned export comparison plus the two projection arguments supports
-the same semantic relation for the compared pinned R1CS exports. It is not a
-formal proof of source-code equivalence across all synthesis paths, nor does
-it establish exact ordered matrix equality, authentic parameter/query
-compatibility, or proof-generation readiness. Existing export artifacts and
-all accepted mappings remain unchanged.
+The full pinned export comparison plus the two projection arguments
+establishes the same semantic relation for the compared R1CS exports, as
+formalized in Phase 9.21.43. It is not a proof of source-code equivalence
+across all production synthesis paths, nor does it establish exact ordered
+matrix equality, authentic parameter/query compatibility, or proof-generation
+readiness. Existing export artifacts and all accepted mappings remain
+unchanged.
 
 Test-only implementation:
 [`sapling_spend_semantic_equivalence.py`](../tests/sapling_spend_semantic_equivalence.py)
