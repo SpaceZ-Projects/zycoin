@@ -92,6 +92,110 @@ formal source-level proof or a claim that arbitrary production synthesis
 paths have been independently verified. Exact ordered Spend matrix alignment
 and Groth16 compatibility remain **Unverified**.
 
+### Phase 9.21.42 — Production Spend audit against the source reference
+
+The production `constrain_sapling_spend` path was audited against the pinned
+Bellman 0.15 trace and the existing v7 semantic allocation map. The production
+matrix has 98,777 rows and 98,646 columns, matching the source dimensions, but
+its fingerprint is
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`;
+the independently verified source fingerprint is
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+**Production matrix identity is not established.**
+
+The production matrix was synthesized once for the pinned baseline witness.
+For the zero-value/alternating-direction and `u64::MAX`/all-right fixtures,
+the same witness-independent matrix was reused: each production host witness
+passed `_prepare_witness`, every source assignment was translated through the
+reviewed variable map, the local Merkle-position helper was assigned from the
+32 direction bits, and all 98,777 production rows were evaluated. All three
+assignments satisfy the production matrix. The two variant Bellman full-matrix
+exports completed with the pinned TestConstraintSystem hash
+`d37c738e83df5d9b0bb6495ac96abf21bcb2697477e2c15c2c7916ff7a3b6a89`.
+The source canonical fingerprint and full row comparisons for these fixtures
+were established by the Phase 9.21.40–41 reference differentials.
+
+The variable audit maps all 8 public/ONE variables and 98,637 of 98,638
+auxiliaries; every mapped assignment agrees for all three fixtures. The one
+unmapped production auxiliary is column 32,621, `Sapling Spend Merkle path
+position`, assigned the little-endian integer reconstructed from the 32 path
+directions. The unmapped source auxiliary is `Aux(76805)` at canonical column
+76,813, `conditional anchor/num`, assigned the public anchor. These roles are
+not interchangeable. Among mapped auxiliaries, 53,901 production/source
+canonical column indices differ and 52,520 variables are displaced in the
+relative allocation order. No mapped private allocation annotation string
+matches exactly: production uses flattened `Sapling Spend ...` names while
+Bellman uses hierarchical namespace/label annotations.
+
+The v7 semantic map attributes the column/order differences to these stages:
+
+| Semantic stage | Mapped auxiliaries | Different columns | Relative order displaced |
+|---|---:|---:|---:|
+| `ak.representation` | 774 | 352 | 352 |
+| `authorization-key` | 5 | 3 | 3 |
+| `authorization-randomizer` | 252 | 252 | 252 |
+| `diversifier-base` | 21 | 15 | 15 |
+| `g-d.representation` | 774 | 774 | 774 |
+| `merkle-authentication-path` | 44,192 | 44,192 | 42,811 |
+| `nk.fixed-base-multiplication` | 750 | 498 | 498 |
+| `nk.representation` | 774 | 352 | 352 |
+| `note-commitment` | 6 | 6 | 6 |
+| `note-commitment-randomness` | 1,002 | 750 | 750 |
+| `note-content.pedersen` | 982 | 982 | 982 |
+| `nullifier-rho` | 98 | 66 | 66 |
+| `pk-d.representation` | 774 | 774 | 774 |
+| `pk-d.scalar-multiplication` | 3,252 | 2,750 | 2,750 |
+| `randomized-authorization-key` | 772 | 520 | 520 |
+| `rho.representation` | 774 | 352 | 352 |
+| `value-commitment` | 1,263 | 1,263 | 1,263 |
+
+This table lists stages with at least one differing column; other mapped
+stages preserve the same indices and relative order. In the Merkle stage, the
+production helper first allocates a packed `position` scalar and its 32-bit
+decomposition, then allocates path levels. Bellman allocates each direction
+bit in its corresponding path-level sequence and reuses those bits directly
+for `g^position`. This accounts for the unmatched helper and the large
+Merkle-stage allocation displacement. Production also allocates all seven
+public inputs at entry, while Bellman inputizes `rk`, `cv`, `anchor`, and the
+nullifier chunks after 1,029, 29,075, 76,806, and 98,638 auxiliaries,
+respectively; the canonical public-input positions and values still match.
+
+The saved ordered-row correspondence pairs 98,775 of 98,777 rows with no
+ambiguous matches. It classifies 69,840 rows as exact A/B/C factors, 251 as
+A/B swaps, 28,351 as invertible factor normalizations, and 333 as matching
+only after expanding `A*B-C`; 48,546 paired rows move to a different index.
+The 333 expanded-only rows are 251 `pk_d` selection relations, 64 Merkle
+left/right relations, and 18 other curve, representation, public-input, and
+nullifier-packing relations. All 98,775 paired rows have different literal
+label strings; the correspondence retains both labels and compares equations
+over the semantic variable map rather than using labels or row ordinals as
+identity.
+
+The two unmatched source rows are 76,893 `(root - T) * value = 0` and 76,894
+`anchor = T`. Production projects out `T` and enforces
+`(root - anchor) * value = 0`; its separate row 32,701 reconstructs the
+packed path position. The prior algebraic audit supports the same projected
+relation and a uniquely determined packed position, but the incomplete
+variable map and different ordered matrices leave formal whole-circuit
+equivalence unresolved.
+
+| Finding | Classification |
+|---|---|
+| Matrix dimensions and public-input values/positions | Exact match |
+| 98,637 mapped auxiliary identities and assignments | Exact match on the mapped subset |
+| Allocation columns/order and paired row indices/factors | Ordering-only difference |
+| Conditional-anchor and packed-position helper correspondence | Unresolved; projected-relation equivalence is evidence-supported |
+| Complete ordered matrix identity | Unresolved / not established; fingerprints differ |
+| Demonstrated semantic relation mismatch | None found in the mapped-row audit; this is not a formal equivalence proof |
+
+The focused audit passed 1 test in 675.458 seconds. It performed one complete
+production synthesis, reused its matrix for the two variant assignments, and
+ran two Bellman variant exports. The test-only Rust exporter now also records
+the fixture diversifier for production host-witness reconstruction; no
+production circuit, Output path, setup, parameter, or proving gate changed.
+Production Spend matrix identity, exact QAP/query compatibility, and
+official-parameter binding remain **Unverified**.
+
 **Spend QAP/query status (Phases 9.21.34–35):** both complete deterministic
 assignments satisfy their respective matrices, mapped helper correspondence
 is explicit, and independent quotient-divisibility checks pass. The

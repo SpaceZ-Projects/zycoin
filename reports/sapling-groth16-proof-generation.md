@@ -89,6 +89,26 @@ matrix identity or official-parameter compatibility.
 Parameter-to-circuit binding, ceremony validity, and production Spend proving
 remain **Unverified**.
 
+**Phase 9.21.42 production Spend audit:** the production circuit and the
+verified pinned reference both have 98,777 rows and 98,646 columns, but their
+fingerprints differ: production
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`,
+reference
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+Production matrix identity is therefore not established. The audit mapped
+all 8 public/ONE variables and 98,637 auxiliaries; mapped assignments matched
+for the baseline, zero-value/alternating-path, and `u64::MAX`/all-right
+witnesses, and all 98,777 production rows were satisfied for each. Production
+was synthesized once; the two variant assignments were checked against that
+matrix. The allocation map shows 53,901 mapped auxiliaries in different
+columns and 52,520 displaced in relative order. The ordered-row artifact
+pairs 98,775 rows (69,840 exact factors, 251 A/B swaps, 28,351 invertible
+factor normalizations, 333 expanded-relation matches); the anchor/position
+helper correspondence and complete equivalence remain unresolved. The
+focused audit passed 1 test in 675.458 seconds. No proof was generated and
+the Spend proving gate remains closed; QAP/query compatibility,
+parameter-to-circuit binding, and ceremony validity remain **Unverified**.
+
 The Phase 9.21.38 full-vector check independently accumulated every official
 IC/H/L/A/B_G1/B_G2 section using ZyCoin's complete MSM and a separate Bellman
 0.15 loader. IC, L, A, B_G1, and B_G2 matched; H differed for the deterministic

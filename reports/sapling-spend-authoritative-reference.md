@@ -128,13 +128,11 @@ while reusing the witness-independent Bellman matrix.
 | Complete synthesis and complete matrix comparison | Test-only `constrain_source_faithful_spend` and pinned Bellman exporter | **Verified** against the retained Bellman matrix for three satisfying witnesses: exact dimensions, per-witness assignments and labels, public positions, and every ordered A/B/C row match. |
 
 The production `constrain_sapling_spend` assembler remains a separate
-implementation and was not modified. Its production matrix fingerprint and
-official-parameter binding are not inferred from the test-only result. The
+implementation and was not modified. Phase 9.21.42 records its independently
+synthesized matrix fingerprint and three-witness mapped-assignment audit. The
 isolated source-faithful composition passed complete ordered-matrix comparison
-against the retained Bellman matrix for three valid witnesses. Independent
-full Bellman matrix exports for the two added witnesses are verified;
-production Spend matrix equivalence and official parameter compatibility
-remain **Unverified**.
+against the retained Bellman matrix for three valid witnesses. Production
+matrix identity and official parameter compatibility remain **Unverified**.
 
 ### Phase 9.21.40 — Full source-order recomposition
 
@@ -247,6 +245,59 @@ post-synthesis anchor, point-coordinate, and authentication-sibling
 mutations. Other witness families remain unverified. Production Spend matrix
 identity, official-parameter compatibility, and ceremony validity remain
 **Unverified**.
+
+### Phase 9.21.42 — Production Spend audit against the reference
+
+The read-only production audit measured the production matrix at 98,777 rows
+and 98,646 columns, with fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+The verified pinned source matrix has the same dimensions but fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+Therefore, **production matrix identity is not established**.
+
+The audit synthesized production once with the baseline witness. It reused
+that witness-independent production matrix for the zero-value/alternating-
+direction and `u64::MAX`/all-right fixtures, validating each production host
+witness and transferring its source assignments through the reviewed v7
+semantic variable map. All 98,777 production rows were satisfied under each
+of the three mapped assignments. Across each fixture, all 8 public/ONE
+variables and 98,637 mapped auxiliaries have matching values; one auxiliary
+per implementation remains unmatched. Production column 32,621 is the
+little-endian packed Merkle path position. The source's `Aux(76805)` at column
+76,813 is the conditional-anchor copy of the public anchor. Production's
+additional position-reconstruction row and the source's two conditional-
+anchor rows remain unmatched as individual rows; an earlier algebraic audit
+supports their projected-relation equivalence, not a formal whole-circuit
+equivalence claim.
+
+Among mapped auxiliaries, 53,901 use different canonical columns and 52,520
+are displaced in relative allocation order. The largest displacement is in
+Merkle authentication: production allocates/range-decomposes a packed
+position before path levels, while Bellman allocates each direction bit in
+the corresponding path-level sequence and reuses those bits for `g^position`.
+Production allocates all public inputs at entry; Bellman inputizes `rk`, `cv`,
+`anchor`, and the nullifier chunks after 1,029, 29,075, 76,806, and 98,638
+auxiliaries. Public positions and values nevertheless match. No mapped
+private allocation annotation strings or paired row-label strings match
+literally; the equation correspondence uses semantic variable identities,
+not annotation or row-index equality.
+
+The retained row correspondence pairs 98,775 of 98,777 rows without
+ambiguity: 69,840 have exact A/B/C factors, 251 swap A/B, 28,351 use invertible
+factor normalizations, and 333 match only after expanding `A*B-C`. Of paired
+rows, 48,546 move index. These are ordering/factorization differences in the
+paired equations; the two unmatched anchor rows and the helper projection
+remain unresolved as complete-circuit correspondence. No semantic mismatch
+was found in the mapped-row audit, but exact ordered matrix identity and
+formal equivalence are not established.
+
+The focused production audit passed **1 test** in **675.458 seconds**:
+one production synthesis, two reused production-matrix witness evaluations,
+and two independent Bellman variant exports. The exporter now includes each
+fixture diversifier for production host-witness reconstruction. No production
+Spend or Output circuit, setup, parameter, or proving gate changed. Exact
+production QAP/query compatibility, official-parameter binding, and
+ceremony validity remain **Unverified**.
 
 ## Historical incremental porting sequence (completed)
 

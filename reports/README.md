@@ -34,11 +34,17 @@ and provenance; it is the source record for the focused reports below.
   circuit binding. Phases 9.21.40–41 record exact full source-order parity for
   the isolated test-only Spend composition across three valid witnesses,
   including independent full Bellman matrix exports for the two added
-  witnesses. Production matrix and official-parameter compatibility remain
-  unverified.
+  witnesses. [Phase 9.21.42](sapling-spend-authoritative-reference.md#phase-92142--production-spend-audit-against-the-reference)
+  records the read-only production audit: dimensions match the reference, but
+  the fingerprints differ, so production matrix identity is not established.
+  Official-parameter compatibility remains unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
+  [Phase 9.21.42](sapling-circuit-implementation.md#phase-92142--production-spend-audit-against-the-source-reference)
+  records the production/reference fingerprints, three-witness assignment
+  checks, and allocation/row differences; exact production matrix identity
+  remains unverified.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution, little-endian position interpretation,
   and evidence-supported semantic equivalence of the pinned exports; exact

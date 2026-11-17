@@ -43,6 +43,7 @@ struct Fixture {
     name: &'static str,
     seed_hex: &'static str,
     iteration: usize,
+    diversifier_hex: String,
 }
 
 #[derive(Serialize)]
@@ -79,6 +80,14 @@ struct Row {
     a: Vec<Term>,
     b: Vec<Term>,
     c: Vec<Term>,
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push_str(&format!("{:02x}", byte));
+    }
+    encoded
 }
 
 struct TraceConstraintSystem {
@@ -596,6 +605,7 @@ fn export_pinned_spend_fixture() {
             break address;
         }
     };
+    let diversifier_hex = hex_bytes(&payment_address.diversifier().0);
     let commitment_randomness = jubjub::Fr::random(&mut rng);
     let auth_path = vec![Some((Scalar::random(&mut rng), rng.next_u32() % 2 != 0)); tree_depth];
     let ar = jubjub::Fr::random(&mut rng);
@@ -664,6 +674,7 @@ fn export_pinned_spend_fixture() {
             name: "pinned sapling-crypto Spend test fixture iteration 0",
             seed_hex: "5862be3d763d318d17db37325406bce5",
             iteration: 0,
+            diversifier_hex,
         },
         upstream_test_asserted_hash: EXPECTED_UPSTREAM_TEST_HASH,
         observed_test_constraint_system_hash: test_hash,
@@ -724,6 +735,7 @@ fn assignment_variant_spend(name: &str) -> (Spend, Fixture) {
             break address;
         }
     };
+    let diversifier_hex = hex_bytes(&payment_address.diversifier().0);
     let commitment_randomness = jubjub::Fr::random(&mut rng);
     let auth_path = (0..tree_depth)
         .map(|level| {
@@ -779,6 +791,7 @@ fn assignment_variant_spend(name: &str) -> (Spend, Fixture) {
             name: fixture_name,
             seed_hex,
             iteration: 0,
+            diversifier_hex,
         },
     )
 }
