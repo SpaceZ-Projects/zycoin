@@ -138,6 +138,15 @@ and provenance; it is the source record for the focused reports below.
   complete chain-tip coverage, and explicit caller trust for `UNSPENT`. Its
   focused 18-test validation does not claim endpoint consensus authentication
   or transaction-level safety.
+- [Production Spend differential audit and migration plan](sapling-spend-authoritative-reference.md#production-spend-differential-audit-and-migration-plan) —
+  records the fresh production/reused Bellman baselines, concrete R1CS and
+  temporal-input blockers, complete source-order difference inventory, and
+  the minimal `ak`→`ar`→`rk` migration boundary. Exact ordered matrix identity
+  remains disproved for the retained exports; production migration and proving
+  remain blocked. Focused Spend/reference tests passed **34 passed, 3
+  skipped**, with 247,148 subtests; mapping and compatibility checks passed
+  **77 passed, 1 skipped**. See also the detailed
+  [implementation-stage inventory](sapling-circuit-implementation.md#production-spend-differential-audit-and-migration-plan).
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.

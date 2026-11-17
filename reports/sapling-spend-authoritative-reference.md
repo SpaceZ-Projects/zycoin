@@ -3244,3 +3244,136 @@ not certify endpoint completeness or consensus authenticity. No transaction
 was submitted and no prolonged monitoring was performed. See the [BTCZ
 Lightwalletd interoperability audit](btcz-lightwalletd-interoperability-audit.md)
 for pinned-source details and exact live ranges.
+
+### Production Spend differential audit and migration plan
+
+This is a read-only audit of `constrain_sapling_spend` against the pinned,
+test-only source-faithful composer. No production circuit, witness API,
+parameter, or proving gate changed.
+
+#### Baselines and evidence freshness
+
+Both matrices have retained dimensions of **98,777 rows × 98,646 columns**.
+The production regression freshly synthesized the current production matrix
+during this audit and confirmed fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+The Bellman fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127` is
+reused from the Phase 9.21.61 full source-reference verification; no complete
+Bellman export or source Spend synthesis was repeated here. The exact ordered
+matrices differ. The retained Phase 9.21.43 relation proof establishes
+equivalence only for those captured matrices under its explicit variable map
+and `T=A` / `P=Σ2^i d_i` helper projections; that proof was not regenerated
+in this audit. The current matrix fingerprints do not establish QAP/query
+compatibility or official-parameter binding.
+
+#### Current validation and backend boundary
+
+Production `_prepare_witness` is a host-only preflight invoked before the
+first R1CS allocation. The later Phase 9.21.63–64 changes supersede the
+earlier Phase 9.21.62 lifecycle findings: nullifier consistency, nonzero
+IVK, and nonidentity transmission-key checks now reject before mutation.
+The zero-value conditional-anchor rule remains unchanged. The separate
+`verify_spend_reference_witness` policy that requires unconditional anchor
+equality must not be substituted for that circuit rule.
+
+`SynthesisBackend` provides generic allocation, ownership, witness, linear
+combination, multiplication, and enforcement methods; `FreshSynthesisBackend`
+adds only a freshness property. Neither protocol declares the source
+`inputize` operation that allocates a public variable after preceding
+auxiliaries. Production `R1CS` requires public inputs first, and
+`constrain_sapling_spend` allocates all seven at entry. The test-only
+`SpendReferenceR1CS` models temporal inputization by overriding allocation
+through private R1CS state; its companion temporal-to-canonical copier is
+also test-only. It is not a production-safe adapter.
+
+Some gadget internals already accept `SynthesisBackend`, but the production
+composition still calls R1CS-specific wrappers. In particular,
+`constrain_sapling_randomized_authorization_key`, fixed-base multiplication,
+the BLAKE2s gadgets, Merkle authentication/conditional anchor,
+nullifier-rho, and nullifier multipacking depend on concrete `R1CS`
+variables, `range_check`/`boolean`, or private ownership/witness methods.
+The source-ordered BLAKE2s gadget is likewise R1CS-typed. The scalar
+multiplication overload accepts the protocol at its signature, but its
+runtime path distinguishes `R1CS` and `RecorderVariable`; that is not a
+generic implementation for an arbitrary conforming backend. The public
+production witness and assembly also expose concrete `Variable`-based types.
+
+#### Source-ordered discrepancy inventory
+
+The exact counts below are retained from Phases 9.21.42–43; they are not
+freshly reconstructed stage fingerprints. Source locations are in
+`src/sapling_spend_circuit.py` (`constrain_sapling_spend`, lines 384–607),
+`src/sapling_gadgets.py`, `src/blake2s_gadget.py`, and
+`tests/sapling_spend_reference_port.py` (`constrain_source_faithful_spend`,
+line 2252).
+
+| Source stage and current production stage | Recorded difference | Concrete blocker / migration requirement |
+|---|---|---|
+| `ak`, non-small-order check, `ar`, `rk`; production randomized-key helper | Source checks `ak` before allocating the 252 `ar` bits and inputizes `rk` afterward. Production allocates `ar` before the helper's key checks and allocates `rk` at entry. The retained map records 4 curve rows, 16 small-order rows, and 252 `ar` rows moved; `authorization-key` maps 5 auxiliaries (3 columns differ), `ar` maps 252 shifted auxiliaries, and randomized-key maps 772 (520 columns and 519 within-stage positions differ). | Point helpers are partly protocol-based, but the public randomized-key and fixed-base wrappers are R1CS-specific and assume early public indices. A supported delayed-input/canonical mapping boundary is required before this prefix can match source allocation order. |
+| `nsk`, `nk`, `ak`/`nk` representations, IVK | Source and production express the same semantic inputs, but the retained map records 750 `nk` fixed-base auxiliaries with 498 column/sequence differences, and each 774-variable `ak`/`nk` representation group with 352. Production calls `src.blake2s_gadget`; the source composer uses the source-ordered gadget in `src.sapling_blake2s`. | Representation/fixed-base call paths mix neutral internals with concrete public wrappers. Both BLAKE2s circuit implementations are R1CS-specific; migrate only after variable/bit ownership and source annotation/order are exposed through a supported backend. |
+| `g_d`, `pk_d`, value commitment, point representations | Source computes `g_d`/`pk_d`, then the value commitment, then `g_d`/`pk_d` representations. Production emits the `pk_d` representation before the value commitment and its `g_d` representation in the note helper. The map records 21 `g_d` point-check auxiliaries (15 columns differ), 3,252 `pk_d` multiplication auxiliaries (2,750 differ), and 774 representation auxiliaries for each affected group. The value-commitment group maps 1,263 auxiliaries, with 947 within-stage positions differing; 1,265 paired rows move. | `_constrain_sapling_value_commitment` is protocol-typed, but its production wrapper is R1CS-typed. Preserve source stage order, allocation order, and exact factors rather than merely reusing the relation. |
+| Note contents, Pedersen hash, `rcm` randomization | Source allocates `rcm` after hashing note contents; production allocates its bits before the note helper. The retained map records 982 note-content Pedersen auxiliaries shifted by stage timing, 1,002 `rcm`/randomization auxiliaries (750 columns and 498 sequence positions differ), and 6 note-commitment auxiliaries with different columns/order. | `_constrain_note_commitment` accepts `SynthesisBackend`, but the production entrypoint uses its concrete wrapper and preallocates `rcm`. Keep the tested Pedersen relation; change only orchestration and bit-allocation timing needed by source order. |
+| 32-level Merkle path and conditional anchor | Production first allocates packed position `P` and its 32-bit decomposition; source allocates/reuses each direction bit with its path level. The map records 44,192 Merkle auxiliaries with changed columns and 42,811 within-stage positions; 44,223 rows move. Production's extra row reconstructs `P=Σ2^i d_i`. Source uses `(root-T)*value=0` plus `anchor=T`; production uses `(root-anchor)*value=0`. | Merkle/anchor helpers use concrete R1CS APIs. The retained relation proof projects the uniquely determined `T` and `P`; exact Bellman matrix migration instead needs source allocation, inputization, labels, and row factors. Do not alter zero-value conditional semantics. |
+| Position multiplication, `rho`, nullifier BLAKE2s and multipacking | Source feeds the path direction bits directly to `g^position`; production feeds the packed-position decomposition. The `nullifier-rho` map records 98 auxiliaries with 66 column and sequence differences. Source inputizes nullifier chunks only after 98,638 auxiliaries; production allocated them at entry. | Nullifier-rho and multipacking wrappers are R1CS-typed; multipacking checks concrete public-input count/indexes. The nullifier BLAKE2s call is also R1CS-specific. Preserve little-endian bit order and 254+2 chunk order while routing delayed public inputs through the same temporal adapter. |
+
+Across the captured matrices, 98,637 of 98,638 auxiliaries and 98,775 of
+98,777 rows are paired; 53,901 mapped auxiliary columns differ, 52,520
+mapped allocations are displaced in relative order, and 48,546 paired rows
+move. Every paired row label differs. The retained comparison accounts for
+69,840 identical factor rows, 251 A/B swaps, 28,351 invertible
+factor-normalization rows, and 333 expanded-polynomial matches. These are
+captured-matrix results, not a claim of literal matrix or QAP identity.
+
+#### Recommended first migration boundary
+
+Do not begin with a wholesale composer rewrite or a BLAKE2s/Pedersen stage.
+The smallest useful circuit prefix is source-order `ak` allocation and
+curve/non-small-order checks, then `ar` allocation and fixed-base
+multiplication, `rk` addition, and late `rk` inputization. It is the first
+complete Spend prefix and avoids changing hash, note, or Merkle logic.
+
+Its prerequisite is a production-safe temporal-input backend/adapter with a
+documented public-input/auxiliary mapping and delayed `inputize` operation.
+It must not copy `SpendReferenceR1CS`'s access to `_allocate` or other private
+R1CS state. Keep the existing `SaplingSpendWitness`,
+`SaplingSpendAssembly`, and `constrain_sapling_spend` APIs as the compatibility
+boundary; adapt validated host witness data and map the result back to the
+existing assembly types.
+
+Before changing production for that prefix, add a focused differential test
+that compares a valid prefix on fresh production and recorder/reference
+backends: allocation sequence and assignments, exact labels and ordered
+A/B/C expressions, public `rk.u/rk.v` positions, and satisfaction. Include
+out-of-range, unassigned, non-Boolean, and foreign-owner scalar bits and
+invalid `ak`, asserting rejection before any backend mutation. Separately test
+the delayed-input canonical map. After the prefix passes, require the complete
+three-witness source matrix regression and the unchanged production
+98,777 × 98,646 fingerprint before moving to `nsk`/`nk`/IVK. Continue in
+source order; keep the existing relation-projection, QAP, official-parameter,
+and proving gates separate.
+
+**Readiness remains Not ready for production replacement or Spend proving.**
+The source-faithful composer remains test-only, exact ordered matrix identity
+is disproved for the retained production/reference exports, and production
+temporal inputization, source-specific QAP/query compatibility, and official
+parameter binding are not established. The detailed stage ledger is also
+recorded in the [implementation report](./sapling-circuit-implementation.md).
+
+#### Verification performed for this audit
+
+The focused production Spend and source-component/Bellman-reference
+regressions passed **34 tests, 3 skipped, and 247,148 subtests** in 423.58 s.
+The Spend temporal mapping, variable/row correspondence, semantic projection,
+allocation provenance, and compatibility-manifest regressions passed
+**77 tests, 1 skipped, and 39 subtests** in 1.18 s. The first group freshly
+synthesized production Spend and asserted its existing matrix fingerprint;
+the Bellman full-matrix fingerprint and relation projection were retained
+evidence, not fresh measurements.
+
+`compileall src tests`, targeted Ruff (`E4,E7,E9,F`), and
+`git diff --check` passed. Pylance reported no diagnostics in production
+Spend, gadget, or synthesis files; the reference test module has one existing
+unused-parameter diagnostic (`system` at line 368), left unchanged. No
+complete source Spend synthesis, Bellman exporter, setup test, or proving
+operation was run.
