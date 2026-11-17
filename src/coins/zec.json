@@ -29,6 +29,7 @@
       },
       "lightwalletd": {
         "status": "configured_unverified",
+        "proto_package": "cash.z",
         "endpoints": [
           "zec.rocks:443",
           "lwd.zcashexplorer.app:9067",

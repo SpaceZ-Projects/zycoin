@@ -45,6 +45,7 @@ and [compact formats](https://github.com/zcash/lightwallet-protocol/blob/299805c
 | Capability | Status | Evidence and limitation |
 |---|---|---|
 | Endpoint reachability, `GetLightdInfo` | **Verified** | The configured TLS endpoint responded. `GetLightdInfo` reports chain, activation, software version, and commit prefix. |
+| Configured gRPC service namespace | **Verified locally; endpoint compatibility unverified** | ZyCoin config selects `cash.bitcoinz`; local routing tests confirm every method path uses `/cash.bitcoinz.wallet.sdk.rpc.CompactTxStreamer/...`. This does not establish that the deployed endpoint implements the checked-in message schema or LWP v0.6.0. |
 | LWP v0.6.0 version declaration | **Unverified** | The live `lightwalletProtocolVersion` is empty. The matched BTCZ `LightdInfo` proto ends at field 15 and the response constructor does not assign field 18. Software version is not a protocol version. |
 | `GetLatestBlock` | **Verified for the probe** | Returned a 32-byte hash at height 1875241; a direct `GetBlock` at that height returned the same height and hash. |
 | Inclusive `GetBlockRange` and block linkage | **Partially Verified** | Activation, historical-output, and tip ranges returned consecutive heights. Every adjacent `prevHash` matched the preceding block hash; predecessor links were checked for heights 1865913 and 1875239. This is bounded endpoint evidence, not consensus authentication. |
@@ -127,6 +128,23 @@ observations above.
 The final focused spent-status and coin-registry run passed **65 tests** and
 **103 subtests**. This does not certify endpoint completeness or consensus
 authenticity.
+
+## Coin-specific service namespace routing
+
+ZyCoin now configures BitcoinZ mainnet with `proto_package: "cash.bitcoinz"`.
+The client binds all 21 methods in its existing `CompactTxStreamer` descriptor
+to `/cash.bitcoinz.wallet.sdk.rpc.CompactTxStreamer/<Method>` while retaining
+the checked-in protobuf message definitions. Local tests also assert Zcash's
+`cash.z` path, reject missing, malformed, unsupported, or coin-mismatched
+configuration, and preserve explicit namespace selection for custom coin
+definitions. This verifies ZyCoin's local routing only; it does not establish
+that the live BTCZ endpoint implements the checked-in message schema or LWP
+v0.6.0.
+
+The final focused run across routing, coin registry, and spent-status tests
+passed **70 tests and 113 subtests**. BTCZ spent status remains fail-closed
+when the endpoint does not report a supported protocol version. No live
+endpoint check was performed for this routing change.
 
 ## Follow-up — root-cause trace and refreshed endpoint probe (2026-11-17)
 

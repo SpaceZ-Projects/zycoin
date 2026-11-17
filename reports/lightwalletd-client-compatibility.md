@@ -13,6 +13,14 @@ can parse compact outputs and a separate full-range scan builds local
 commitment-tree state with continuity checks. Partial compact scans do not
 assign note positions.
 
+The gRPC service namespace is selected by the required
+`lightwalletd.proto_package` setting on configured networks: `cash.bitcoinz`
+for BitcoinZ and `cash.z` for Zcash. The client binds every method in the
+checked-in `CompactTxStreamer` descriptor to that namespace while retaining
+the existing protobuf message classes and serializers. This is service-path
+routing only; it does not establish that the BitcoinZ service implements the
+same protocol version or wire schema as the checked-in Zcash definitions.
+
 ## Findings and compatibility status
 
 The audit recorded successful live Lightwalletd information/latest-block,
@@ -73,3 +81,33 @@ Endpoint and RPC declarations are in the per-coin JSON under
 [`src/coins/`](../src/coins/). BitcoinZ compact output evidence is retained in
 [`tests/fixtures/btcz_mainnet_compact_output.json`](../tests/fixtures/btcz_mainnet_compact_output.json);
 the historical record includes scan ranges and endpoint-reported fields.
+The namespace-to-path mapping is covered by
+[`tests/test_lightwalletd_routing.py`](../tests/test_lightwalletd_routing.py);
+these local tests do not certify live endpoint protocol compatibility.
+
+## Coin-specific service routing verification
+
+The configured BitcoinZ mainnet service package is `cash.bitcoinz`, and
+Zcash mainnet is `cash.z`. Missing packages on configured networks, malformed
+or unsupported package names, and a Zcash namespace assigned to BitcoinZ (or
+vice versa) are rejected during configuration validation. Direct client
+construction also requires an explicit supported package. User-defined coins
+remain supported when they explicitly select one of the recognized packages.
+
+The client uses the existing `CompactTxStreamer` protobuf descriptor to bind
+all 21 declared RPC methods under the selected service namespace. Message
+classes, request serialization, and response deserialization remain the
+checked-in Zcash-generated definitions; service-path routing does not prove
+those definitions are wire-compatible with BitcoinZ.
+
+The final focused run
+`python -m pytest -q tests/test_lightwalletd_routing.py tests/test_coin_registry.py tests/test_sapling_spent_status.py`
+passed **70 tests and 113 subtests**. The regressions verify both package
+namespaces across all descriptor methods, explicit configuration validation,
+the existing custom-coin discovery behavior, and preservation of configured
+request timeout and protobuf serialization behavior. `compileall`,
+Pylance diagnostics for the changed Python files, `git diff --check`, and
+Ruff's `E4`, `E7`, `E9`, and `F` checks passed; the new routing test file also
+passes full Ruff checks. The full Ruff run on existing implementation files
+still reports unrelated pre-existing style findings, which were left
+unchanged. No endpoint was probed as part of this routing-only change.

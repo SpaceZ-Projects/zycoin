@@ -37,6 +37,7 @@
       },
       "lightwalletd": {
         "status": "partial",
+        "proto_package": "cash.bitcoinz",
         "endpoints": [
           "lightd.btcz.rocks:443"
         ],

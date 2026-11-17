@@ -23,11 +23,11 @@ and provenance; it is the source record for the focused reports below.
 - [Bitcore client compatibility](bitcore-client-compatibility.md) —
   REST history, transactions, response normalization, and Socket.IO findings.
 - [Lightwalletd compatibility](lightwalletd-client-compatibility.md) —
-  compact scanning, bounded live evidence, scanner limits, and fail-closed
-  Sapling nullifier status.
+  coin-specific service routing, compact scanning, bounded live evidence,
+  scanner limits, and fail-closed Sapling nullifier status.
 - [BitcoinZ Lightwalletd Sapling interoperability audit](btcz-lightwalletd-interoperability-audit.md) —
-  pinned-source comparison and bounded live evidence for BTCZ compact blocks,
-  tree metadata, and fail-closed spent status.
+  pinned-source comparison, namespace-routing evidence, and bounded live
+  evidence for BTCZ compact blocks, tree metadata, and fail-closed spent status.
 
 ## Sapling
 

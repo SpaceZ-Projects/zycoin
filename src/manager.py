@@ -109,6 +109,7 @@ class ClientManager:
             client = LightwalletdClient(
                 endpoint.hostname,
                 endpoint.port or 9067,
+                proto_package=network_config.lightwalletd_proto_package,
             )
 
         elif protocol in ("tcp", "ssl", "wss", "ws"):

@@ -14,6 +14,10 @@ _LIGHTWALLETD_RPCS = {
     "GetTaddressTxids",
     "GetTaddressTransactions",
 }
+_LIGHTWALLETD_PROTO_PACKAGES = {
+    "btcz": "cash.bitcoinz",
+    "zec": "cash.z",
+}
 
 
 class ConfigurationError(ValueError):
@@ -215,6 +219,29 @@ class CoinNetworkConfig:
             raise ConfigurationError(
                 f"{path}.lightwalletd.implemented_rpcs must not contain duplicates"
             )
+        proto_package = lightwalletd.get("proto_package")
+        if proto_package is None:
+            if endpoints or implemented_rpcs:
+                raise ConfigurationError(
+                    f"{path}.lightwalletd.proto_package is required when "
+                    "Lightwalletd is configured"
+                )
+        elif (
+            not isinstance(proto_package, str)
+            or proto_package
+            not in set(_LIGHTWALLETD_PROTO_PACKAGES.values())
+        ):
+            raise ConfigurationError(
+                f"{path}.lightwalletd.proto_package must be a supported "
+                "protobuf package"
+            )
+        else:
+            expected_package = _LIGHTWALLETD_PROTO_PACKAGES.get(coin_id)
+            if expected_package is not None and proto_package != expected_package:
+                raise ConfigurationError(
+                    f"{path}.lightwalletd.proto_package must be "
+                    f"{expected_package!r} for coin '{coin_id}'"
+                )
         if lightwalletd["status"] == "configured_unverified" and (
             not endpoints or "GetLightdInfo" not in implemented_rpcs
         ):
@@ -644,6 +671,10 @@ class CoinNetworkConfig:
     @property
     def lightwalletd_endpoints(self):
         return list(self.lightwalletd["endpoints"])
+
+    @property
+    def lightwalletd_proto_package(self):
+        return self.lightwalletd.get("proto_package")
 
     @property
     def addrtype_p2pkh(self):

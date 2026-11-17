@@ -52,6 +52,11 @@ In the current repository configuration, the IDs discovered are `btcz`,
 and capabilities vary by definition. Read each network's `transparent`,
 `sapling`, `electrum`, `bitcore`, and `lightwalletd` status/configuration
 before using it. Missing or unverified values are not inferred by the library.
+Configured Lightwalletd networks must declare a `lightwalletd.proto_package`:
+BitcoinZ uses `cash.bitcoinz`, and Zcash uses `cash.z`. This selects the gRPC
+service path only; ZyCoin continues to use its checked-in protobuf message
+definitions, and namespace selection does not establish protocol-version or
+wire-schema compatibility.
 
 ## BIP-39 key derivation and addresses
 
@@ -341,7 +346,13 @@ async def main():
     if not separator:
         raise ValueError("configured Lightwalletd endpoint must include a port")
 
-    client = LightwalletdClient(host, int(port), tls=True, rpc_timeout=10)
+    client = LightwalletdClient(
+        host,
+        int(port),
+        proto_package=network.lightwalletd_proto_package,
+        tls=True,
+        rpc_timeout=10,
+    )
     activation = network.sapling["activation_height"]
     try:
         await client.connect()
@@ -409,6 +420,7 @@ async def main():
     client = LightwalletdClient(
         host,
         int(port),
+        proto_package=network.lightwalletd_proto_package,
         tls=True,
         connection_timeout=5,
         rpc_timeout=10,
@@ -499,6 +511,7 @@ async def main():
     client = LightwalletdClient(
         host,
         int(port),
+        proto_package=coin_network.lightwalletd_proto_package,
         tls=True,
         connection_timeout=5,
         rpc_timeout=10,

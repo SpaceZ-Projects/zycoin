@@ -1,4 +1,4 @@
-"""Native asynchronous gRPC client for the Zcash Light Wallet Protocol."""
+"""Native asynchronous gRPC client for a Lightwalletd service."""
 
 import asyncio
 import inspect
@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Callable, Optional
 
 import grpc
+from google.protobuf import symbol_database
 from google.protobuf.message import Message
 
 from .errors import (
@@ -17,11 +18,44 @@ from .errors import (
 )
 from .protocol import compact_formats_pb2 as compact_pb2
 from .protocol import service_pb2 as pb2
-from .protocol import service_pb2_grpc
+
+_SUPPORTED_PROTO_PACKAGES = frozenset({"cash.bitcoinz", "cash.z"})
+
+
+class _NamespacedCompactTxStreamerStub:
+    def __init__(self, channel, proto_package: str) -> None:
+        service = pb2.DESCRIPTOR.services_by_name["CompactTxStreamer"]
+        service_name = f"{proto_package}.wallet.sdk.rpc.{service.name}"
+        symbols = symbol_database.Default()
+        self._methods = {}
+
+        for method in service.methods:
+            request_type = symbols.GetSymbol(method.input_type.full_name)
+            response_type = symbols.GetSymbol(method.output_type.full_name)
+            rpc = (
+                "stream_stream"
+                if method.client_streaming and method.server_streaming
+                else "stream_unary"
+                if method.client_streaming
+                else "unary_stream"
+                if method.server_streaming
+                else "unary_unary"
+            )
+            self._methods[method.name] = getattr(channel, rpc)(
+                f"/{service_name}/{method.name}",
+                request_serializer=request_type.SerializeToString,
+                response_deserializer=response_type.FromString,
+            )
+
+    def __getattr__(self, method: str) -> Callable[..., Any]:
+        try:
+            return self._methods[method]
+        except KeyError:
+            raise AttributeError(method) from None
 
 
 class LightwalletdClient:
-    """Async client for the official Lightwalletd gRPC service.
+    """Async client for a configured Lightwalletd gRPC service namespace.
 
     Protobuf messages and byte fields are returned unchanged. Transaction
     inputs must be serialized bytes; no hex or byte-order conversions occur.
@@ -34,6 +68,7 @@ class LightwalletdClient:
         host: str,
         port: int = 9067,
         *,
+        proto_package: str | None = None,
         tls: bool = True,
         credentials: Optional[grpc.ChannelCredentials] = None,
         connection_timeout: float = 10.0,
@@ -47,16 +82,27 @@ class LightwalletdClient:
             raise ValueError("timeouts must be greater than zero")
         if credentials is not None and not tls:
             raise ValueError("credentials require TLS to be enabled")
+        if not isinstance(proto_package, str) or not proto_package.strip():
+            raise ValueError(
+                "proto_package must be explicitly configured as "
+                "'cash.bitcoinz' or 'cash.z'"
+            )
+        if proto_package not in _SUPPORTED_PROTO_PACKAGES:
+            raise ValueError(
+                "unsupported Lightwalletd proto_package "
+                f"{proto_package!r}; expected 'cash.bitcoinz' or 'cash.z'"
+            )
 
         self.host = host.strip()
         self.port = port
+        self.proto_package = proto_package
         self.tls = tls
         self.credentials = credentials
         self.connection_timeout = connection_timeout
         self.rpc_timeout = rpc_timeout
 
         self._channel: Optional[grpc.aio.Channel] = None
-        self._stub: Optional[service_pb2_grpc.CompactTxStreamerStub] = None
+        self._stub: Optional[_NamespacedCompactTxStreamerStub] = None
         self._connect_lock = asyncio.Lock()
         self.on_status: Optional[Callable[[str], Any]] = None
 
@@ -103,7 +149,10 @@ class LightwalletdClient:
                 ) from exc
 
             self._channel = channel
-            self._stub = service_pb2_grpc.CompactTxStreamerStub(channel)
+            self._stub = _NamespacedCompactTxStreamerStub(
+                channel,
+                self.proto_package,
+            )
             await self._notify_status("connected")
 
     async def close(self) -> None:
@@ -122,7 +171,7 @@ class LightwalletdClient:
         if inspect.isawaitable(result):
             await result
 
-    def _require_stub(self) -> service_pb2_grpc.CompactTxStreamerStub:
+    def _require_stub(self) -> _NamespacedCompactTxStreamerStub:
         if self._stub is None:
             raise LightwalletdConnectionError(
                 "Client is not connected; call connect() first"
