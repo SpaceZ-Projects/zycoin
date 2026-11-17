@@ -80,6 +80,10 @@ and provenance; it is the source record for the focused reports below.
   evaluation-factor sparsity, assesses exact alternatives and their resource
   costs, and records why no bounded certificate-producing solver was
   implemented; full-affine and satisfying-domain existence remain unresolved.
+  [Phase 9.21.55](sapling-spend-authoritative-reference.md#phase-92155--production-migration-feasibility-for-the-source-faithful-spend-circuit)
+  audits replacing production Spend with the test-only source-faithful
+  circuit, identifying the temporal-input/QAP and public-witness/API
+  integration blockers while keeping official parameter binding separate.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.

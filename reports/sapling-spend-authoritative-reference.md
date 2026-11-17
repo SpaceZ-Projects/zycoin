@@ -2320,3 +2320,169 @@ compatibility-manifest tests passed **29 tests in 3.140 s**. `compileall`,
 manifest JSON parsing, targeted Ruff for the modified test, and
 `git diff --check` passed. No factorization, witness synthesis, or query-point
 transformation was run; none is counted as a passing computation.
+
+### Phase 9.21.55 — Production migration feasibility for the source-faithful Spend circuit
+
+This is a read-only integration audit. The isolated source-faithful circuit
+is feasible to migrate in principle, and doing so would remove the need to
+transform H coordinates from the current production matrix. It is not a
+drop-in module move: allocation/index semantics, public witness validation,
+and the exported assembly shape must be bridged. No implementation or
+expensive synthesis/export was performed in this phase.
+
+**Evidence.** The source-faithful test port matches the pinned Bellman matrix
+for three valid witnesses, including complete ordered A/B/C rows, labels,
+allocation identities and assignments, public positions, and satisfaction.
+The expected matrix is 98,777 rows by 98,646 columns with fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The current production assembler has the same dimensions but fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+Thus retaining the production matrix would require the unresolved QAP/H
+transformation; synthesizing the source-faithful matrix instead would make
+the circuit-side H coordinates direct, subject to independent QAP and
+parameter checks below.
+
+#### Isolated component inventory and corresponding production code
+
+The test-only implementation is
+[`tests/sapling_spend_reference_port.py`](../tests/sapling_spend_reference_port.py);
+the current assembler is
+[`src/sapling_spend_circuit.py`](../src/sapling_spend_circuit.py).
+
+| Isolated component/helpers | Current production counterpart / migration concern |
+|---|---|
+| `SpendReferenceWitness`, `SpendReferenceAssembly`, `SourceOrderedConditionalAnchorResult`, and `constrain_source_faithful_spend` | `SaplingSpendWitness`, `SaplingSpendAssembly`, and `constrain_sapling_spend`; the public dataclasses and returned fields differ. |
+| Result/witness records: `EdwardsPointWitnessVariables`, `MontgomeryNumberWitness`, `MontgomeryPointWitness`, `SignedLookupWitness`, `PedersenHashResult`, `NoteCommitmentResult`, `ValueCommitmentResult`, `MerkleAuthenticationResult`, `ConditionalAnchorResult`, `IvkBlake2sResult`, `NullifierBlake2sResult`, and `NullifierMultipackingResult` | Internal source-port contracts for returning allocated handles, witness points, and digest/multipacking bits; production needs a deliberate mapping to the existing `CircuitPoint`, gadget result, and `SaplingSpendAssembly` types. |
+| `SpendReferenceR1CS`: temporal `alloc_public`, public-position and auxiliary-index maps, canonical-column mapping, source matrix serialization | `R1CS` requires all public inputs before private allocations and indexes QAP assignments by canonical variable order. The test adapter preserves Bellman event order but is not directly consumable by `QAP.from_r1cs`. |
+| Edwards/Montgomery conversion and point helpers: `spend_edwards_to_montgomery_coordinates`, `allocate_spend_montgomery_point`, `constrain_spend_montgomery_add`, `constrain_spend_montgomery_into_edwards`, `constrain_spend_edwards_point_witness/double/add/not_small_order/repr`, and point/LC validation helpers | `src/jubjub.py` supplies point arithmetic; `src/sapling_gadgets.py` supplies generalized point allocation, representation, arithmetic, and validation. Source-specific witness encodings, formulas, labels, and row order still need porting or exact reuse proof. |
+| Fixed-base and variable-base multiplication: scalar-bit allocation, `spend_fixed_base_tables`, cached tables, `_constrain_spend_lookup3_xy`, `_spend_boolean_and`, signed Boolean handling, `constrain_spend_fixed_base_mul`, `constrain_spend_edwards_point_mul`, and select helpers | Production fixed-base/scalar-multiplication gadgets exist in `src/sapling_gadgets.py`; preserve source window order, table selection, Boolean allocations, and error checks without changing shared Output behavior. |
+| Scalar/Boolean helpers: `_spend_circuit_bit_value`, `_constrain_spend_unchecked_field_bits`, `_reuse_or_allocate_spend_bits`, `_reuse_spend_bits`, `_spend_boolean_value`, `_spend_boolean_lc`, `_constrain_spend_strict_field_bits`, `_is_spend_fixed_base_base`, `_validate_montgomery_number`, and `_montgomery_lc` | These encode source-specific bit types, canonicality, preconstrained-bit reuse, Montgomery witness validation, and table behavior; retain tests for ownership, malformed inputs, and rejection before mutation. |
+| Spend Montgomery Pedersen: `spend_pedersen_montgomery_tables`, signed lookup coefficient/expression helpers, `constrain_spend_signed_montgomery_lookup`, `constrain_spend_pedersen_hash` | Production Pedersen helpers/tables are in `src/sapling_gadgets.py`. The source-faithful form is specific to Bellman's signed three-bit Montgomery lookup and must remain isolated from Output unless exact parity is established. |
+| Value and note commitments: `constrain_spend_value_commitment`, `_constrain_spend_unchecked_field_bits`, `constrain_spend_note_commitment`, bit reuse/allocation helpers | Production `constrain_sapling_value_commitment` and `constrain_note_commitment`; exact source order and reuse of value/representation bits are required. |
+| Merkle and anchor: `constrain_spend_merkle_authentication_path`, `constrain_spend_conditional_anchor`, `constrain_spend_source_order_conditional_anchor` | Production `constrain_merkle_authentication_path` and `constrain_sapling_conditional_anchor`; source allocates direction bits in path order, reuses them for position multiplication, and inputizes the anchor late. |
+| IVK/nullifier hashing and public packing: `constrain_spend_ivk_blake2s`, `constrain_spend_nullifier_blake2s`, `constrain_spend_nullifier_multipacking`, bit readers and output wrappers | Production `constrain_sapling_ivk`, `constrain_sapling_nullifier_hash`, and `constrain_sapling_nullifier_multipacking` exist. The isolated port calls `tests.bellman_blake2s_reference` for Bellman-exact allocation/coalescing, so this test dependency must be replaced with a production-safe implementation before shipping. |
+| `_validate_spend_reference_witness`, `_spend_point_witness`, `_inputize_spend_point`, and private Montgomery/Boolean helpers | Production `_prepare_witness` is stricter and validates derived key, diversifier, commitment, path position, nullifier, and public-input consistency before mutation. Keep the existing admission contract rather than substituting the smaller reference validator. |
+
+The isolated implementation imports production `R1CS`, `Point`, scalar
+constants, bit primitives, and `sapling_fixed_base_generator`; it also
+imports `CircuitBit`/`_NegatedBit` and Bellman-specific negated bits from
+production and test-only modules, respectively. It has no production-safe
+standalone API today. The full comparison harness and witness extraction live
+in `tests/test_sapling_spend_reference_port.py`; the Rust exporter and pinned
+Bellman/Sapling dependencies live under
+`tests/reference/sapling-output-qap/`. They are test infrastructure, not
+runtime dependencies. `setup.py` packages `src` as the `zycoin` package but
+does not package `tests` as an importable runtime package.
+
+#### Exact production replacement requirements and blockers
+
+1. Retain the current public `SaplingSpendWitness` contract and run
+   `_prepare_witness`-equivalent admission before mutating the caller's
+   system. The test port's smaller witness contains only `ak`, `ar`, `nsk`,
+   `g_d`, value/openings, path, and anchor; it does not accept or validate the
+   production witness's `nk`, `ivk`, diversifier, `pk_d`, note commitment,
+   randomized key, value commitment, position, nullifier, or seven public
+   inputs.
+2. Preserve the existing `constrain_sapling_spend` callable and
+   `SaplingSpendAssembly` attributes (including relation counts and exposed
+   variable handles), or introduce an explicit API transition. The reference
+   assembly has different field names and does not expose every production
+   result.
+3. Preserve Bellman's temporal allocation and inputization events while
+   producing canonical columns: implicit ONE at 0; public positions 1–7 in
+   order `rk.u`, `rk.v`, `cv.u`, `cv.v`, `anchor`, `nullifier_chunk_0`,
+   `nullifier_chunk_1`; then auxiliaries. The reference inserts `rk` after
+   1,029 auxiliaries, `cv` after 29,075, `anchor` after 76,806, and nullifier
+   chunks after all 98,638 auxiliaries. A direct `SpendReferenceR1CS` cannot
+   simply be passed to the production QAP: its temporal variable storage
+   indices differ from the canonical indices assumed by `QAP`.
+4. Preserve all 98,777 ordered rows, 98,646 columns, labels, A/B/C terms,
+   assignments, and the expected fingerprint above. Do not equate relation
+   equivalence or a matching row count with matrix equality.
+5. Keep the existing parameter parser and six-section query layout. The
+   recorded official Spend sections are IC=8, H=131,071, L=98,638,
+   A=85,390, B_G1=61,300, B_G2=61,300; the public-input order and all
+   437,707 canonical point encodings already match the pinned Bellman loader.
+   The remaining A-query identity for the source conditional-anchor
+   auxiliary must not be fabricated or conflated with local variable
+   allocation.
+
+With an exact source matrix, the production-to-Bellman H transformation is
+unnecessary: both sides use the same ordered R1CS and variable/query
+coordinates, so QAP construction is direct. This conclusion is only about
+removing a coordinate transform. It does **not** establish that the official
+parameter ceremony was generated from this exact matrix. The parameter file
+has no circuit identifier; Phase-1 and ceremony-era setup evidence are still
+missing. Matrix equality, parser compatibility, parameter-to-circuit binding,
+and ceremony validity remain separate claims.
+
+#### Component migration plan
+
+1. **Production-safe circuit logic:** move the source-specific Montgomery,
+   Pedersen, source-order value/note commitment, Merkle/anchor, fixed-base,
+   and nullifier composition into a Spend-local `src` module. Remove all
+   imports from `tests.*`; preserve the production witness admission and
+   public function/dataclass contracts. Do not alter shared Output gadgets
+   merely to deduplicate code.
+2. **Allocation/index adapter:** promote the temporal-input adapter only as
+   a production-internal staging backend. After synthesis, canonicalize its
+   public/auxiliary identities and remap every LC and returned assembly
+   variable into the caller's ordinary fresh `R1CS`, so existing QAP,
+   assignment, and public-input APIs remain valid. Verify transaction-like
+   behavior: invalid inputs and failed staging must leave the caller's
+   system unchanged. Avoid changing generic `R1CS` ordering rules used by
+   Output.
+3. **Differential instrumentation:** retain the current test port or a
+   frozen independent equivalent, exact row/label/assignment comparator,
+   mutations, and report fixtures under `tests/`. Keep these out of runtime
+   imports and wheel contents.
+4. **Bellman reference tooling:** retain the pinned Rust exporter and
+   `Cargo.lock` as test-only tooling. Do not add a Rust/native production
+   dependency or regenerate the expected matrix fingerprint from the
+   implementation under test.
+5. **Witness and proof interfaces:** preserve the rich production witness
+   validation, public input order, `SaplingSpendAssembly` surface, and the
+   generic seven-input `verify_sapling_spend_proof` interface. There is no
+   production `prove_sapling_spend` API today; this migration must not add
+   one, enable Spend proving, or change readiness gates.
+
+#### Risks and required verification stages
+
+- **Allocation and labels:** rerun the source trace comparison for every
+  allocation event and all ordered row expressions; labels and allocation
+  order are significant for the pinned matrix even when relations are
+  algebraically equivalent.
+- **Witness-dependent behavior:** exercise baseline, zero-value/alternating
+  path, and maximum-value/all-right path; verify conditional-anchor behavior
+  and that direction bits are reused exactly. Add malformed, out-of-range,
+  mismatched-derived-field, non-fresh-system, and before-mutation rejection
+  cases from the production contract; retain foreign-owner checks at
+  individual gadget boundaries.
+- **Performance and memory:** the source port's prior full synthesis took
+  about 50 seconds per witness; canonical staging/remapping adds memory and
+  runtime and must be measured before adoption.
+- **Output/shared primitives:** run the existing Output production/recorder
+  and gadget regressions. Prefer Spend-local helpers; any shared-helper
+  change requires unchanged Output matrices and fingerprints.
+- **Parameter/QAP separation:** after exact matrix parity, compare complete
+  QAP A/B/C/H vectors and direct accumulations for IC, H, L, A, B_G1, and
+  B_G2 using the unchanged official parser. Keep parameter-to-circuit
+  binding and ceremony validity **Unverified**.
+
+Recommended gates and measured historical runtime guides (not rerun here):
+
+| Stage | Required gate | Prior observed runtime |
+|---|---|---:|
+| Reusable component trace regressions | Existing isolated gadget/reference trace suite, then production API validation tests | 63.49 s for the previously recorded 52-test/273-subtest Sapling gadget regression; not a migration run |
+| Full matrix parity | Independent Bellman export and candidate production synthesis for at least three valid witnesses; compare all variables, positions, labels, ordered rows, assignments, satisfaction, and fingerprint | Baseline differential 60.09 s; the two boundary-witness end-to-end runs 96.982 s and 94.455 s, about 4.2 minutes total |
+| QAP and official query use | Compare QAP vectors and all six direct official-query accumulations; do not use synthetic setup | Existing official Spend accumulation regression took 1,152.794 s (~19.2 min) |
+| Packaging and cross-circuit regression | Verify no test/Rust imports at runtime; run Output and public-input/API regressions | Must be measured after migration |
+
+**Feasibility verdict:** technically feasible, because the isolated
+implementation already meets the pinned matrix target on three witnesses.
+It is **not ready for production replacement** until the temporal-input to
+canonical-R1CS/QAP bridge, richer witness validation, return-type compatibility,
+and production-safe Bellman-exact BLAKE2s path are resolved and the full
+verification stages pass. No code was changed, Spend proving remains gated,
+and official parameter-to-circuit binding and ceremony validity remain
+**Unverified**.

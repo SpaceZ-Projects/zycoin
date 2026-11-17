@@ -6380,6 +6380,43 @@ representation was established, so no solver was added. Full-affine H-map
 existence and the separately defined satisfying-assignment-only question
 remain **Unresolved**. No synthesis or H-query-point work was performed.
 
+### Phase 9.21.55 — Source-faithful Spend production migration assessment
+
+The test-only source-faithful Spend implementation is a feasible basis for a
+production replacement, but it is not a drop-in move. It has already matched
+the pinned Bellman matrix for three valid witnesses: 98,777 rows,
+98,646 columns, fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+Current production has the same dimensions but a different fingerprint,
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+Using the source-faithful matrix would make H coordinates direct and remove
+the need to transform the current production H; it would not itself establish
+official-parameter binding.
+
+The main integration blockers are the test port's temporal public-input
+allocation adapter versus the production `R1CS`/`QAP` canonical input-first
+indexing; the port's reduced `SpendReferenceWitness` and different assembly
+result versus the richer existing witness/API; and its runtime import of
+`tests.bellman_blake2s_reference`. A production-only staging adapter with
+canonicalization into the existing fresh R1CS is the least broad design:
+preserve source allocation/row order internally, remap public/auxiliary
+columns and returned assembly handles before exposing the ordinary R1CS.
+Keep generic R1CS and shared Output gadgets unchanged unless isolated tests
+prove that a shared change is necessary.
+
+Required gates are (1) production witness admission and API compatibility;
+(2) per-component ordered trace parity; (3) independent Bellman comparison
+for at least three valid witnesses against every allocation, public position,
+label, assignment, ordered A/B/C row, satisfaction result, and the expected
+fingerprint; (4) QAP and all-six-section official query accumulation
+regressions; and (5) Output, packaging, and no-test-import checks. Historical
+guides are about 4.2 minutes for the three source-port full-matrix
+differentials, 19.2 minutes for official Spend query accumulation, and 63.49
+seconds for the cited Sapling gadget regression; these are not fresh
+migration runs. No migration was implemented, Spend proving remains gated,
+and ceremony validity and parameter-to-circuit binding remain
+**Unverified**. See the [authoritative migration audit](sapling-spend-authoritative-reference.md#phase-92155--production-migration-feasibility-for-the-source-faithful-spend-circuit).
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the
