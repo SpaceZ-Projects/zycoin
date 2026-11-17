@@ -4,10 +4,11 @@
 
 BitcoinZ Lightwalletd Sapling compact blocks are **Partially Verified** for the
 bounded operations tested below. End-to-end LWP v0.6.0 compatibility is
-**Unverified**: the endpoint does not report `lightwalletProtocolVersion`, and
-its checked-in server protocol definition predates that field. The endpoint
-does return Sapling compact outputs and spend nullifiers, but its compact-block
-Sapling tree sizes are incorrect in the sampled output-bearing blocks.
+**Unverified**: the endpoint does not report `lightwalletProtocolVersion`,
+because the matched BTCZ server source has no such protobuf field or response
+assignment. The endpoint does return Sapling compact outputs and spend
+nullifiers, but its compact-block Sapling tree sizes default to zero in the
+sampled output-bearing blocks.
 
 ZyCoin's spent-status API therefore remains fail-closed for this endpoint:
 without a reported supported protocol version, it returns `UNKNOWN` before
@@ -44,11 +45,11 @@ and [compact formats](https://github.com/zcash/lightwallet-protocol/blob/299805c
 | Capability | Status | Evidence and limitation |
 |---|---|---|
 | Endpoint reachability, `GetLightdInfo` | **Verified** | The configured TLS endpoint responded. `GetLightdInfo` reports chain, activation, software version, and commit prefix. |
-| LWP v0.6.0 version declaration | **Unverified** | The live `lightwalletProtocolVersion` is empty. The matched server's `LightdInfo` source and `GetLightdInfo` construction do not define/populate field 18. Software version is not a protocol version. |
+| LWP v0.6.0 version declaration | **Unverified** | The live `lightwalletProtocolVersion` is empty. The matched BTCZ `LightdInfo` proto ends at field 15 and the response constructor does not assign field 18. Software version is not a protocol version. |
 | `GetLatestBlock` | **Verified for the probe** | Returned a 32-byte hash at height 1875241; a direct `GetBlock` at that height returned the same height and hash. |
 | Inclusive `GetBlockRange` and block linkage | **Partially Verified** | Activation, historical-output, and tip ranges returned consecutive heights. Every adjacent `prevHash` matched the preceding block hash; predecessor links were checked for heights 1865913 and 1875239. This is bounded endpoint evidence, not consensus authentication. |
 | Sapling compact output and spend fields | **Partially Verified** | Heights 1865913–1865932 returned 51 outputs and 28 spends. Sampled output fields were 32-byte `cmu`, 32-byte ephemeral key, and 52-byte ciphertext; sampled Sapling nullifiers were 32 bytes. This does not establish completeness for all heights. |
-| Sapling compact tree-size metadata | **Unsupported for reliable size checks** | All 20 blocks in the output-bearing range reported size 0 despite 51 outputs; recent sampled blocks also reported 0. The exact server source reads `trees.sapling.size` from verbose `getblock`, but the pinned Core `blockToJSON` response has no `trees` member. The absent JSON field decodes to zero. ZyCoin's tree scanner rejects the resulting size mismatch rather than accepting it. |
+| Sapling compact tree-size metadata | **Unsupported for reliable size checks** | All 20 blocks in the output-bearing range reported size 0 despite 51 outputs; the refreshed tip window also reported zero with one Sapling output. The server decodes `trees.sapling.size` from verbose `getblock`, but pinned Core `blockToJSON` has no `trees` member; Go JSON unmarshalling leaves the nested `uint32` at its zero value. The server copies that zero into `ChainMetadata`; ZyCoin rejects the mismatch. |
 | `GetTreeState` | **Partially Verified** | Direct read-only calls returned state at activation height 328500 and at tip height 1875242. The Sapling state strings were nonempty (6 and 748 hex characters respectively); state serialization and roots were not independently decoded or authenticated. This RPC is not declared in ZyCoin's configured BTCZ RPC list or client wrapper. |
 | Sapling activation boundary | **Partially Verified** | The pinned Core `chainparams.cpp` activates both Overwinter and Sapling at 328500. `GetBlockRange(328500, 328502)` succeeded. `GetBlock(328499)` failed while parsing transaction 0 with `fOverwinter flag must be set`. The matched Lightwalletd parser explicitly rejects non-Overwintered transactions and versions below 4; this is a parser limitation at the pre-activation boundary, not evidence that the chain block is malformed. |
 | `GetBlockRangeNullifiers` | **Unverified at the endpoint** | The matched server source defines the RPC, but ZyCoin does not configure or call it, and no live RPC probe was made. The scanner uses the ordinary `GetBlockRange`, whose sampled compact transactions include Sapling spends. |
@@ -68,19 +69,36 @@ transactions or that absent data proves a note unspent.
 For Sapling, the server parser serializes `CompactSaplingSpend.nf` and compact
 output `cmu`, ephemeral key, and ciphertext prefix. The corresponding field
 numbers and wire types are compatible with the pinned protocol's Sapling
-compact fields. The server's checked-in `service.proto` is not fully in sync
-with its generated gRPC service code; observed calls use the standard Zcash
-gRPC service path and succeeded. This source-generation mismatch is another
-reason not to certify the whole endpoint as LWP v0.6.0 from source inspection
-alone.
+compact fields. The server's checked-in `service.proto` identifies the package as
+`cash.bitcoinz.wallet.sdk.rpc`, and its `BlockRange` contains only `start` and
+`end` (no v0.6.0 `poolTypes` field). Its `LightdInfo` definition ends at field
+15. The pinned Zcash LWP v0.6.0 schema instead defines `poolTypes` and
+`lightwalletProtocolVersion` at field 18. The endpoint returns responses to
+ZyCoin's standard Zcash service-path calls, but the BTCZ checked-in proto and
+observed wire behavior do not establish full v0.6.0 conformance.
 
-For tree sizes, `common.getBlockFromRPC()` reads `Trees.Sapling.Size` from
-verbose BitcoinZ `getblock`. In the pinned Core source, `blockToJSON()` emits
-the Sapling root and value-pool information but not a `trees` object. The
-Lightwalletd JSON struct therefore receives a default size of zero. The live
-range containing 51 Sapling outputs but reporting zero tree size confirms the
-observable mismatch. Although `GetTreeState` responded, that does not repair
-the per-block metadata required for the local full-tree scanner.
+For tree sizes, `common.getBlockFromRPC()` unmarshals verbose BitcoinZ
+`getblock` JSON into `BitcoinZRpcReplyGetblock1.Trees.Sapling.Size`, calls
+`block.ToCompact()`, then assigns that value to
+`ChainMetadata.SaplingCommitmentTreeSize`. Pinned BitcoinZ Core
+`blockToJSON()` emits `finalsaplingroot` and `valuePools`, but does not emit a
+`trees` JSON member. Because the Go field is a non-pointer `uint32`,
+unmarshalling the missing nested field leaves it at zero; there is no
+server-side error or fallback. The zero is then serialized into every compact
+block from that RPC path. This precisely accounts for the live zero-size
+observations.
+
+The pinned Core does have a `z_gettreestate` RPC, which the BTCZ server calls
+for `GetTreeState`; the server forwards the returned Sapling `FinalState`
+string. That response is serialized tree state, not an explicit per-block
+leaf-count field. Neither the checked-in Core `blockToJSON` JSON nor the
+server's tree-state reply path exposes a verified integer that can safely be
+copied into `ChainMetadata`. Recovering the size from the state would require
+a protocol-correct decoder and focused Core/server tests; accumulating output
+counts would require complete activation-to-height history and correct
+reorg/cache handling. Neither method is implemented or independently
+verified here. The exact size must not be inferred from the zero field,
+compact block alone, or the tree-state string without that work.
 
 ## Spent-status consequence
 
@@ -109,3 +127,112 @@ observations above.
 The final focused spent-status and coin-registry run passed **65 tests** and
 **103 subtests**. This does not certify endpoint completeness or consensus
 authenticity.
+
+## Follow-up — root-cause trace and refreshed endpoint probe (2026-11-17)
+
+### Protocol version path
+
+The endpoint's reported `version` (`v1.1.1-inject-heartbeat`) is the server
+build version, not the LWP version. In the matched BTCZ source:
+
+1. `Makefile` sets linker variables for `common.Version`, `GitCommit`,
+   `Branch`, `BuildDate`, and `BuildUser`; `Version` is generated from
+   `git describe --tags`. There is no LWP-version build variable.
+2. `walletrpc/service.proto` defines `LightdInfo` only through field 15
+   (`donationAddress`). It has no field 18
+   (`lightwalletProtocolVersion`).
+3. `common.GetLightdInfo()` builds the response and sets the build fields,
+   chain name, activation height, and tip data, but cannot assign the absent
+   protocol field.
+4. `frontend.GetLightdInfo()` returns that response unchanged. Protobuf
+   serialization therefore omits field 18; a client generated from the
+   official v0.6.0 schema reads its default empty string.
+
+The pinned official
+[LWP v0.6.0 `service.proto`](https://github.com/zcash/lightwallet-protocol/blob/299805c19011a027d2c48c5e912dd05041f76156/walletrpc/service.proto)
+defines `lightwalletProtocolVersion = 18`; its
+[compact format](https://github.com/zcash/lightwallet-protocol/blob/299805c19011a027d2c48c5e912dd05041f76156/walletrpc/compact_formats.proto)
+defines the per-block Sapling commitment-tree size in
+`ChainMetadata.saplingCommitmentTreeSize`. The BTCZ fork proto also lacks the
+v0.6.0 `BlockRange.poolTypes` field, so the blank version is not merely an
+unreported-but-otherwise-established compatibility claim. The software build
+string must not be used to pass ZyCoin's protocol gate.
+
+### Tree-size source path and safe-fix assessment
+
+The causal server path is:
+
+`bitcoinzd getblock(height, 1)` → JSON unmarshal into
+`BitcoinZRpcReplyGetblock1.Trees.Sapling.Size` → raw block parse and
+`block.ToCompact()` → overwrite
+`ChainMetadata.SaplingCommitmentTreeSize` from that `Size` → gRPC response.
+
+At pinned Core revision
+[`a25305e`](https://github.com/btcz/bitcoinz/blob/a25305eec6cd18d4f5b61f67c655743503093b1f/src/rpc/blockchain.cpp),
+`blockToJSON()` includes `finalsaplingroot` and `valuePools` but no nested
+`trees` JSON member. Go's JSON decoder silently leaves the missing non-pointer
+integer at zero, and Lightwalletd currently does not validate the missing
+field before copying it. The zero is serialized as metadata; compact-block
+serialization is not where it is lost.
+
+Core's `z_gettreestate` is an available source of serialized tree state, and
+the server's `GetTreeState` handler returns its `FinalState`. This means Core
+has tree-state data from which a count might be reconstructible, but the
+source path inspected does not expose a verified tree-size integer.
+Extracting a count requires a separately verified parser for the precise
+BitcoinZ tree-state encoding, or a server-maintained count with complete
+activation history and reorg/cache correctness. Neither is established by
+the available source or this ZyCoin repository. Accordingly, no server-side
+code or tests were changed: this repository does not contain the Go server or
+BitcoinZ Core, and a guessed tree size or a zero fallback is unsafe. The
+upstream correction must add a tested, exact count source (preferably an
+explicit Core RPC/JSON value or a protocol-correct tree-state decoder) and
+reject missing metadata rather than default it. Server tests should cover
+missing `trees`, exact known heights with and without Sapling outputs,
+monotonic post-block sizes, and reorg/cache rebuild behavior before
+deployment.
+
+### Refreshed bounded live evidence
+
+Read-only probes to `lightd.btcz.rocks:443` were repeated with a 12-second RPC
+deadline and no credentials. On this run:
+
+| Probe | Result |
+|---|---|
+| `GetLightdInfo` | `version=v1.1.1-inject-heartbeat`, `lightwalletProtocolVersion=""`, Sapling activation 328500, reported height 1875269, commit prefix `5e3fd6f`. |
+| `GetLatestBlock` | Height 1875269, hash `9a85dcdc4917f401dc101d9e0f8da7cdc8409b2eeee4f3465292f09e53040000`. |
+| Activation range 328500–328502 | 3 blocks; 0 Sapling outputs/spends; tree sizes `[0,0,0]`; all adjacent hash links matched. |
+| Historical range 1865913–1865932 | 20 blocks; 51 outputs, 28 spends; every reported tree size was zero; all adjacent hash links matched. |
+| Tip range 1875267–1875269 | 3 blocks; 1 output, 0 spends; all reported tree sizes zero; adjacent hash links matched. |
+| `GetBlock(328499)` | Failed with `fOverwinter flag must be set`, consistent with the server parser's pre-activation limitation. |
+| `GetTreeState(328500)` | Reply height was 328500; Sapling state string length 6 (`000000`). The returned hash was not independently cross-checked. |
+| `GetTreeState(1875269)` | Reply height was 1875269; Sapling state string length 748. It was not decoded into a tree size or authenticated; the returned hash was not independently cross-checked. |
+
+This refresh confirms the same blank protocol field and zero-size behavior
+while the endpoint tip advanced from the earlier probe. Hash linkage and
+the returned TreeState heights are endpoint consistency observations only,
+not independent consensus authentication.
+
+### Result and remaining gate
+
+No safe correction can be applied in ZyCoin: both faults originate in the
+external BTCZ server/Core integration. A server/Core change and its own
+focused tests are required to populate LWP v0.6.0 metadata and supply exact
+per-block tree sizes. Until then ZyCoin's scanner continues to reject
+inconsistent tree sizes, and spent-status remains `UNKNOWN` because the
+protocol version is unconfirmed.
+
+**Validation:** the focused spent-status and BTCZ scanner regressions passed
+**11 tests**. No BTCZ server/Core tests were run because those Go/C++ sources
+are not part of this repository. No transactions, broadcasts, credentials,
+or long-running monitoring were used.
+
+### Source references
+
+- [BTCZ Lightwalletd `Makefile`](https://github.com/z-bitcoinz/lightwalletd-bitcoinz/blob/5e3fd6f1f59917fd2e517098857070f689657285/Makefile) — build-time version variables.
+- [BTCZ Lightwalletd `service.proto`](https://github.com/z-bitcoinz/lightwalletd-bitcoinz/blob/5e3fd6f1f59917fd2e517098857070f689657285/walletrpc/service.proto) — fork schema, `LightdInfo` fields, and range shape.
+- [BTCZ Lightwalletd `common/common.go`](https://github.com/z-bitcoinz/lightwalletd-bitcoinz/blob/5e3fd6f1f59917fd2e517098857070f689657285/common/common.go) — `GetLightdInfo`, JSON structs, and compact metadata assignment.
+- [BTCZ Lightwalletd `frontend/service.go`](https://github.com/z-bitcoinz/lightwalletd-bitcoinz/blob/5e3fd6f1f59917fd2e517098857070f689657285/frontend/service.go) — gRPC info response and `GetTreeState`.
+- [BitcoinZ Core `blockchain.cpp`](https://github.com/btcz/bitcoinz/blob/a25305eec6cd18d4f5b61f67c655743503093b1f/src/rpc/blockchain.cpp) — pinned `blockToJSON()` output.
+- [Official pinned LWP v0.6.0 service schema](https://github.com/zcash/lightwallet-protocol/blob/299805c19011a027d2c48c5e912dd05041f76156/walletrpc/service.proto) and [compact schema](https://github.com/zcash/lightwallet-protocol/blob/299805c19011a027d2c48c5e912dd05041f76156/walletrpc/compact_formats.proto).
+- [Upstream Lightwalletd `common/common.go`](https://github.com/zcash/lightwalletd/blob/master/common/common.go) — reference implementation reports `LightwalletProtocolVersion` and copies Core tree sizes; this link is current source, not a pinned BTCZ deployment artifact.
