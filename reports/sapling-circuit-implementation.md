@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.46):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.47):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -98,6 +98,18 @@ official H accumulation differs under direct mapping for both. IC/L/A/B_G1/
 B_G2 accumulations were compared only for the baseline witness. Phases
 9.21.45–46 record the full vector fingerprints and preserve the unverified
 status of transformed-query equivalence and parameter-to-circuit binding.
+
+Phase 9.21.47 derives a full-rank pointwise residual map for the captured
+constraints, including the invertible helper-variable substitution
+`P=T+Σ2^i d_i-A` and helper residual map
+`[g_root,g_position]=[f_root-Vf_anchor,-f_anchor]`. Its witness-dependent
+coefficient prevents treating it as a fixed row-linear QAP transformation.
+The A/B factor crosswalk gives invertible rowwise maps on 98,442 rows and
+expanded residual identities on 333 more, but does not give a complete
+component-wise A/B/C polynomial transform. The six official query-section
+conclusions and exact field equations are recorded in
+[Phase 9.21.47 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92147--symbolic-spend-residual-and-query-transformation-audit).
+QAP/query transformation remains **Unresolved**, not disproven.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 
@@ -6413,6 +6425,67 @@ and scope limitations are recorded in
 The focused test passed **1 test in 386.41 s**; its Bellman variant exporter
 passed **1 Rust test in 26.39 s**. No production circuit, Output, setup,
 parameter, or proving gate changed; no synthetic setup regression was run.
+
+### Phase 9.21.47 — Symbolic Spend QAP and query transformation
+
+The captured row crosswalk admits exact residual identities. Of 98,775
+one-to-one rows, 98,442 factor-matched rows satisfy
+`F_upstream=αβ F_production` with nonzero α/β and same/swapped A/B factors;
+their 2×2 A/B factor maps are invertible. The remaining 333 rows satisfy
+`F_upstream=F_production` as expanded quadratic polynomials with unit scale,
+but no separate factor map is established. Thus the paired residual block
+is a permutation-diagonal map of rank 98,775.
+
+For the unmatched helper rows, let `A` be the public anchor, `T` the source
+conditional-anchor auxiliary, `R` the root, `V` the note-value linear form,
+`d_i` the direction bits, and `P` the production packed position. With
+`S=Σ(i=0..31)2^i d_i`, the full-dimensional variable-coordinate substitution
+`P=T+S-A` is invertible, with inverse `T=P-S+A`. The source residuals
+`f_root=(R-T)V`, `f_anchor=A-T` and production residuals
+`g_root=(R-A)V`, `g_position=P-S` obey
+`[g_root,g_position]^T=[[1,-V],[0,-1]][f_root,f_anchor]^T`.
+The helper block has determinant `-1` and rank 2 for every witness, but
+depends on `V`; it is not a constant row operation. Combined with the
+paired block, this is a full-rank pointwise residual transformation for the
+captured constraints, not a fixed A/B/C QAP coordinate transformation.
+
+On the factor-matched rows, domain evaluation vectors transform by the row
+permutation and the 2×2 factor blocks. If `W` is the domain evaluation
+matrix, any *complete fixed* factor map would induce coefficient maps of the
+form `W^-1 R_A W` (and corresponding B/C maps), together with the variable
+map. The 333 expanded-only rows and witness-dependent helper block leave
+that full map unestablished. Consequently no fixed H coefficient transform
+is established either: `H=(AB-C)/Z` is computed from full interpolated
+factor polynomials, and equal row residuals do not determine H because
+numerators may differ by a multiple of `Z`. Both quotient identities pass
+and Bellman recomputes production H for two witnesses, but neither result
+proves a universal H-coordinate map.
+
+**Official query sections:** IC and L lack complete transformations of their
+combined public/private query polynomials; H has the same 131,071-point
+monomial basis shape but no coefficient map; A and B_G1 have only partial
+G1 cross-mixing maps on the factor-matched rows; B_G2 has no established
+complete transform, and the known A/B swaps would require A_G2 points that
+the official file does not expose. Public group-linear combinations would
+avoid toxic-waste recovery if a complete constant query-coordinate matrix
+were known, but the retained evidence does not provide one. The direct H
+accumulation differs for both alternate and baseline witnesses. All six
+section verdicts and rank/kernel details are in [Phase 9.21.47 of the
+authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92147--symbolic-spend-residual-and-query-transformation-audit).
+
+**Conclusion:** captured relation transformation is established; complete
+production-to-Bellman QAP and six-section query transformation remains
+**Unresolved**, not disproven. Exact Bellman matrix reproduction would permit
+using the existing sections in their native coordinates. Otherwise the
+smallest next step is an exact all-variable polynomial-map derivation from
+the retained exports, covering expanded rows and helpers and checking
+whether it yields all six constant query maps. Failing that, a trusted setup
+bound to the production matrix is necessary for production proving readiness.
+
+Focused algebraic and query-mapping regressions passed **28 tests with
+8 subtests in 9.48 s**. No witness synthesis was repeated and no production
+circuit, Output, setup, parameter, or proving gate changed; no synthetic
+setup regression was run.
 
 ## Phase 9.21.18 — Authentic Sapling parameter-format audit
 

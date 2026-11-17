@@ -1325,3 +1325,138 @@ baseline raw JSON trace digest was not investigated or regenerated; its
 cause remains unresolved because the prior raw export is unavailable.
 No production circuit, arithmetic, Output, setup, parameter, or proving gate
 was changed, and no synthetic setup regression was run.
+
+### Phase 9.21.47 — Symbolic Spend residual and query transformation audit
+
+This read-only audit reuses the captured 98,777 × 98,646 matrices, v7
+variable map, row correspondence, and helper equations. No witness
+synthesis was repeated. Let `F^U_i(x)=A^U_i(x)B^U_i(x)-C^U_i(x)` be an
+upstream row residual and `F^L_j(x)` its mapped production residual, with
+common semantic variables identified by the retained variable map. The
+captured crosswalk supplies these exact finite-field identities:
+
+| Paired rows | Count | Identity and rank |
+|---|---:|---|
+| Native factors, A/B swaps, and nonzero factor normalizations | 98,442 | `F^U_i = α_i β_i F^L_j`, where the two local factors map to the upstream A/B factors with nonzero scales `α_i, β_i` and either same or swapped orientation. The row-wise 2×2 factor map has rank 2; the C map has rank 1. |
+| Expanded `A*B-C` matches | 333 | `F^U_i = F^L_j`; scale is exactly 1 for every recorded row. This is an identity of the expanded quadratic residual, not an established linear map of its separate A, B, and C factors. |
+
+For the 98,442 factor-matched rows, writing local factors as `(a,b,c)`,
+the upstream factors are `(αa, βb, αβc)` in the same orientation and
+`(αb, βa, αβc)` in the swapped orientation. Equivalently, the A/B blocks
+are `diag(α,β)` or `[[0,α],[β,0]]`; their determinants are respectively
+`αβ` and `-αβ`, nonzero in the scalar field. The recorded profiles reduce
+modulo the field modulus to residual scales `αβ=-1` on 18,818 rows and
+`αβ=1` on the other factor-matched rows. Together with the 333 unit-scale
+expanded identities, the 98,775 paired residual rows therefore form a
+permutation followed by nonzero diagonal scaling: rank 98,775 and zero
+kernel on that paired block. The matching/pairing fingerprint remains
+`f502b0f22dece3829d6e2e1e198ca8d98d82e233e9eb1a4dcded3a399f6ae17d`.
+
+The two remaining source rows and two production rows admit a useful exact
+helper-coordinate derivation. Denote the public anchor by `A`, source-only
+conditional-anchor auxiliary by `T`, final Merkle root by `R`, note value
+linear form by `V`, path direction bits by `d_i`, and production packed
+position by `P`. Set
+`S=Σ(i=0..31)2^i d_i` and make the full ambient variable substitution
+`P = T + S - A`, leaving every common variable unchanged. Its inverse is
+`T=P-S+A`; hence this change of coordinates has full rank 98,646 and zero
+kernel. The source residual pair and production residual pair become:
+
+```text
+f_root   = (R - T)V
+f_anchor = A - T
+g_root   = (R - A)V
+g_position = P - S
+
+[g_root, g_position]^T = [[1, -V], [0, -1]] [f_root, f_anchor]^T
+```
+
+The helper residual matrix has determinant `-1`, so it is invertible at
+every field assignment; the full 98,777-row residual map is pointwise
+full-rank after row pairing and permutation. However, the off-diagonal entry
+`-V` depends on the witness. It is not a fixed `GL(98,777, F)` row operation.
+This proves a constructive relation-preserving coordinate/residual
+transformation for the captured constraints, while explaining why relation
+equivalence does not supply the constant row transformation used by a
+standard QAP basis change.
+
+For a complete domain of size `N=131,072`, let `W` be the evaluation matrix
+at the Bellman roots and `W^-1` its interpolation map. If all factor rows
+were covered by a fixed row transform `R_A,R_B,R_C`, then coefficient
+vectors would transform as `a^U_j=W^-1 R_A W a^L_j` (and analogously for
+B and C), augmented by the variable-coordinate map. The crosswalk proves
+this only on the 98,442 factor-matched rows. It proves residual equality
+but not a component-wise `R_A,R_B,R_C` for the other 333 rows. The helper
+block adds a witness-dependent row operation. Consequently a complete
+fixed linear transformation of the variable-indexed A/B/C QAP polynomial
+families has **not** been established. The exact coefficient identities
+available for H are only
+`H^U(X;x)=(A^U(X;x)B^U(X;x)-C^U(X;x))/Z(X)` and
+`H^L(X;x)=(A^L(X;x)B^L(X;x)-C^L(X;x))/Z(X)` for satisfying assignments.
+Both quotient identities pass, but no witness-independent invertible matrix
+mapping the H coefficient vectors follows from the residual identities.
+Equality of residuals at constraint roots alone cannot determine these
+quotients: the two numerator polynomials may differ by a multiple of `Z`.
+The observed all-eight-vector differences and independent Bellman
+reproduction of production H for two witnesses are consistent with this
+analysis, but do not prove or disprove every possible symbolic map.
+
+#### Official query-section conclusions
+
+The official sections contain IC 8, H 131,071, L 98,638, A 85,390,
+B_G1 61,300, and B_G2 61,300 points. The pinned file provides group
+elements evaluated at the ceremony's secret point, not the underlying
+toxic-waste scalars or polynomial values. In standard notation the sections
+encode `A_j(τ)/δ` in G1, `B_j(τ)/δ` in G1 and G2, `H_k=τ^k Z(τ)/δ` in G1,
+`L_j=(βA_j(τ)+αB_j(τ)+C_j(τ))/δ` in G1, and
+`IC_j=(βA_j(τ)+αB_j(τ)+C_j(τ))/γ` in G1 for the public coordinates.
+
+| Section | Transformation conclusion |
+|---|---|
+| IC | **Unresolved.** Public-variable identities agree, but a full transform of the combined public query polynomial `(βA_j+αB_j+C_j)/γ` is not available. |
+| H | **Unresolved.** The domain and monomial H basis shape are shared, but the coefficient-coordinate transformation is unknown. The direct H accumulation differs for both tested witnesses; this is not proof that no symbolic transform exists. |
+| L | **Unresolved.** The dense private query coordinates require the full variable, A/B/C, and helper-coordinate transformation; the helper substitution mixes T, the anchor, and path bits. |
+| A | **Unresolved; partial G1 route exists.** The 98,442 factor-matched rows have explicit fixed row-wise A/B maps, including swaps, and A and B_G1 are both G1 sections. No complete transformed polynomial/query-coordinate matrix covers the 333 expanded rows and helper block. |
+| B_G1 | **Unresolved; partial G1 route exists.** As for A, the matched row maps can cross-mix A and B in G1, but there is no complete transformation for every variable/query coordinate. |
+| B_G2 | **Unresolved with a concrete section gap.** The recorded swapped factor maps require an A contribution when transforming B. The official file has B_G2 but no A_G2 section; G1 points cannot be linearly combined into G2 points. No complete transformation using only the available sections is established. This is a limitation of the demonstrated map, not a proof that every conceivable construction is impossible. |
+
+If a complete constant-field query-coordinate matrix were derived, same-group
+query points could be transformed using public linear combinations, without
+recovering toxic waste. The present witness-specific accumulations and the
+exact residual identities do not provide that matrix. In particular, the
+missing A_G2 coordinates cannot be inferred from A_G1/B_G1 points alone by
+the established group operations. Exact reproduction of the pinned Bellman
+QAP would let the official sections be used in their existing coordinates;
+using the unchanged production QAP instead requires either a complete
+symbolic six-section transformation or a separately trusted setup bound to
+that production matrix.
+
+The Groth16 verifier checks the pairing equation
+`e(π_A,π_B)=e(αG1,βG2)·e(IC(x),γG2)·e(π_C,δG2)`, where `IC(x)` is the
+public IC accumulation and the proof's `π_A`, `π_B`, and `π_C` include their
+respective A/B/H/L contributions. The residual transformations prove the
+captured zero sets agree, but do not give transformed query points and proof
+accumulators that make both sides of this verifier equation equal. Thus
+Groth16 verification-equation preservation under a production-to-Bellman
+query conversion remains unverified; the witness-specific matching
+accumulations are not a substitute.
+
+**Conclusion:** the captured constraint relations have an explicit
+full-rank, pointwise residual transformation, but it contains a
+witness-dependent helper-row operation and does not induce a demonstrated
+fixed invertible A/B/C/H QAP or six-query transformation. QAP/query
+transformation is **Unresolved**, not disproven. No parameter-to-circuit
+binding or ceremony-validity conclusion changes; both remain
+**Unverified**, and Spend proving remains gated.
+
+**Smallest justified next step:** using only the retained full matrix and
+correspondence exports, attempt an exact all-variable polynomial-coordinate
+derivation for A/B/C, including explicit factorizations for the 333
+expanded rows and a compatible treatment of the helper block. Test whether
+it yields constant coefficient maps and whether B_G2 can be produced from
+the available official sections. If it cannot, exact Bellman matrix
+reproduction or a production-bound trusted setup is the supported path.
+Focused algebraic and query-mapping regressions passed **28 tests with
+8 subtests in 9.48 s**. No synthesis was repeated; no production code,
+Output, setup, parameter, or proving gate changed, and no synthetic setup
+regression was run.

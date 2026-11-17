@@ -615,7 +615,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.46):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.47):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -637,7 +637,18 @@ recomputed production H from production A/B/C for both witnesses, while the
 direct-mapping official H accumulation differed for both. IC/L/A/B_G1/B_G2
 direct accumulations were compared only for the baseline witness and are not
 proof of query-vector equivalence. Official parameter-to-circuit binding and
-ceremony validity remain **Unverified**.
+ceremony validity remain **Unverified**. Phase 9.21.47 derives the helper
+coordinate substitution `P=T+Σ2^i d_i-A` and the pointwise-invertible but
+witness-dependent helper residual matrix `[[1,-V],[0,-1]]`; it does not
+produce a fixed full A/B/C/H polynomial map. IC, H, L, A, B_G1, and B_G2
+therefore remain without a complete production-to-Bellman query transform.
+In particular, known A/B swaps would require A_G2 points not present in the
+official sections. This is unresolved, not a proof of mathematical
+impossibility. Exact Bellman matrix reproduction or a complete proven
+six-section transform (otherwise a production-bound trusted setup) remains
+necessary before proving readiness. The focused algebraic/query-mapping tests
+passed **28 tests with 8 subtests in 9.48 s**; no synthesis or setup
+regression was run.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact
