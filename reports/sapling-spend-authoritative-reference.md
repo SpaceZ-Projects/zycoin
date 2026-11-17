@@ -1150,3 +1150,114 @@ established under the documented mapping. QAP/query equivalence, official
 parameter-to-circuit binding, and ceremony validity remain **Unverified**.
 No production circuit, Output, setup, parameter, or proving gate changed; no
 synthetic setup regression was run.
+
+### Phase 9.21.45 — Production Spend QAP and official-query audit
+
+This QAP comparison is for the pinned baseline witness, not a proof over all
+witnesses. The production matrix fingerprint is
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`; the
+pinned Bellman matrix fingerprint is
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+Both contain 98,777 constraints and 98,646 variables. The QAP domain is
+131,072 (98,785 rows including eight input rows plus 32,287 padding rows).
+The variable map matches all 8 ONE/public values and 98,637 auxiliaries.
+Upstream `Aux(76805)` is the conditional-anchor helper `T=A`; local column
+32,621 is packed position `P=Σ(i=0..31)2^i d_i`. These helper projections
+support equivalence of the captured constraint relations, but do not by
+themselves give a query-coordinate transformation.
+
+The independent Bellman and production QAP vector fingerprints are:
+
+| Vector | Bellman SHA-256 | Production SHA-256 |
+|---|---|---|
+| A evaluations (131,072) | `22c6662cbe967cb57bc36d05ebf3e81a32d3baa20bf222c0cf5581afd52993b6` | `daca49ab7a9dd2819f40d4b48e94509d78d24ad2fb4846062865cd5f9491fe1a` |
+| B evaluations (131,072) | `3169179e3f69d5755671e0f634789dbb3faaa2f7a6025779a6f2ac2240729e71` | `2430c5198e3c39c85dfda8256feb6fa822c40cca983c37dd510cbd1f89cdf198` |
+| C evaluations (131,072) | `df2e6de104f3acc367abee83ead55f275670a0e13720044e0d166465948dd872` | `f8efb2f3246022e9cbd1cbbdd551167f9d3d5ab8570d9b8fd273afae2c5d50a9` |
+| A coefficients (131,072) | `663ab1569c323f13cc1fd96163b330c8231f3fcb6521cdfa444b49474b03e0c6` | `ae3bf8a74b4d63fb70b10f8257b16c478d4830c70f67e106ca88a59102e8a856` |
+| B coefficients (131,072) | `b3b5f5a4504131db6fb1ac5fb00a66592448a6e5a59eec1494231db9faaed7ff` | `8a1504707c0e31a28e1af71c58067bf9baff8d64b74d0359942c5738da46e2c7` |
+| C coefficients (131,072) | `6e064cc613e33f7e57ca5183826352c25f2f0410e5ad7f59391cf7e35679880b` | `5dbc6116cbaa3eafca1b792deb0ce0603be484ec052e6fdcb979d3d05aca74c6` |
+| H quotient coefficients (131,071) | `27d57fc5eae604c210feda073ee1befcb73a776ef6bf4b08ba25d00314037a55` | `a98ecf083b7660a04fd59fc887e7799cf96c1e0cf5e4cd898690340125850862` |
+| H evaluations (131,072) | `b7ee1b2f7f49704446fb4acdc4dcf8e9a859ebeddcd9994d1aa2ec5a3023bb7d` | `04d75e396d3c01478d7de835da712c7a10eecdec070fd79a0781d60ee30f65c7` |
+
+All eight canonical vectors differ for this satisfying assignment. Bellman's
+independent quotient-divisibility check and ZyCoin's independent 2n
+coset-FFT check pass. Bellman 0.15 also recomputed the quotient from ZyCoin's
+exact A/B/C evaluation vectors and reproduced ZyCoin's H coefficient and
+evaluation hashes. Thus the H difference is upstream of quotient arithmetic:
+the A/B/C QAP inputs differ due to row ordering and factor representation,
+not H indexing or an identified quotient implementation defect.
+
+The official file has SHA-256
+`8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13`.
+Its 437,707 ordered points were compared byte-for-byte with the pinned
+Bellman loader in section order IC, H, L, A, B_G1, B_G2; canonical point
+encoding and parser curve/subgroup checks passed. IC has ONE followed by the
+seven public inputs. H indexes quotient coefficients in ascending degree.
+L follows upstream `Aux(0..98637)` order; `Aux(76805)` is supplied by the
+anchor projection, while local packed position column 32,621 is reconstructed
+from direction bits. A/B query scalar mappings use the pinned sparse-index
+map (`183a399a8c7e749e011d690ffa216541ce1268e869723b4a0d4cb54d0cc54a08`).
+The six section digests, counts, and direct-mapping accumulation results are:
+
+| Section | Points | Ordered point-section SHA-256 | Direct mapped accumulation |
+|---|---:|---|---|
+| IC | 8 | `9d05cfaa8f5cdb11cc8694e73ad76a2c541c94e0648d533089b80941a04f0d7b` | Equal for the baseline witness |
+| H | 131,071 | `a8f3a93e8e5f144557701e66acbfdc751002e7a3302b5ad365fc7a342ce1437e` | **Different** |
+| L | 98,638 | `afb42dbab478d8f3a571cbe038dee6a0d61da1ef8359c9931d264bcf170b97b6` | Equal for the mapped witness scalars |
+| A | 85,390 | `a26b506e2e525246c12d590342f13794a3d1199986d17f067d67dae2a05286d9` | Equal for the baseline witness |
+| B_G1 | 61,300 | `ac2dc83a3aee7f8d82c7b562b1838ada266ba73969b52159c41e6994c48196a7` | Equal for the baseline witness |
+| B_G2 | 61,300 | `334580c04c7acb927b0bf3c192c8909cc99d8201bd45a20ce41e06f2b789d8fe` | Equal for the baseline witness |
+
+The uncompressed H accumulation hashes are Bellman
+`a95259f4792a7727f33efa3eb466b5a1481f06c494182ffd091e46ef39bfd7fe` and
+production coefficients against the official H points
+`1336802122c751934174ee3689fc8b140240b85e1ab4142a019ed611461742c7`.
+Cross-accumulating either coefficient vector against either independently
+decoded official H sequence gives the same respective result, ruling out
+point decoding, ordering, and MSM implementation as the cause. The five
+matching sections are witness-specific accumulations using the mapped
+assignment and the same official point vectors; they do not prove equality
+of query vectors or a circuit binding. H coefficient order is ascending
+degree 0–131,070; the omitted degree-131,071 coefficient is zero.
+
+**Conclusion:** canonical QAP vectors are not equal for the pinned
+satisfying witness. The available row map records 48,546 moved rows, 251
+A/B swaps, 28,351 nonuniform factor normalizations, 333 expanded
+`A*B-C`-only matches, and the two helper projections. This explains why
+relation equivalence does not imply equality of the interpolated A/B/C
+polynomials, but a complete transformation of all QAP/query coordinates
+has not been established. Under the direct official-query mapping, the H
+accumulation is concretely incompatible for this witness. Overall
+official-parameter-to-production-circuit binding and ceremony validity
+remain **Unverified**; no Spend proof was generated and the proving gate
+remains closed. The missing Phase-1 artifact and ceremony-era setup/source
+evidence prevent an independent binding conclusion.
+
+**Smallest next step:** reuse one existing alternate valid Spend witness to
+compare all eight Bellman/production QAP vectors and mapped helper
+coordinates, checking whether this observed vector difference is
+witness-specific. That would add empirical coverage only. Establishing
+equivalence still requires a complete symbolic transformation of the
+row-domain, factor, and variable/query coordinates (including `T` and `P`),
+or a separate trusted setup bound to the production matrix. No production
+change or proving-gate change is justified by the current evidence.
+
+Focused verification: the six-section query test passed **1 test in
+1,166.468 s**; Bellman's six-vector accumulation took **202.154 s**.
+Its exact-filtered Bellman baseline exporter passed **1 Rust test in
+26.68 s**. The QAP comparison's exact-filtered Bellman exporter passed
+**1 Rust test in 26.14 s**.
+Parameter-query mapping and compatibility-manifest tests passed **32 tests
+with 5 subtests in 9.123 s**. The combined QAP/row tests ran **20 tests in
+132.582 s**: 19 passed and one failed only on the fresh JSON trace SHA-256
+(`e6cbc946b55d0362baf7b45b03a2ad85554e6c874320b30c06693e135ce2f1c2`)
+versus the retained digest
+(`a39e4d2d815dca24eead67996d94732dc9a12b13ac3f1c4881f5e5dadddf8feb`).
+The upstream TestConstraintSystem hash, assignment hash, matrix fingerprint,
+and all eight QAP-vector hashes matched their pins; the cause of the
+byte-level export digest difference is unresolved because the earlier raw
+export is not retained. The run included 3 passing transformation subtests.
+The pinned Rust exporter was explicitly filtered to the baseline fixture
+because its unfiltered variant test requires an additional environment
+variable. No code, fixture, parameter, setup, or proving gate was changed,
+and no synthetic setup regression was run.

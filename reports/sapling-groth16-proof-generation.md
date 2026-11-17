@@ -166,6 +166,40 @@ coefficient fingerprints. The official key therefore does not establish
 support for the local Spend QAP. No proof was generated; parameter-to-circuit
 binding and ceremony validity remain **Unverified**.
 
+**Phase 9.21.45 production Spend QAP/query verdict:** relation equivalence
+for the captured matrices remains established under the documented semantic
+map and `T=A` / `P=Σ2^i d_i` helper projections. This does not imply canonical
+QAP equivalence: all eight baseline-witness A/B/C evaluation/coefficient,
+H-coefficient, and H-evaluation vectors differ. Bellman independently
+recomputed the production H quotient from production A/B/C evaluations,
+confirming the H difference comes from the differing QAP inputs rather than
+quotient arithmetic. The official parameter sections have verified point
+counts and order (IC 8, H 131,071, L 98,638, A 85,390, B_G1 61,300,
+B_G2 61,300). Under the direct mapped baseline witness, IC, L, A, B_G1, and
+B_G2 accumulations match; H differs (`a95259f4…` Bellman versus
+`13368021…` production). This is concrete direct-mapping incompatibility for
+the witness, not proof about all transformed queries. No full QAP/query
+change-of-basis has been proven. Overall official parameter-to-production
+circuit binding and ceremony validity remain **Unverified**; no Spend proof
+was generated and the gate remains closed. Details and complete fingerprints
+are in [Phase 9.21.45 of the implementation
+report](sapling-circuit-implementation.md#phase-92145--production-spend-qap-and-query-equivalence)
+and [the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92145--production-spend-qap-and-official-query-audit).
+The smallest diagnostic next step is an all-vector QAP comparison for one
+existing alternate witness; only a complete symbolic query-coordinate
+transformation or a trusted setup bound to the production matrix could
+establish compatibility.
+
+Focused verification passed the official six-section query test (**1 test,
+1,166.468 s; Bellman accumulation 202.154 s**) and the parameter-query/
+compatibility-manifest tests (**32 tests, 5 subtests, 9.123 s**). The combined
+QAP/row run had **19 passing tests and one failing trace-digest assertion**
+in 132.582 s; all eight QAP-vector hashes, the assignment, matrix fingerprint,
+and upstream TestConstraintSystem hash matched, but the fresh JSON digest did
+not match the retained raw-export digest. That byte-level discrepancy remains
+unresolved because the original raw export is unavailable. The exact test
+results are recorded in Phase 9.21.45 of the authoritative Spend report.
+
 The Bellman trace SHA-256 is
 `a39e4d2d815dca24eead67996d94732dc9a12b13ac3f1c4881f5e5dadddf8feb`;
 the Bellman and local assignment hashes are
@@ -572,7 +606,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.43):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.45):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -587,7 +621,12 @@ role mapping and auxiliary projection. This does not establish that arbitrary
 production synthesis executions emit the same matrix. The v7 mapping and row
 artifact remain unchanged. Exact ordered matrix alignment, QAP/query
 compatibility, authentic proving-key/verification-key compatibility, and
-production proof generation remain **Unverified**.
+production proof generation remain **Unverified**. Phase 9.21.45 found all
+eight canonical QAP vectors differ for the pinned baseline witness and a
+direct-mapping H accumulation mismatch with the official key. IC/L/A/B_G1/
+B_G2 direct accumulations match only for that witness; they do not prove
+query-vector equivalence. Official parameter-to-circuit binding and ceremony
+validity remain **Unverified**.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

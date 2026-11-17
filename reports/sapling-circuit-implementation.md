@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.43):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.45):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -91,7 +91,12 @@ captured production and pinned-reference matrices under the accepted role
 mapping and helper projection. It is not a proof that every possible
 production synthesis execution emits that same matrix. Exact ordered matrix
 identity is disproved for the captured exports; QAP/Groth16 compatibility
-remains **Unverified**.
+remains **Unverified**. For the pinned baseline witness, all eight canonical
+QAP vectors differ. The official H accumulation also differs under direct
+mapping, while IC/L/A/B_G1/B_G2 accumulations match only for that mapped
+witness. Phase 9.21.45 records the full vector/section fingerprints and
+preserves the unverified status of transformed-query equivalence and
+parameter-to-circuit binding.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 
@@ -6302,6 +6307,79 @@ production run. The separate relation probes passed 8 semantic-projection
 tests and 29 row/variable correspondence tests. No production code, Output,
 setup, parameter, or proving gate changed; no synthetic setup regression was
 run.
+
+### Phase 9.21.45 — Production Spend QAP and query equivalence
+
+This audit distinguishes the captured relation from its QAP representation.
+Production and pinned Bellman have the same dimensions, 98,777 constraints
+and 98,646 variables, but different matrix fingerprints
+(`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9` and
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`).
+The captured-matrix row proof establishes relation equivalence after
+projecting upstream `T=Aux(76805)` via `T=A` and local packed position
+`P=column 32621` via `P=Σ2^i d_i`. The semantic crosswalk maps 8
+ONE/public variables and 98,637 auxiliaries. It pairs 98,775 rows: 69,840
+native factor matches, 251 A/B swaps, 28,351 nonuniform factor
+normalizations, and 333 expanded `A*B-C` matches; 48,546 paired rows move.
+Two rows on each side remain unmatched and are accounted for by those helper
+projections.
+
+For the pinned satisfying witness, all eight canonical QAP vectors differ:
+the 131,072-element A/B/C evaluation vectors, their 131,072 coefficient
+vectors, the 131,071 H quotient coefficients, and the 131,072 H evaluations.
+Their exact fingerprints are tabulated in [Phase 9.21.45 of the
+authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92145--production-spend-qap-and-official-query-audit).
+Both quotient identity checks pass. Bellman 0.15 independently recomputed
+the production quotient from production A/B/C evaluations and reproduced
+the production H coefficient/evaluation fingerprints; this excludes an
+identified quotient arithmetic defect. The row transformations explain why
+the constraint relations can agree while their chosen Lagrange-basis factor
+polynomials differ. They do not yet constitute a complete polynomial
+change-of-basis proof for every variable and helper coordinate.
+
+The official parameter's six sections were byte-compared in Bellman order;
+counts are IC 8, H 131,071, L 98,638, A 85,390, B_G1 61,300, B_G2 61,300.
+For the single baseline witness, direct mapped accumulations agree for IC,
+L, A, B_G1, and B_G2, but disagree for H. Bellman and production H results
+are respectively
+`a95259f4792a7727f33efa3eb466b5a1481f06c494182ffd091e46ef39bfd7fe` and
+`1336802122c751934174ee3689fc8b140240b85e1ab4142a019ed611461742c7`.
+The H point sequence and accumulation implementation cross-check exactly;
+the discrepancy comes from the different quotient coefficients. Matching
+the other five witness-specific sums is not a proof that their query
+vectors encode the production circuit.
+
+**Verdicts:** captured relation equivalence is established under the
+documented variable map and helper projections; exact canonical QAP
+equivalence is disproved for this witness; a complete transformed QAP/query
+equivalence is unresolved. The official file's points and encoding are
+verified, but direct mapping is contradicted by the H accumulation. Official
+parameter-to-production-circuit binding and ceremony validity are
+**Unverified**, and Spend proving remains gated. The key has no circuit
+identifier, and the Phase-1 artifact and exact ceremony-era setup evidence
+remain unavailable.
+
+The smallest useful follow-up is an all-vector QAP differential for one
+existing alternate valid witness, which can test whether the observed
+difference is witness-specific but cannot establish equivalence. A positive
+compatibility conclusion requires the complete symbolic transform across
+row order, factor forms, variable coordinates, and both helper projections,
+or a trusted setup specifically bound to the production matrix. No production
+rewrite is justified by this audit.
+
+Verification: the focused six-section accumulation passed **1 test in
+1,166.468 s**, with Bellman's accumulation taking **202.154 s**. The
+QAP/transform/row run executed **20 tests in 132.582 s** (19 passed, one
+stored JSON trace digest mismatch); the 15 transform and row tests passed,
+including 3 subtests. The 32 parameter-query/manifest tests passed with
+5 subtests in **9.123 s**. The raw trace SHA-256 was
+`e6cbc946b55d0362baf7b45b03a2ad85554e6c874320b30c06693e135ce2f1c2`
+instead of the retained `a39e4d2d815dca24eead67996d94732dc9a12b13ac3f1c4881f5e5dadddf8feb`;
+the earlier raw file is unavailable to diagnose this byte-level difference.
+Nevertheless the upstream test hash, assignment, matrix fingerprint, and all
+QAP vector fingerprints matched their pinned values. No production code,
+Output, setup, parameter, or proving gate changed; no synthetic setup
+regression was run.
 
 ## Phase 9.21.18 — Authentic Sapling parameter-format audit
 
