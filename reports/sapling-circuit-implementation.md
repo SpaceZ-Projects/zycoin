@@ -6524,6 +6524,51 @@ environment; fixtures were not altered. Targeted Ruff, `compileall`,
 test-only circuit dependencies mean this is host-hash separation, not a
 production-ready Spend dependency boundary.
 
+### Phase 9.21.60 — Source-ordered BLAKE2s circuit gadget
+
+Added `src/sapling_blake2s.py`, a production-safe pure-Python gadget that
+reproduces the pinned Bellman source's ordered rows, allocation identities,
+assignments, and annotation paths for Sapling IVK and nullifier BLAKE2s.
+The source-faithful Spend wrappers now call it; the Spend circuit module no
+longer imports the test-only reference gadget or its alias-bit type. The
+independent reference implementation remains in `tests/` for differential
+tests. The new module reuses the production `R1CS`, circuit-bit, bit-reading,
+byte-output, and BLAKE2s witness helpers, while retaining source-specific
+`MultiEq` batching, Boolean/result-bit allocation, labels, and complemented
+XOR operand ordering.
+
+The earlier generic-gadget mismatch was reproduced: same 21,518 rows,
+21,473 columns, and assignments did not imply matrix equality. The first
+variable-name mismatch was column 513, the first annotation mismatch row
+512, and the first ordered A/B mismatch row 614 (generic A=`2*530`, B=`581`;
+source A=`2*581`, B=`530`). The cause is the reference gadget's source-mode
+swap when the XOR left operand is complemented, plus its Bellman slash-path
+labels. The new gadget resolves row 614 and all other differences: a direct
+full-system comparison passed with identical serialization, assignments,
+output bits, labels, ordered A/B/C rows, and satisfaction. Raw IVK shape and
+fingerprint: 21,518 × 21,473,
+`d91d1c41a11f9305476ae41a2b71714c21f97b0952b7a1352f5bfac40207fa7a`.
+
+Retained Bellman trace comparison passed for the integrated IVK gadget
+(22,566 × 22,519,
+`5953027d2a1b56fcfc57ef3432083b7c800a9db7693a7f88bfc8a353e9c68b69`)
+and nullifier gadget (22,566 × 22,519,
+`20f63b47b5102a57ea023edc7452b3f9e7004ea34a5a53e2402984c17e89ab32`).
+The helper compares all variable names/positions and assignments, labels,
+ordered A/B/C expressions, and satisfaction—not dimensions alone. Host IVK
+integration, BLAKE2s vectors, multipacking, production gadget regressions,
+and adapter boundaries passed. The default IVK vector-test setup still
+fails because it does not initialize `ivk_blake2s_vectors`; the reference-
+only setup passes, and no fixture was changed.
+
+The full Spend matrix was not re-synthesized. The retained 98,777 × 98,646
+fingerprint `cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`
+is not reverified by this component phase. Production dependency separation
+is complete for the circuit BLAKE2s gadget only; the Spend circuit and adapter
+remain test-only, and parameter binding, ceremony validity, and proving
+readiness remain unverified. Targeted Ruff, `compileall`, `git diff
+--check`, and new-module Pylance diagnostics passed.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

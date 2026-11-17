@@ -2757,6 +2757,28 @@ circuit migration; no full Spend synthesis was rerun, and the retained
 without a new full-matrix measurement. Spend proving remains gated and
 official parameter binding and ceremony validity remain **Unverified**.
 
+## Phase 9.21.60 — Source-ordered BLAKE2s gadget status
+
+The isolated Spend IVK and nullifier constraints now use the production-safe
+`src.sapling_blake2s` implementation. Its retained-trace regressions verify
+full allocation identity/order, assignments, labels, ordered A/B/C
+expressions, and satisfaction. IVK is 22,566 × 22,519 with fingerprint
+`5953027d2a1b56fcfc57ef3432083b7c800a9db7693a7f88bfc8a353e9c68b69`;
+nullifier is 22,566 × 22,519 with fingerprint
+`20f63b47b5102a57ea023edc7452b3f9e7004ea34a5a53e2402984c17e89ab32`.
+A direct raw-IVK comparison also matches the independent source
+transcription's complete local system, including the corrected row 614.
+Host-side IVK hashing remains on `make_blake2s_witness`.
+
+This closes the BLAKE2s circuit helper's test-only dependency, not the Spend
+production migration. The source comparison helper and fixtures remain
+test-only by design; the wider Spend circuit/adapter are still test-only.
+The full 98,777 × 98,646 Spend matrix was not regenerated, so its retained
+fingerprint is not reverified in this phase. Spend proving remains gated;
+parameter-to-circuit binding, ceremony validity, and production readiness
+remain **Unverified**. The default IVK vector-test setup issue is unchanged
+and separately documented.
+
 ### Phase 9.21.54 — Spend H-map exact-method status
 
 The retained Spend exports verify the quotient's shifted cross-correlation

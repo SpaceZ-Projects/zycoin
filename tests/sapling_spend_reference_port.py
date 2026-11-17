@@ -25,16 +25,15 @@ from src.jubjub import (
 )
 from src.jubjub import SCALAR_MODULUS as JUBJUB_SCALAR_MODULUS
 from src.r1cs import R1CS, LinearCombination, R1CSError, Variable
+from src.sapling_blake2s import constrain_sapling_blake2s
 from src.sapling_gadgets import (
     make_merkle_path_witness,
     make_note_commitment_witness,
     sapling_fixed_base_generator,
 )
-from tests.bellman_blake2s_reference import _Negated as _BellmanNegated
-from tests.bellman_blake2s_reference import constrain_bellman_blake2s_reference
 
-SpendBoolean: TypeAlias = Variable | bool | _NegatedBit | _BellmanNegated
-SpendCircuitBit: TypeAlias = CircuitBit | _BellmanNegated
+SpendBoolean: TypeAlias = Variable | bool | _NegatedBit
+SpendCircuitBit: TypeAlias = CircuitBit
 
 _FIXED_BASE_WINDOW_BITS = 3
 _FIXED_BASE_WINDOW_COUNT = 84
@@ -987,11 +986,11 @@ def constrain_spend_ivk_blake2s(
         if value not in (0, 1):
             raise R1CSError("IVK representation bit is unassigned or non-Boolean")
 
-    digest_bits = constrain_bellman_blake2s_reference(
+    digest_bits = constrain_sapling_blake2s(
         system,
         preimage_bits,
         b"Zcashivk",
-        annotation_prefix="computation of ivk",
+        "computation of ivk",
     )
     return IvkBlake2sResult(
         preimage_bits,
@@ -1023,11 +1022,11 @@ def constrain_spend_nullifier_blake2s(
         if value not in (0, 1):
             raise R1CSError("nullifier representation bit is unassigned or non-Boolean")
 
-    digest_bits = constrain_bellman_blake2s_reference(
+    digest_bits = constrain_sapling_blake2s(
         system,
         preimage_bits,
         b"Zcash_nf",
-        annotation_prefix="nf computation",
+        "nf computation",
     )
     return NullifierBlake2sResult(preimage_bits, digest_bits)
 
@@ -1052,7 +1051,7 @@ def constrain_spend_nullifier_multipacking(
     for bit in digest_bits:
         if isinstance(bit, Variable):
             system.require_owned(bit)
-        elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+        elif isinstance(bit, _NegatedBit):
             system.require_owned(bit.variable)
         elif type(bit) not in (int, bool):
             raise TypeError("nullifier digest bits must be assigned circuit bits")
@@ -1074,7 +1073,7 @@ def constrain_spend_nullifier_multipacking(
             packed_value += _spend_circuit_bit_value(system, bit) * coefficient
             if isinstance(bit, Variable):
                 bit_lc = bit.lc()
-            elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+            elif isinstance(bit, _NegatedBit):
                 bit_lc = 1 - bit.variable.lc()
             else:
                 bit_lc = system.linear_combination((), int(bit))
@@ -1099,11 +1098,6 @@ def constrain_spend_nullifier_multipacking(
 
 
 def _spend_circuit_bit_value(system: R1CS, bit: SpendCircuitBit) -> int:
-    if isinstance(bit, _BellmanNegated):
-        value = system.witness_value(bit.variable)
-        if value not in (0, 1):
-            raise R1CSError("nullifier digest bit is unassigned or non-Boolean")
-        return 1 - int(value)
     return _read_bit(system, bit)
 
 
@@ -1852,7 +1846,7 @@ def constrain_spend_fixed_base_mul(
             value = system.witness_value(bit)
             if value not in (0, 1):
                 raise R1CSError("fixed-base selector must be an assigned boolean")
-        elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+        elif isinstance(bit, _NegatedBit):
             system.require_owned(bit.variable)
             if system.witness_value(bit.variable) not in (0, 1):
                 raise R1CSError("fixed-base selector must be an assigned boolean")
@@ -1909,7 +1903,7 @@ def _spend_boolean_value(system: R1CS, bit: SpendBoolean) -> bool:
         if value not in (0, 1):
             raise R1CSError("fixed-base selector must be an assigned boolean")
         return bool(value)
-    if isinstance(bit, (_NegatedBit, _BellmanNegated)):
+    if isinstance(bit, _NegatedBit):
         value = system.witness_value(bit.variable)
         if value not in (0, 1):
             raise R1CSError("fixed-base selector must be an assigned boolean")
@@ -1921,7 +1915,7 @@ def _spend_boolean_lc(system: R1CS, bit: SpendBoolean):
     if isinstance(bit, Variable):
         system.require_owned(bit)
         return bit.lc()
-    if isinstance(bit, (_NegatedBit, _BellmanNegated)):
+    if isinstance(bit, _NegatedBit):
         system.require_owned(bit.variable)
         return 1 - bit.variable.lc()
     return system.linear_combination((), int(bit))
@@ -1992,8 +1986,8 @@ def _spend_boolean_and(
 
     left_value = _spend_boolean_value(system, left)
     right_value = _spend_boolean_value(system, right)
-    left_negated = isinstance(left, (_NegatedBit, _BellmanNegated))
-    right_negated = isinstance(right, (_NegatedBit, _BellmanNegated))
+    left_negated = isinstance(left, _NegatedBit)
+    right_negated = isinstance(right, _NegatedBit)
     if left_negated and right_negated:
         left_variable = left.variable
         right_variable = right.variable
@@ -2054,7 +2048,7 @@ def constrain_spend_edwards_point_mul(
                 raise R1CSError(
                     "variable-base scalar bits must be assigned booleans"
                 )
-        elif isinstance(bit, (_NegatedBit, _BellmanNegated)):
+        elif isinstance(bit, _NegatedBit):
             system.require_owned(bit.variable)
             if system.witness_value(bit.variable) not in (0, 1):
                 raise R1CSError(

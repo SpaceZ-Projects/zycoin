@@ -37,6 +37,7 @@ from src.r1cs import (
     R1CSError,
     Variable,
 )
+from src.sapling_blake2s import constrain_sapling_blake2s
 from src.sapling_gadgets import (
     _pedersen_montgomery_tables,
     make_merkle_path_witness,
@@ -87,6 +88,58 @@ ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_MANIFEST = (
     ROOT / "tests" / "reference" / "sapling-output-qap" / "Cargo.toml"
 )
+
+
+class SaplingBlake2sSourceOrderTests(unittest.TestCase):
+    def test_ivk_gadget_matches_source_ordered_system(self) -> None:
+        values = tuple((index * 13 + 5) >> 2 & 1 for index in range(512))
+
+        def build(use_production_gadget: bool) -> tuple[R1CS, tuple[int, ...]]:
+            system = R1CS()
+            input_bits = tuple(
+                system.alloc_private(f"input[{index}]", bit)
+                for index, bit in enumerate(values)
+            )
+            for bit in input_bits:
+                system.boolean(bit)
+            if use_production_gadget:
+                output = constrain_sapling_blake2s(
+                    system,
+                    input_bits,
+                    b"Zcashivk",
+                    "computation of ivk",
+                )
+            else:
+                output = constrain_bellman_blake2s_reference(
+                    system,
+                    input_bits,
+                    b"Zcashivk",
+                    annotation_prefix="computation of ivk",
+                )
+            return system, tuple(_ivk_bit_value(system, bit) for bit in output)
+
+        production, production_output = build(True)
+        reference, reference_output = build(False)
+        self.assertEqual(production.serialize(), reference.serialize())
+        self.assertEqual(production._values, reference._values)
+        self.assertEqual(production_output, reference_output)
+        self.assertTrue(production.is_satisfied())
+        self.assertTrue(reference.is_satisfied())
+        self.assertEqual(production.constraint_count, 21_518)
+        self.assertEqual(len(production.variables), 21_473)
+        self.assertEqual(
+            production.matrix_fingerprint(),
+            "d91d1c41a11f9305476ae41a2b71714c21f97b0952b7a1352f5bfac40207fa7a",
+        )
+
+        xor_row = production.constraints[614]
+        self.assertEqual(xor_row.left.terms, ((581, 2),))
+        self.assertEqual(xor_row.right.terms, ((530, 1),))
+        self.assertEqual(
+            xor_row.output.terms,
+            ((530, 1), (581, 1), (615, SCALAR_MODULUS - 1)),
+        )
+        self.assertEqual(xor_row.label, reference.constraints[614].label)
 
 
 @cache
@@ -572,7 +625,7 @@ class SpendReferenceCompositionBoundaryTests(unittest.TestCase):
         self.assertEqual(system.constraints[1].output, result.conditional_anchor_variable.lc())
         self.assertTrue(system.is_satisfied())
 
-    def test_variable_base_multiplication_accepts_bellman_negated_ivk_bit(
+    def test_variable_base_multiplication_accepts_negated_ivk_bit(
         self,
     ) -> None:
         system = SpendReferenceR1CS()
@@ -581,7 +634,7 @@ class SpendReferenceCompositionBoundaryTests(unittest.TestCase):
             system, generator, "negated IVK base"
         )
         raw_bit = system.alloc_private("negated IVK raw bit", 0)
-        negated_bit = sapling_spend_reference_port._BellmanNegated(raw_bit)
+        negated_bit = _NegatedBit(raw_bit)
 
         result = constrain_spend_edwards_point_mul(
             system,
@@ -708,7 +761,7 @@ class SpendReferenceCompositionBoundaryTests(unittest.TestCase):
                 for index in range(251)
             )
             ivk_bits = tuple(
-                sapling_spend_reference_port._BellmanNegated(bit)
+                _NegatedBit(bit)
                 for bit in raw_bits
             )
             observed["ivk_bits"] = ivk_bits
@@ -4291,8 +4344,8 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_bellman_blake2s_reference",
-            wraps=constrain_bellman_blake2s_reference,
+            "constrain_sapling_blake2s",
+            wraps=constrain_sapling_blake2s,
         ) as python_syntheses:
             result = constrain_spend_ivk_blake2s(
                 system, ak_repr_bits, nk_repr_bits
@@ -4361,6 +4414,12 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         self.ivk_matrix_fingerprint = system.matrix_fingerprint()
         self.ivk_matrix_rows = system.constraint_count
         self.ivk_matrix_columns = len(system.variables)
+        self.assertEqual(self.ivk_matrix_rows, 22_566)
+        self.assertEqual(self.ivk_matrix_columns, 22_519)
+        self.assertEqual(
+            self.ivk_matrix_fingerprint,
+            "5953027d2a1b56fcfc57ef3432083b7c800a9db7693a7f88bfc8a353e9c68b69",
+        )
         print(
             "IVK matrix",
             self.ivk_matrix_rows,
@@ -4463,7 +4522,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         self.assertEqual(set(self.ivk_blake2s_vectors), expected_names)
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_bellman_blake2s_reference",
+            "constrain_sapling_blake2s",
             side_effect=AssertionError("output-vector checks must not synthesize"),
         ):
             for name, reference in self.ivk_blake2s_vectors.items():
@@ -4535,7 +4594,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_bellman_blake2s_reference",
+            "constrain_sapling_blake2s",
             side_effect=AssertionError("invalid input reached synthesis"),
         ) as python_syntheses:
             for call in invalid_calls:
@@ -4567,8 +4626,8 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_bellman_blake2s_reference",
-            wraps=constrain_bellman_blake2s_reference,
+            "constrain_sapling_blake2s",
+            wraps=constrain_sapling_blake2s,
         ) as python_syntheses:
             result = constrain_spend_nullifier_blake2s(
                 system, nk_repr_bits, rho_repr_bits
@@ -4613,6 +4672,12 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         self.nullifier_matrix_fingerprint = system.matrix_fingerprint()
         self.nullifier_matrix_rows = system.constraint_count
         self.nullifier_matrix_columns = len(system.variables)
+        self.assertEqual(self.nullifier_matrix_rows, 22_566)
+        self.assertEqual(self.nullifier_matrix_columns, 22_519)
+        self.assertEqual(
+            self.nullifier_matrix_fingerprint,
+            "20f63b47b5102a57ea023edc7452b3f9e7004ea34a5a53e2402984c17e89ab32",
+        )
         print(
             "Nullifier matrix",
             self.nullifier_matrix_rows,
@@ -4651,8 +4716,8 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_bellman_blake2s_reference",
-            wraps=constrain_bellman_blake2s_reference,
+            "constrain_sapling_blake2s",
+            wraps=constrain_sapling_blake2s,
         ) as python_hash_syntheses, patch(
             __name__ + ".constrain_spend_nullifier_multipacking",
             wraps=constrain_spend_nullifier_multipacking,
@@ -4913,7 +4978,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         self.assertEqual(set(self.nullifier_blake2s_vectors), expected_names)
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_bellman_blake2s_reference",
+            "constrain_sapling_blake2s",
             side_effect=AssertionError("output-vector checks must not synthesize"),
         ):
             for name, reference in self.nullifier_blake2s_vectors.items():
@@ -4986,7 +5051,7 @@ class SpendEdwardsPointReferencePortTests(unittest.TestCase):
         )
         with patch.object(
             sapling_spend_reference_port,
-            "constrain_bellman_blake2s_reference",
+            "constrain_sapling_blake2s",
             side_effect=AssertionError("invalid input reached synthesis"),
         ) as python_syntheses:
             for call in invalid_calls:

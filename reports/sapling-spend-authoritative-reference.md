@@ -2704,3 +2704,69 @@ uses the production-safe helper, but the circuit-level test-only dependency
 remains necessary for exact ordered matrix and annotation parity. This does
 not establish Spend production migration, official parameter binding,
 ceremony validity, or proving readiness.
+
+### Phase 9.21.60 — Source-ordered BLAKE2s circuit gadget
+
+Added the production-safe pure-Python
+[`src/sapling_blake2s.py`](../src/sapling_blake2s.py) gadget and routed the
+isolated Spend IVK and nullifier circuit wrappers through it. The module
+depends only on ZyCoin's R1CS and production BLAKE2s bit/witness primitives.
+It preserves the pinned source's `MultiEq` batching, result-bit allocation
+and Boolean enforcement, slash-separated annotation paths, and complemented
+XOR operand ordering. `tests/bellman_blake2s_reference.py` remains an
+independent test-only comparison implementation; the Spend circuit module no
+longer imports it or its `_Negated` type.
+
+The existing production `src.blake2s_gadget.py` mismatch was traced to
+source-specific synthesis details, not merely labels or dimensions. In the
+matched 512-bit IVK comparison, the first production variable name differed
+at column 513 and the first label at row 512. The first ordered matrix
+difference was row 614: the generic production helper emitted
+A=`2*column 530`, B=`column 581`; the source order is A=`2*column 581`,
+B=`column 530`. The pinned transcription swaps the backing variables in
+that XOR equation when the left bit is complemented and source annotations
+are enabled. Its `/result bit .../boolean` and `/xor constraint` labels also
+differ from the generic helper's bracket/space labels. The new module ports
+these source-mode allocation, row, and annotation rules without changing the
+existing general-purpose BLAKE2s gadget.
+
+An independent raw-IVK gadget comparison now matches the retained Python
+transcription's complete serialized system, assignments, outputs, and
+satisfaction result, including row 614 and all labels/ordered A/B/C rows:
+21,518 rows × 21,473 columns, fingerprint
+`d91d1c41a11f9305476ae41a2b71714c21f97b0952b7a1352f5bfac40207fa7a`.
+Retained Bellman-trace tests independently verified the integrated IVK
+component at 22,566 × 22,519 with fingerprint
+`5953027d2a1b56fcfc57ef3432083b7c800a9db7693a7f88bfc8a353e9c68b69`,
+and the nullifier component at the same dimensions with fingerprint
+`20f63b47b5102a57ea023edc7452b3f9e7004ea34a5a53e2402984c17e89ab32`.
+Those comparisons check variable identities/order and assignments, every
+annotation, every ordered A/B/C expression, and satisfaction against the
+retained trace. No new Bellman export was needed.
+
+Host-side IVK admission still uses `make_blake2s_witness`; its focused
+integration test passed. IVK and nullifier digest-vector tests passed in
+their reference-only setup branches. Existing nullifier multipacking tests,
+production BLAKE2s regressions, adapter boundary tests, and negated-bit
+handoff tests also passed. The default IVK vector-test setup still raises
+`AttributeError` because it does not initialize `ivk_blake2s_vectors`;
+only the reference-only setup branch does. This independent setup defect was
+reproduced without changing fixtures.
+
+The complete 98,777 × 98,646 Spend matrix was **not re-synthesized or
+reverified** in this phase. Its retained fingerprint remains
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`, but
+this is not a new whole-circuit measurement. The BLAKE2s circuit dependency
+is now production-safe and exact for the verified IVK/nullifier components;
+the broader Spend circuit, assembly, and Groth16 adapter remain test-only.
+Official parameter binding, ceremony validity, and Spend proving readiness
+remain **Unverified**.
+
+Verification: raw IVK system differential **1 passed in 3.02 s**; retained
+IVK trace/vector/invalid-input tests **3 passed**; retained nullifier
+trace/vector/invalid-input tests **3 passed**; multipacking tests **3 passed
+with 22,580 subtests**; production BLAKE2s regressions **19 passed with 52
+subtests**; adapter boundary tests **5 passed**; host IVK helper integration
+**1 passed**. Targeted Ruff, `compileall`, `git diff --check`, and new-module
+Pylance diagnostics passed. Existing unused-local Pylance warnings in test
+files were left unchanged.

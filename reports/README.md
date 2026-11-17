@@ -101,6 +101,11 @@ and provenance; it is the source record for the focused reports below.
   helper. The existing production circuit helper differs in source-mode
   ordered A/B expressions and annotations, so test-only circuit synthesis
   remains necessary; Spend migration and readiness remain unverified.
+  [Phase 9.21.60](sapling-spend-authoritative-reference.md#phase-92160--source-ordered-blake2s-circuit-gadget)
+  ports the exact source ordering and annotations into
+  `src.sapling_blake2s`; retained IVK/nullifier trace comparisons pass.
+  The complete Spend matrix was not rerun, and production Spend readiness
+  remains unverified.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
