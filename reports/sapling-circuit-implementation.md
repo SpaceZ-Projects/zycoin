@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.51):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.52):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -161,6 +161,21 @@ QAP transformations **7 tests in 0.005 s**, and compatibility manifest
 **19 tests in 0.127 s** (28 total). Python compileall, Pylance syntax checks,
 manifest JSON parsing, targeted Ruff, and `git diff --check` passed. No Spend
 synthesis was run.
+
+Phase 9.21.52 derives the fixed quadratic H recomputation from the transformed
+A/B/C polynomial families and assignment but does not establish a linear
+`131,071×131,071` H-coordinate map. The restricted inverse acts before
+multiplication; the helper `-V` term excludes a constant helper-only residual
+map but has not been shown to be the sole obstruction. Baseline and
+`zero-value-alternating` H fingerprints differ across implementations, which
+disproves the identity map only. Raw alternate QAP vectors were temporary and
+are not retained, so this phase did not independently replay those values.
+The exact coefficient-tensor factorization test remains the next step; no
+query points or Groth16 equation were examined.
+Focused factor-kernel/H-assessment, QAP transformation, and compatibility
+manifest regressions passed **29 tests** (3 in 3.216 s, 7 in 0.012 s, and 19
+in 0.128 s). Compileall, Pylance syntax, JSON, targeted Ruff, and diff checks
+passed; no Spend synthesis was run.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 

@@ -2041,3 +2041,118 @@ QAP transformations **7 tests in 0.005 s**, and compatibility manifest
 **19 tests in 0.127 s** (28 tests total). Python compileall, Pylance syntax
 checks for both changed Python files, manifest JSON parsing, targeted Ruff,
 and `git diff --check` passed. No Spend synthesis was run.
+
+### Phase 9.21.52 — Restricted Spend H-coordinate transformation assessment
+
+This phase assesses whether the restricted factor inverse from Phase 9.21.51
+induces a fixed linear transformation of H quotient coordinates. It reuses
+the retained factor map, variable/helper correspondence, and recorded
+baseline/alternate QAP fingerprints. It performs no Spend synthesis and
+does not touch any official query points.
+
+For `N=131,072`, let `W` be the evaluation matrix on the retained root order,
+`E` embed the 98,777 constraint rows, and `D_t` supply the eight unchanged
+input-dummy entries and zero padding. With `x_L=M x_U`, the exact A/B/C
+polynomial-family relation is
+
+```text
+P_L,s = W^-1 (E Q_L,s + D_L,s)
+P_U,t = W^-1 (E (Σ_s R_ts Q_L,s M + S_t) + D_U,t),
+          t,s ∈ {A,B,C}.
+```
+
+Thus `W` is invertible on all 131,072 A/B/C coordinates, and the restricted
+factor inverse recovers the 98,646-column local family after inverse
+interpolation, removal of dummy/padding entries, and subtraction of `S`.
+This is the exact witness-independent A/B/C transformation. `K` itself acts
+on the stacked `296,331` row-factor coordinates; it is not an operator on
+the `131,071` H coefficients.
+
+For a satisfying assignment define
+
+```text
+A_U(X;x)=Σ_j x_U,j P_U,A,j(X)
+B_U(X;x)=Σ_j x_U,j P_U,B,j(X)
+C_U(X;x)=Σ_j x_U,j P_U,C,j(X)
+H_U(X;x)=(A_U(X;x)B_U(X;x)-C_U(X;x))/(X^N-1),
+```
+
+and analogously for the local system with `x_L=M x_U`. The exact quotient
+coordinate relation established by the factor map is therefore the fixed
+quadratic recomputation
+
+```text
+h_U(x_U) = quotient_N(
+  [Σ_j x_U,j P_U,A,j] [Σ_j x_U,j P_U,B,j]
+  - Σ_j x_U,j P_U,C,j
+).
+```
+
+The same-domain evaluation coordinates are `W h_U`; H uses ascending
+coefficient order `0..131,070`, while its evaluation vector has 131,072
+entries. Divisibility is guaranteed only for satisfying assignments.
+
+A fixed linear H-coordinate map would be a matrix
+`T_H ∈ F^(131071×131071)` satisfying
+`h_U(x_U)=T_H h_L(M x_U)` for every satisfying assignment. For an identity
+over the full assignment space, this requires every degree-at-most-two
+coefficient vector of the upstream quotient to equal `T_H` times the
+corresponding local vector (linear terms can be homogenized using the fixed
+`ONE` coordinate). The restricted inverse establishes no such tensor
+factorization: it recovers the three factor families before their
+multiplication and quotient, not the result of that nonlinear operation.
+The exact coefficient-tensor factorization test has not been performed, so
+existence or nonexistence of a separate fixed `T_H` remains **Unresolved**.
+Accordingly, no H-map rank, kernel, invertibility result, or fingerprint is
+claimed.
+
+The helper residual identity
+`[g_root,g_position]^T=[[1,-V],[0,-1]][f_root,f_anchor]^T` has a
+witness-dependent `-V` coefficient and rules out a constant helper-only
+residual-row map. The already established fixed cross-row A/B/C operator
+and affine matrix `S` account for the helper factors. The `-V` term is
+therefore a proven obstruction to that narrow residual map, but has not been
+shown to be the sole obstruction to a linear H-coordinate transformation.
+More generally, multiplication of the transformed A/B factors creates
+quadratic mixed terms; applying `K` before that multiplication does not
+reduce them to a linear operation on `H_L`.
+
+The retained baseline fingerprints record Bellman/production H coefficients
+`27d57fc5…4037a55` / `a98ecf08…850862` and H evaluations
+`b7ee1b2f…23bb7d` / `04d75e39…30f65c7`. The
+`zero-value-alternating` record gives coefficients
+`38d0b985…24f8bed` / `604aaeb5…fa5075f` and evaluations
+`a5ac5c82…d90d83db` / `62dc36d1…1560f49`. In both recorded cases, the
+Bellman and production H vectors differ, which disproves the identity map
+only; it does not disprove another linear map. These are retained
+fingerprints, not raw vector exports. In particular, the alternate-QAP test
+writes its trace and QAP vectors into a `TemporaryDirectory` cleaned at
+teardown. This phase did not independently recompute the raw baseline or
+alternate vectors and did not repeat synthesis. Therefore the requested
+baseline/alternate verification is limited to the exact previously recorded
+fingerprints.
+
+**Conclusion:** the restricted A/B/C inverse induces an exact
+witness-independent quadratic recomputation of upstream H from transformed
+A/B/C factors and the assignment. A fixed linear H-coordinate
+transformation is **Unresolved**—neither established nor disproven. The
+retained witness hashes reject the identity map only. The H-query
+point transformation and Groth16 verification equation were not assessed,
+as required because no fixed linear H map has been established.
+
+**Smallest justified next step:** derive a sparse exact representation of
+the local and upstream symmetric quadratic coefficient families for H, then
+solve the finite-field factorization equation for a single
+`131,071×131,071` `T_H`. A successful solve needs direct rank/kernel and
+all-coefficient verification; a failure needs an exact inconsistency
+certificate. That symbolic test can decide existence without witness
+synthesis. If baseline/alternate empirical checks are still required,
+recover the prior raw QAP exports; the current saved hashes alone are not
+sufficient to replay those vector comparisons.
+
+Verification: focused factor-kernel/H-assessment tests passed **3 tests in
+3.216 s**, QAP transformation regressions passed **7 tests in 0.012 s**, and
+compatibility-manifest regressions passed **19 tests in 0.128 s** (29 total).
+Python compileall, Pylance syntax, manifest JSON parsing, targeted Ruff, and
+`git diff --check` passed. No Spend synthesis or query-point transformation
+was run.

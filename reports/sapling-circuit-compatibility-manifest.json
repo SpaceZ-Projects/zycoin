@@ -1236,7 +1236,7 @@
       "interpretation": "The two systems are each satisfied and independently quotient-divisible, but their exact canonical QAP vectors are not equal. The fixed forward A/B/C factor identity is now characterized, including its nontrivial kernel and cokernel. This does not establish a complete H/query transformation or parameter-to-circuit binding."
     },
     "spend_qap_transformation_audit": {
-      "phase": "9.21.51",
+      "phase": "9.21.52",
       "semantic_relation_equivalence": "Evidence-supported for the pinned exports under the accepted variable map and explicit auxiliary projection; not a formal source-level proof.",
       "qap_equivalence": "Canonical matrix/QAP identity is not claimed. A fixed A/B/C coefficient-family map and restricted inverse are established on the retained production family; H and official-query compatibility remain unresolved.",
       "proving_query_compatibility": "Unverified. No complete public linear transformation from the local A/B/C variable polynomials and auxiliary space to the pinned Bellman proving queries has been established.",
@@ -1260,7 +1260,7 @@
         "complete_query_transformation": "Unresolved"
       },
       "global_coordinate_transformation": {
-        "status": "Fixed forward A/B/C factor operator, exact kernel/quotient certificates, and restricted inverse on the production coefficient-family span established; H and query transformation unresolved",
+        "status": "Fixed forward A/B/C factor operator and restricted inverse established on the retained coefficient-family span; linear H-coordinate transformation unresolved; query transformation unresolved",
         "variable_map": {
           "direction": "x_local = M x_upstream",
           "helper_equation": "P = T + sum(2^i*d_i, i=0..31) - A",
@@ -1442,7 +1442,36 @@
           "construction_interpretation": "A fixed assignment-uniform quadratic recomputation from local A/B/C factor families and x; not a linear H_U=T_H*H_L coordinate map.",
           "fixed_linear_H_coordinate_map": "Unresolved",
           "identity_map": "Disproved by retained baseline and zero-value-alternating witness comparisons",
-          "arbitrary_assignment_validity": "Quotient divisibility is guaranteed only for satisfying assignments"
+          "arbitrary_assignment_validity": "Quotient divisibility is guaranteed only for satisfying assignments",
+          "restricted_inverse_implication": "K(Q_U-S)=Q_L M recovers the stacked A/B/C factor coefficient family only; it is not an operator on H quotient coordinates.",
+          "evaluation_and_polynomial_coordinates": {
+            "domain_size": 131072,
+            "h_coefficient_count": 131071,
+            "h_evaluation_count": 131072,
+            "coefficient_order": "Ascending degree 0 through 131070; degree 131071 is zero.",
+            "evaluation_relation": "h_eval_U = W H_U, with W the same invertible domain evaluation matrix used for A/B/C interpolation."
+          },
+          "linear_map_test_condition": "A witness-independent linear T_H would require h_U(x)=T_H h_L(M*x) for every satisfying assignment. For an identity over the full assignment space, every degree-at-most-two coefficient vector of h_U must equal T_H times the corresponding local vector; linear terms may be homogenized using the fixed ONE coordinate.",
+          "existence_result": "Unresolved; no exact coefficient-tensor factorization, counterexample over the satisfying-witness set, or T_H matrix has been established.",
+          "helper_term_assessment": "The helper residual relation has witness-dependent coefficient -V, ruling out a constant helper-only residual-row transform. The fixed cross-row A/B/C operator and S offsets already encode the factor relation; -V has not been proved to be the sole obstruction to a linear H map.",
+          "retained_witness_evidence": {
+            "baseline": {
+              "bellman_h_coefficients_sha256": "27d57fc5eae604c210feda073ee1befcb73a776ef6bf4b08ba25d00314037a55",
+              "production_h_coefficients_sha256": "a98ecf083b7660a04fd59fc887e7799cf96c1e0cf5e4cd898690340125850862",
+              "bellman_h_evaluations_sha256": "b7ee1b2f7f49704446fb4acdc4dcf8e9a859ebeddcd9994d1aa2ec5a3023bb7d",
+              "production_h_evaluations_sha256": "04d75e396d3c01478d7de835da712c7a10eecdec070fd79a0781d60ee30f65c7",
+              "identity_map_matches": false
+            },
+            "zero_value_alternating": {
+              "bellman_h_coefficients_sha256": "38d0b98546ba107791f1e4c77670d9e6b76f8ceef4d246de3a180d7c024f8bed",
+              "production_h_coefficients_sha256": "604aaeb55a719031c41b15c30193bd469210584ed40e02e73a220ad8bfa5075f",
+              "bellman_h_evaluations_sha256": "a5ac5c823e94310619df3744b43dd7eed47b8ed2a5df619f14b6c742d90d83db",
+              "production_h_evaluations_sha256": "62dc36d14ff35033b51f074b39703ea3656b9f455e286ad189594101e1560f49",
+              "identity_map_matches": false
+            },
+            "evidence_limit": "These retained fingerprints disprove the identity map only. Raw alternate-witness QAP vectors are not retained; the prior alternate-QAP test writes its trace and vectors under a TemporaryDirectory that is cleaned at teardown. No synthesis or export was repeated in this phase."
+          },
+          "official_h_query_follow_on": "Not attempted: no fixed H-coordinate map has been established. Polynomial-coordinate evidence alone would not prove H-query point compatibility."
         },
         "official_query_sections": {
           "IC": "Unresolved; public variable indices agree, but no complete combined-query point map is derived.",

@@ -615,7 +615,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.51):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.52):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -711,6 +711,21 @@ manifest **19 tests in 0.127 s** (28 total). The retained-input certificate
 reproduction completed in **8.093 s**. Python compileall, Pylance syntax
 checks, manifest JSON parsing, targeted Ruff, and `git diff --check` passed.
 No Spend synthesis was run.
+
+Phase 9.21.52 gives the exact fixed quadratic H recomputation induced by the
+A/B/C factor maps. A fixed linear H-coordinate matrix remains **Unresolved**:
+the restricted inverse does not act on H coefficients, and the two retained
+baseline/alternate hashes disprove only the identity map. The helper
+`-V` coefficient blocks a constant helper-only residual transformation but
+is not proven to be the sole H obstruction. No H query points or Groth16
+verification-equation transformation were attempted. Resolving linear-map
+existence requires an exact symmetric quadratic coefficient-family
+factorization or an inconsistency certificate. See
+[Phase 9.21.52 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92152--restricted-spend-h-coordinate-transformation-assessment).
+Focused factor-kernel/H-assessment, QAP transformation, and compatibility
+manifest regressions passed **29 tests** (3 in 3.216 s, 7 in 0.012 s, and 19
+in 0.128 s). Compileall, Pylance syntax, JSON, targeted Ruff, and diff checks
+passed. No Spend synthesis or query-point transformation was run.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

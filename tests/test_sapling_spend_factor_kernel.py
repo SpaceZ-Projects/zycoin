@@ -394,6 +394,25 @@ class SaplingSpendFactorKernelTests(unittest.TestCase):
             restricted["affine_offset"]["subtract_before_inverse"]
         )
 
+    def test_h_coordinate_assessment_preserves_unresolved_status(self) -> None:
+        h_audit = self.audit["h_quotient"]
+        self.assertEqual(h_audit["fixed_linear_H_coordinate_map"], "Unresolved")
+        self.assertEqual(
+            h_audit["evaluation_and_polynomial_coordinates"]["h_coefficient_count"],
+            131_071,
+        )
+        self.assertIn("Unresolved", h_audit["existence_result"])
+        witnesses = h_audit["retained_witness_evidence"]
+        self.assertFalse(witnesses["baseline"]["identity_map_matches"])
+        self.assertFalse(witnesses["zero_value_alternating"]["identity_map_matches"])
+        self.assertIn("only", witnesses["evidence_limit"])
+        self.assertEqual(
+            h_audit["official_h_query_follow_on"],
+            "Not attempted: no fixed H-coordinate map has been established. "
+            "Polynomial-coordinate evidence alone would not prove H-query "
+            "point compatibility.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

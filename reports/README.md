@@ -68,6 +68,10 @@ and provenance; it is the source record for the focused reports below.
   coefficient-family span, including its zero kernel intersection, exact
   factorization, and affine-offset handling. H and all six official query
   transformations remain unresolved.
+  [Phase 9.21.52](sapling-spend-authoritative-reference.md#phase-92152--restricted-spend-h-coordinate-transformation-assessment)
+  derives the fixed quadratic H recomputation and records why the restricted
+  A/B/C inverse does not establish a linear H-coordinate map. Existence of
+  such a map remains unresolved; no query-point transformation was attempted.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
@@ -93,8 +97,9 @@ and provenance; it is the source record for the focused reports below.
   documents the global A/B/C operator and the remaining unresolved H/query
   transformation.
   Phase 9.21.50 adds exact finite-field kernel and quotient certificates;
-  Phase 9.21.51 adds the QAP-family restricted inverse. No H-coordinate or
-  Groth16 query transformation is established.
+  Phase 9.21.51 adds the QAP-family restricted inverse; Phase 9.21.52 records
+  the unresolved linear H-coordinate assessment. No Groth16 query
+  transformation is established.
   [Phase 9.21.17](sapling-circuit-implementation.md#phase-92117--independent-spend-semantic-equivalence-audit)
   documents the anchor substitution and little-endian position interpretation;
   Phase 9.21.43 establishes relation equivalence for the captured exports,
