@@ -39,6 +39,20 @@ struct Export {
 }
 
 #[derive(Serialize)]
+struct AssignmentExport {
+    format: &'static str,
+    sapling_crypto_revision: &'static str,
+    bellman_revision: &'static str,
+    full_synthesis_count: usize,
+    fixture: Fixture,
+    num_inputs_including_one: usize,
+    num_auxiliary_variables: usize,
+    constraints_recorded: bool,
+    inputs: Vec<VariableRecord>,
+    auxiliary_variables: Vec<VariableRecord>,
+}
+
+#[derive(Serialize)]
 struct Fixture {
     name: &'static str,
     seed_hex: &'static str,
@@ -87,10 +101,19 @@ struct TraceConstraintSystem {
     auxiliary_variables: Vec<VariableRecord>,
     constraints: Vec<Row>,
     next_allocation_event: usize,
+    capture_constraints: bool,
 }
 
 impl TraceConstraintSystem {
     fn new() -> Self {
+        Self::with_constraint_capture(true)
+    }
+
+    fn new_assignments_only() -> Self {
+        Self::with_constraint_capture(false)
+    }
+
+    fn with_constraint_capture(capture_constraints: bool) -> Self {
         Self {
             namespaces: Vec::new(),
             inputs: vec![VariableRecord {
@@ -115,6 +138,7 @@ impl TraceConstraintSystem {
             auxiliary_variables: Vec::new(),
             constraints: Vec::new(),
             next_allocation_event: 1,
+            capture_constraints,
         }
     }
 
@@ -536,6 +560,9 @@ impl ConstraintSystem<Scalar> for TraceConstraintSystem {
         LB: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
         LC: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
     {
+        if !self.capture_constraints {
+            return;
+        }
         let name = self.full_name(annotation().into());
         let a = a(LinearCombination::zero());
         let b = b(LinearCombination::zero());
@@ -677,5 +704,146 @@ fn export_pinned_spend_fixture() {
     };
     let path = std::env::var("SAPLING_SPEND_EXPORT")
         .expect("set SAPLING_SPEND_EXPORT to an external artifact path");
+    fs::write(path, serde_json::to_vec(&export).unwrap()).unwrap();
+}
+
+fn assignment_variant_spend(name: &str) -> (Spend, Fixture) {
+    let (seed, seed_hex, fixture_name, value) = match name {
+        "zero-value-alternating" => (
+            [
+                0x31, 0x57, 0x92, 0x0b, 0x21, 0x84, 0x4d, 0x6a, 0x77, 0x03, 0x9c, 0xe1, 0x25, 0x68,
+                0x4f, 0xb2,
+            ],
+            "3157920b21844d6a77039ce125684fb2",
+            "independent zero-value alternating-path Spend witness",
+            0,
+        ),
+        "max-value-all-right" => (
+            [
+                0xa7, 0x4c, 0x11, 0xdf, 0x05, 0x2e, 0x8b, 0x73, 0x19, 0xc0, 0x36, 0x54, 0x89, 0x22,
+                0xe3, 0x6d,
+            ],
+            "a74c11df052e8b7319c036548922e36d",
+            "independent maximum-value all-right Spend witness",
+            u64::MAX,
+        ),
+        _ => panic!("unsupported Spend assignment variant {name:?}"),
+    };
+    let mut rng = XorShiftRng::from_seed(seed);
+    let tree_depth = 32;
+    let value_commitment = ValueCommitmentOpening {
+        value: NoteValue::from_raw(value),
+        randomness: jubjub::Fr::random(&mut rng),
+    };
+    let spend_validating_key = loop {
+        let key = jubjub::SubgroupPoint::random(&mut rng).to_bytes();
+        if let Some(key) = SpendValidatingKey::temporary_zcash_from_bytes(&key) {
+            break key;
+        }
+    };
+    let proof_generation_key =
+        ProofGenerationKey::from_parts(spend_validating_key, jubjub::Fr::random(&mut rng)).unwrap();
+    let viewing_key = proof_generation_key.to_viewing_key();
+    let payment_address = loop {
+        let mut bytes = [0; 11];
+        rng.fill_bytes(&mut bytes);
+        if let Some(address) = viewing_key.to_payment_address(Diversifier(bytes)) {
+            break address;
+        }
+    };
+    let commitment_randomness = jubjub::Fr::random(&mut rng);
+    let auth_path = (0..tree_depth)
+        .map(|level| {
+            let sibling = Scalar::random(&mut rng);
+            let direction = match name {
+                "zero-value-alternating" => level % 2 == 0,
+                "max-value-all-right" => true,
+                _ => unreachable!(),
+            };
+            Some((sibling, direction))
+        })
+        .collect::<Vec<_>>();
+    let ar = jubjub::Fr::random(&mut rng);
+
+    let note = Note::from_parts(
+        payment_address,
+        value_commitment.value,
+        Rseed::BeforeZip212(commitment_randomness),
+    );
+    let cmu = note.cmu();
+    let mut current = Option::<Scalar>::from(Scalar::from_bytes(&cmu.to_bytes())).unwrap();
+    for (level, entry) in auth_path.iter().enumerate() {
+        let (sibling, direction) = entry.unwrap();
+        let (left, right) = if direction {
+            (sibling, current)
+        } else {
+            (current, sibling)
+        };
+        let left_bits = left.to_le_bits();
+        let right_bits = right.to_le_bits();
+        let hash = sapling_crypto::pedersen_hash::pedersen_hash(
+            sapling_crypto::pedersen_hash::Personalization::MerkleTree(level),
+            left_bits
+                .iter()
+                .by_vals()
+                .take(Scalar::NUM_BITS as usize)
+                .chain(right_bits.iter().by_vals().take(Scalar::NUM_BITS as usize)),
+        );
+        current = jubjub::ExtendedPoint::from(hash).to_affine().get_u();
+    }
+
+    (
+        Spend {
+            value_commitment_opening: Some(value_commitment),
+            proof_generation_key: Some(proof_generation_key),
+            payment_address: Some(payment_address),
+            commitment_randomness: Some(commitment_randomness),
+            ar: Some(ar),
+            auth_path,
+            anchor: Some(current),
+        },
+        Fixture {
+            name: fixture_name,
+            seed_hex,
+            iteration: 0,
+        },
+    )
+}
+
+#[test]
+fn export_spend_assignment_variant() {
+    let variant =
+        std::env::var("SAPLING_SPEND_ASSIGNMENT_VARIANT").expect("set the assignment variant");
+    let (spend, fixture) = assignment_variant_spend(&variant);
+    let mut trace = TraceConstraintSystem::new_assignments_only();
+    spend.synthesize(&mut trace).unwrap();
+    assert!(trace.constraints.is_empty());
+    assert_eq!(trace.inputs.len(), 8);
+    assert_eq!(trace.auxiliary_variables.len(), 98_638);
+    let mut allocation_event_indices: Vec<_> = trace
+        .inputs
+        .iter()
+        .chain(trace.auxiliary_variables.iter())
+        .map(|variable| variable.allocation_event_index)
+        .collect();
+    allocation_event_indices.sort_unstable();
+    assert_eq!(
+        allocation_event_indices,
+        (0..trace.inputs.len() + trace.auxiliary_variables.len()).collect::<Vec<_>>()
+    );
+    let export = AssignmentExport {
+        format: "bellman-sapling-spend-assignment-reference-v1",
+        sapling_crypto_revision: SAPLING_REVISION,
+        bellman_revision: BELLMAN_REVISION,
+        full_synthesis_count: 1,
+        fixture,
+        num_inputs_including_one: trace.inputs.len(),
+        num_auxiliary_variables: trace.auxiliary_variables.len(),
+        constraints_recorded: false,
+        inputs: trace.inputs,
+        auxiliary_variables: trace.auxiliary_variables,
+    };
+    let path = std::env::var("SAPLING_SPEND_ASSIGNMENT_EXPORT")
+        .expect("set SAPLING_SPEND_ASSIGNMENT_EXPORT to an external artifact path");
     fs::write(path, serde_json::to_vec(&export).unwrap()).unwrap();
 }

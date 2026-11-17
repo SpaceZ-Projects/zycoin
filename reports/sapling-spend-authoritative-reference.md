@@ -108,8 +108,10 @@ does **not** mean identical allocation order, row order, A/B/C factorization,
 or matrix.
 
 The stage-specific sections below retain their contemporaneous evidence
-limits. Phase 9.21.40 in this report supersedes earlier statements that
-complete test-only Spend composition or matrix comparison was outstanding.
+limits. Phase 9.21.40 established complete test-only Spend composition and
+matrix comparison for one witness; Phase 9.21.41 expands assignment and
+satisfaction coverage to three independently constructed valid witnesses
+while reusing the witness-independent Bellman matrix.
 
 | Reference function or stage | ZyCoin counterpart | Port-map status |
 |---|---|---|
@@ -123,14 +125,16 @@ complete test-only Spend composition or matrix comparison was outstanding.
 | `g^position`, `rho`, `rho.repr` | Test-only fixed-base, addition, and representation helpers | **Full trace verified** using the original 32 direction bits. |
 | Nullifier `nf = BLAKE2s(nk || rho)` | Test-only `constrain_spend_nullifier_blake2s` | **Full trace verified** for allocations, assignments, labels, and ordered A/B/C rows. |
 | Nullifier multipacking | Test-only `constrain_spend_nullifier_multipacking` | **Full trace verified** for the 254+2 split and final public-input positions. |
-| Complete synthesis and complete matrix comparison | Test-only `constrain_source_faithful_spend` and pinned Bellman exporter | **Verified** for the retained deterministic satisfying witness: exact dimensions, assignments, labels, and every ordered A/B/C row match. |
+| Complete synthesis and complete matrix comparison | Test-only `constrain_source_faithful_spend` and pinned Bellman exporter | **Verified** against the retained Bellman matrix for three satisfying witnesses: exact dimensions, per-witness assignments and labels, public positions, and every ordered A/B/C row match. |
 
 The production `constrain_sapling_spend` assembler remains a separate
 implementation and was not modified. Its production matrix fingerprint and
 official-parameter binding are not inferred from the test-only result. The
-isolated source-faithful composition passed complete trace comparison for one
-deterministic witness; broader witness coverage and official parameter
-compatibility remain **Unverified**.
+isolated source-faithful composition passed complete ordered-matrix comparison
+against the retained Bellman matrix for three valid witnesses. Independent
+Bellman constraint-row exports for the two added witnesses, production Spend
+matrix equivalence, and official parameter compatibility remain
+**Unverified**.
 
 ### Phase 9.21.40 — Full source-order recomposition
 
@@ -180,8 +184,65 @@ compilation, and `git diff --check` passed.
 **Task status: complete for the isolated test-only composition.** This does
 not establish that the production `constrain_sapling_spend` has the same
 matrix, nor does it establish official parameter compatibility, ceremony
-validity, or broader witness coverage. No production Spend or Output code,
+validity, or coverage beyond the three tested valid witnesses. No production Spend or Output code,
 proving gate, setup, or official parameter was changed.
+
+### Phase 9.21.41 — Expanded full Spend witness coverage
+
+The full source-order Python Spend path was differentially exercised for three
+independently constructed satisfying witnesses. The original pinned Bellman
+trace remains the full matrix reference: 98,777 rows, 98,646 columns, and
+matrix fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+For each added case, a separate pinned Bellman `Spend::synthesize` run
+exported all input/auxiliary identities, allocation events, annotations, and
+assignments with constraint-row capture disabled. The Python path was then
+fully synthesized and compared against the retained Bellman matrix and that
+case's Bellman assignments. This avoids repeating a witness-independent
+98,777-row Bellman export; it is not a claim that Bellman rows were separately
+re-exported for either variant.
+
+The first added witness uses value zero and alternating direction bits
+(`true, false, ...`) over a 32-level path. Its Python full synthesis took
+45.849 seconds in the final passing run. The second uses `u64::MAX` and 32
+`true` direction bits; its Python full synthesis took 42.750 seconds. Both
+cases use independent fixed RNG seeds and produce different `ak`, `nsk`,
+`g_d`, and `rcv` assignments from the baseline. Their complete IVK and
+nullifier BLAKE2s allocation groups, note-content hash, and `nk`
+representation assignments also differ from baseline. Both preserve the
+98,777-row / 98,646-column matrix and the fingerprint above. Allocation event
+order, all variable identities and assignments, annotations, public-input
+positions, every ordered A/B/C expression, and satisfaction results matched.
+
+Post-synthesis circuit-level mutations were evaluated against the same
+Bellman matrix and each case's independently exported assignments. Changing
+only public `Input(5)` fails row 76,894 (`anchor/enforce input is correct`) in
+both systems. Changing `Input(5)` and the conditional-anchor auxiliary
+together leaves the conditional-root row satisfied for the zero-value case;
+the same mutation fails row 76,893 (`conditionally enforce correct root`) for
+the maximum-value case. Mutating `ak/u` and the first Merkle sibling also
+produced identical failed-row tuples in the Python evaluator and the Bellman
+matrix evaluator. These are post-synthesis witness mutations, not additional
+invalid-input synthesis runs.
+
+Final focused results: the retained baseline differential passed again
+(1 test); the two added witness differentials passed (2 tests); and the
+composition-boundary regressions passed (7 tests). The full Python synthesis
+timings for the added witnesses are reported separately above. Ruff,
+`py_compile`, Pylance file syntax validation, Rust formatting, and
+`git diff --check` passed. An initial zero-value run exposed an incorrect test
+expectation: changing the public anchor alone is not a no-op, because the
+separate input-equality row remains enforced. The test now distinguishes that
+row from the value-conditioned root row, and both variants pass the exact
+failure-location assertions.
+
+**Coverage status:** the isolated source-faithful port has exact matrix,
+assignment, and satisfaction evidence for three valid witnesses, plus
+post-synthesis anchor, point-coordinate, and authentication-sibling
+mutations. Other witness families and independent full Bellman matrix exports
+for the added witnesses remain unverified. Production Spend matrix identity,
+official-parameter compatibility, and ceremony validity remain
+**Unverified**.
 
 ## Historical incremental porting sequence (completed)
 

@@ -68,6 +68,26 @@ matrix and does not change the QAP or official-parameter findings above.
 Parameter-to-circuit binding, ceremony validity, and production Spend proving
 remain **Unverified**.
 
+**Phase 9.21.41 expanded Spend witness coverage:** two independently seeded
+valid witnesses were added: zero value with alternating Merkle direction bits,
+and `u64::MAX` with all direction bits true. Each case has an independent
+pinned-Bellman assignment/allocation trace and a complete Python synthesis
+compared against the retained witness-independent Bellman matrix:
+98,777 rows, 98,646 columns, fingerprint
+`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`.
+The added Python synthesis measurements were 45.849 s and 42.750 s. All
+allocations, assignments, annotations, public-input positions, ordered A/B/C
+rows, and satisfaction results matched. Circuit-level anchor, point-coordinate,
+and authentication-sibling mutations produced matching failure rows; the
+zero-value and nonzero conditional-anchor cases were checked separately.
+Constraint rows were not re-exported from Bellman for the two variants; their
+Python matrices were checked against the retained Bellman matrix, and the
+variant Bellman runs exported allocation events and assignments only. This
+expands evidence for the isolated reference port, but does not establish
+production Spend matrix identity or official-parameter compatibility.
+Parameter-to-circuit binding, ceremony validity, and production Spend proving
+remain **Unverified**.
+
 The Phase 9.21.38 full-vector check independently accumulated every official
 IC/H/L/A/B_G1/B_G2 section using ZyCoin's complete MSM and a separate Bellman
 0.15 loader. IC, L, A, B_G1, and B_G2 matched; H differed for the deterministic

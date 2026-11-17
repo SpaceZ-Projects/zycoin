@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from contextlib import ExitStack
 from hashlib import blake2s, sha256
@@ -866,6 +867,39 @@ def _reference_full_spend_trace() -> dict:
         return json.loads(trace_path.read_text(encoding="utf-8"))
 
 
+def _reference_spend_assignment_variant(name: str) -> dict:
+    with tempfile.TemporaryDirectory(
+        prefix="sapling-spend-assignment-reference-"
+    ) as directory:
+        trace_path = Path(directory) / "spend-assignments.json"
+        command = [
+            "cargo",
+            "test",
+            "--quiet",
+            "--manifest-path",
+            str(REFERENCE_MANIFEST),
+            "--test",
+            "export_spend",
+            "export_spend_assignment_variant",
+            "--",
+            "--exact",
+        ]
+        environment = os.environ.copy()
+        environment["CARGO_TERM_COLOR"] = "never"
+        environment["SAPLING_SPEND_ASSIGNMENT_VARIANT"] = name
+        environment["SAPLING_SPEND_ASSIGNMENT_EXPORT"] = str(trace_path)
+        subprocess.run(
+            command,
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            env=environment,
+        )
+        return json.loads(trace_path.read_text(encoding="utf-8"))
+
+
 def _full_spend_trace_assignment(record: dict) -> int:
     assignment_hex = record.get("assignment_hex")
     if not isinstance(assignment_hex, str):
@@ -923,14 +957,27 @@ def _full_spend_reference_witness(reference: dict) -> SpendReferenceWitness:
 def _full_spend_reference_failed_rows(
     reference: dict, replacements: dict[str, int]
 ) -> tuple[int, ...]:
+    return _full_spend_reference_failed_rows_with_assignments(
+        reference, reference, replacements
+    )
+
+
+def _full_spend_reference_failed_rows_with_assignments(
+    matrix_reference: dict,
+    assignment_reference: dict,
+    replacements: dict[str, int] | None = None,
+) -> tuple[int, ...]:
     assignments = {
         record["identity"]: _full_spend_trace_assignment(record)
-        for record in (*reference["inputs"], *reference["auxiliary_variables"])
+        for record in (
+            *assignment_reference["inputs"],
+            *assignment_reference["auxiliary_variables"],
+        )
     }
     assignments.update(
         {
             identity: value % SCALAR_MODULUS
-            for identity, value in replacements.items()
+            for identity, value in (replacements or {}).items()
         }
     )
 
@@ -945,7 +992,7 @@ def _full_spend_reference_failed_rows(
 
     return tuple(
         row["index"]
-        for row in reference["constraints"]
+        for row in matrix_reference["constraints"]
         if evaluate(row["a"]) * evaluate(row["b"]) % SCALAR_MODULUS
         != evaluate(row["c"])
     )
@@ -986,6 +1033,280 @@ class SpendFullCompositionReferenceTests(unittest.TestCase):
         ):
             raise AssertionError("Bellman Spend trace failed metadata validation")
         cls.witness = _full_spend_reference_witness(cls.reference)
+
+    def _assert_assignment_variant_matches(self, assignment_reference: dict):
+        self.assertEqual(
+            assignment_reference["format"],
+            "bellman-sapling-spend-assignment-reference-v1",
+        )
+        self.assertEqual(assignment_reference["full_synthesis_count"], 1)
+        self.assertFalse(assignment_reference["constraints_recorded"])
+        self.assertEqual(
+            assignment_reference["sapling_crypto_revision"],
+            self.reference["sapling_crypto_revision"],
+        )
+        self.assertEqual(
+            assignment_reference["bellman_revision"],
+            self.reference["bellman_revision"],
+        )
+        self.assertEqual(assignment_reference["num_inputs_including_one"], 8)
+        self.assertEqual(assignment_reference["num_auxiliary_variables"], 98_638)
+
+        witness = _full_spend_reference_witness(assignment_reference)
+        system = SpendReferenceR1CS()
+        started = time.perf_counter()
+        assembly = constrain_source_faithful_spend(system, witness)
+        synthesis_seconds = time.perf_counter() - started
+        print(
+            f"{assignment_reference['fixture']['name']}: "
+            f"Python full synthesis {synthesis_seconds:.3f}s"
+        )
+
+        matrix_reference = self.reference
+        expected_allocations = (
+            *assignment_reference["inputs"],
+            *assignment_reference["auxiliary_variables"],
+        )
+        self.assertEqual(len(system.constraints), matrix_reference["num_constraints"])
+        self.assertEqual(len(system.variables), len(expected_allocations))
+        self.assertTrue(system.is_satisfied())
+        self.assertEqual(
+            _full_spend_reference_failed_rows_with_assignments(
+                matrix_reference, assignment_reference
+            ),
+            (),
+        )
+        self.assertEqual(
+            system.witness_value(system.variables[0]),
+            _full_spend_trace_assignment(assignment_reference["inputs"][0]),
+        )
+
+        expected_by_identity = {
+            record["identity"]: record
+            for record in expected_allocations
+        }
+        expected_events = sorted(
+            (
+                record
+                for record in expected_allocations
+                if record["identity"] != "Input(0)"
+            ),
+            key=lambda record: record["allocation_event_index"],
+        )
+        actual_identities: list[str] = []
+        local_variables_by_identity = {"Input(0)": system.variables[0]}
+        auxiliary_index = 0
+        for event_index, actual in enumerate(system.variables[1:]):
+            if actual.kind == "private":
+                identity = f"Aux({auxiliary_index})"
+                auxiliary_index += 1
+            else:
+                position = system.public_input_position(actual)
+                self.assertIsNotNone(position)
+                identity = f"Input({position})"
+            actual_identities.append(identity)
+            local_variables_by_identity[identity] = actual
+            expected = expected_by_identity[identity]
+            self.assertEqual(actual.name, expected["annotation"], f"allocation {event_index}")
+            self.assertEqual(
+                system.witness_value(actual),
+                _full_spend_trace_assignment(expected),
+                f"assignment {event_index} ({identity})",
+            )
+        self.assertEqual(
+            actual_identities,
+            [record["identity"] for record in expected_events],
+        )
+        self.assertEqual(auxiliary_index, len(assignment_reference["auxiliary_variables"]))
+
+        public_records = assignment_reference["inputs"][1:]
+        self.assertEqual(len(assembly.public_inputs), 7)
+        self.assertEqual(
+            [system.public_input_position(variable) for variable in assembly.public_inputs],
+            list(range(1, 8)),
+        )
+        self.assertEqual(
+            [variable.name for variable in assembly.public_inputs],
+            [record["annotation"] for record in public_records],
+        )
+        self.assertEqual(
+            system.public_inputs(),
+            tuple(_full_spend_trace_assignment(record) for record in public_records),
+        )
+
+        self.assertEqual(
+            len(system.constraints),
+            len(matrix_reference["constraints"]),
+        )
+        expected_public_inputs = matrix_reference["inputs"][1:]
+        for row_index, (actual, expected) in enumerate(
+            zip(system.constraints, matrix_reference["constraints"], strict=True)
+        ):
+            self.assertEqual(expected["index"], row_index)
+            self.assertEqual(actual.label, expected["annotation"], f"row {row_index}")
+            for side, local_terms in (
+                ("a", actual.left.terms),
+                ("b", actual.right.terms),
+                ("c", actual.output.terms),
+            ):
+                expected_terms = tuple(
+                    (int(column), int(coefficient))
+                    for column, coefficient in _canonical_reference_terms_with_inputs(
+                        expected[side], len(expected_public_inputs)
+                    )
+                )
+                self.assertEqual(
+                    _canonical_local_terms_with_inputs(system, local_terms),
+                    expected_terms,
+                    f"ordered {side.upper()} expression at row {row_index}",
+                )
+
+        self.assertEqual(
+            system.matrix_fingerprint(),
+            _reference_matrix_fingerprint_with_inputs(
+                {
+                    "inputs": expected_public_inputs,
+                    "variables": matrix_reference["auxiliary_variables"],
+                    "constraints": matrix_reference["constraints"],
+                }
+            ),
+        )
+
+        replacements = (
+            ("Input(5)", (witness.anchor + 1) % SCALAR_MODULUS),
+            (
+                next(
+                    record["identity"]
+                    for record in assignment_reference["auxiliary_variables"]
+                    if record["annotation"] == "ak/u/num"
+                ),
+                (witness.ak.u + 1) % SCALAR_MODULUS,
+            ),
+            (
+                next(
+                    record["identity"]
+                    for record in assignment_reference["auxiliary_variables"]
+                    if record["annotation"]
+                    == "merkle tree hash 0/path element/num"
+                ),
+                (witness.authentication_path[0][0] + 1) % SCALAR_MODULUS,
+            ),
+        )
+        for identity, replacement in replacements:
+            local_variable = local_variables_by_identity[identity]
+            local_failures = _local_failed_rows_with_assignments(
+                system, {local_variable.index: replacement}
+            )
+            reference_failures = _full_spend_reference_failed_rows_with_assignments(
+                matrix_reference,
+                assignment_reference,
+                {identity: replacement},
+            )
+            self.assertEqual(local_failures, reference_failures)
+            self.assertTrue(local_failures, identity)
+            if identity == "Input(5)":
+                self.assertEqual(local_failures, (76_894,))
+
+        conditional_anchor_identity = next(
+            record["identity"]
+            for record in assignment_reference["auxiliary_variables"]
+            if record["annotation"] == "conditional anchor/num"
+        )
+        conditional_anchor_value = (witness.anchor + 1) % SCALAR_MODULUS
+        conditional_anchor_replacements = {
+            "Input(5)": conditional_anchor_value,
+            conditional_anchor_identity: conditional_anchor_value,
+        }
+        local_failures = _local_failed_rows_with_assignments(
+            system,
+            {
+                local_variables_by_identity[identity].index: replacement
+                for identity, replacement in conditional_anchor_replacements.items()
+            },
+        )
+        reference_failures = _full_spend_reference_failed_rows_with_assignments(
+            matrix_reference,
+            assignment_reference,
+            conditional_anchor_replacements,
+        )
+        self.assertEqual(local_failures, reference_failures)
+        if witness.value == 0:
+            self.assertEqual(local_failures, ())
+        else:
+            self.assertEqual(local_failures, (76_893,))
+        return system, assembly, synthesis_seconds
+
+    def test_zero_value_alternating_path_witness_matches_bellman(self) -> None:
+        assignment_reference = _reference_spend_assignment_variant(
+            "zero-value-alternating"
+        )
+        witness = _full_spend_reference_witness(assignment_reference)
+        self.assertEqual(witness.value, 0)
+        self.assertEqual(
+            tuple(direction for _, direction in witness.authentication_path),
+            tuple(level % 2 == 0 for level in range(32)),
+        )
+        self.assertNotEqual(witness.ak, self.witness.ak)
+        self.assertNotEqual(witness.nsk, self.witness.nsk)
+        self.assertNotEqual(witness.g_d, self.witness.g_d)
+        self.assertNotEqual(witness.rcv, self.witness.rcv)
+
+        for prefix in (
+            "computation of ivk",
+            "nf computation",
+            "note content hash",
+            "representation of nk",
+        ):
+            baseline_values = tuple(
+                record["assignment_hex"]
+                for record in self.reference["auxiliary_variables"]
+                if record["annotation"].startswith(prefix)
+            )
+            variant_values = tuple(
+                record["assignment_hex"]
+                for record in assignment_reference["auxiliary_variables"]
+                if record["annotation"].startswith(prefix)
+            )
+            self.assertEqual(len(variant_values), len(baseline_values), prefix)
+            self.assertNotEqual(variant_values, baseline_values, prefix)
+
+        self._assert_assignment_variant_matches(assignment_reference)
+
+    def test_max_value_all_right_path_witness_matches_bellman(self) -> None:
+        assignment_reference = _reference_spend_assignment_variant(
+            "max-value-all-right"
+        )
+        witness = _full_spend_reference_witness(assignment_reference)
+        self.assertEqual(witness.value, (1 << 64) - 1)
+        self.assertEqual(
+            tuple(direction for _, direction in witness.authentication_path),
+            (True,) * 32,
+        )
+        self.assertNotEqual(witness.ak, self.witness.ak)
+        self.assertNotEqual(witness.nsk, self.witness.nsk)
+        self.assertNotEqual(witness.g_d, self.witness.g_d)
+        self.assertNotEqual(witness.rcv, self.witness.rcv)
+
+        for prefix in (
+            "computation of ivk",
+            "nf computation",
+            "note content hash",
+            "representation of nk",
+        ):
+            baseline_values = tuple(
+                record["assignment_hex"]
+                for record in self.reference["auxiliary_variables"]
+                if record["annotation"].startswith(prefix)
+            )
+            variant_values = tuple(
+                record["assignment_hex"]
+                for record in assignment_reference["auxiliary_variables"]
+                if record["annotation"].startswith(prefix)
+            )
+            self.assertEqual(len(variant_values), len(baseline_values), prefix)
+            self.assertNotEqual(variant_values, baseline_values, prefix)
+
+        self._assert_assignment_variant_matches(assignment_reference)
 
     def test_complete_composition_matches_bellman_trace_and_failure_row(
         self,
