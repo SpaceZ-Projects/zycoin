@@ -356,6 +356,44 @@ class SaplingSpendFactorKernelTests(unittest.TestCase):
             fingerprints,
         )
 
+    def test_restricted_inverse_certificate_is_recorded(self) -> None:
+        restricted = self.audit["factor_operator"]["restricted_left_inverse"]
+        span = restricted["coefficient_family_span"]
+        for key, expected in {
+            "dimension": 98_646,
+            "local_matrix_nnz": 564_245,
+            "transformed_matrix_nnz": 564_324,
+            "rank_Q_L": 98_646,
+            "rank_R_Q_L": 98_646,
+            "Q_L_sha256": "28f61fae36f26c92e5bdd0be365db771a232ca9e6a32d0a9aac90e5dfd168d7c",
+            "R_Q_L_sha256": "5f0d1f2527be2ec5423093d5ee46569f72fa28a513aaffa6616f3cb4e7c63b4e",
+        }.items():
+            self.assertEqual(span[key], expected)
+        self.assertEqual(
+            restricted["intersection"]["ker_R_intersection_col_Q_L_dimension"],
+            0,
+        )
+        self.assertEqual(
+            restricted["intersection"]["basis_sha256"],
+            "5ca8a26614342463c1a25680db98966b1fb6e8a70fcef19cbeb485e2865a0318",
+        )
+        self.assertEqual(
+            restricted["factorized_operator"]["factorized_operator_sha256"],
+            "105b77e87dc07bccdbbd0ccfbf36fc4e094957d4ddc712a1f3e6f3718d9be87e",
+        )
+        self.assertEqual(
+            restricted["direct_verification"]["coefficient_family_vectors_verified"],
+            98_646,
+        )
+        self.assertTrue(
+            restricted["direct_verification"][
+                "P_RQL_U_Pi_equals_T_all_columns"
+            ]
+        )
+        self.assertTrue(
+            restricted["affine_offset"]["subtract_before_inverse"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

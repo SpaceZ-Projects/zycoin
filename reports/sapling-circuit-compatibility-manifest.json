@@ -1236,9 +1236,9 @@
       "interpretation": "The two systems are each satisfied and independently quotient-divisible, but their exact canonical QAP vectors are not equal. The fixed forward A/B/C factor identity is now characterized, including its nontrivial kernel and cokernel. This does not establish a complete H/query transformation or parameter-to-circuit binding."
     },
     "spend_qap_transformation_audit": {
-      "phase": "9.21.50",
+      "phase": "9.21.51",
       "semantic_relation_equivalence": "Evidence-supported for the pinned exports under the accepted variable map and explicit auxiliary projection; not a formal source-level proof.",
-      "qap_equivalence": "Unverified. All eight complete canonical vectors differ; exact coefficient-level counts are recorded below.",
+      "qap_equivalence": "Canonical matrix/QAP identity is not claimed. A fixed A/B/C coefficient-family map and restricted inverse are established on the retained production family; H and official-query compatibility remain unresolved.",
       "proving_query_compatibility": "Unverified. No complete public linear transformation from the local A/B/C variable polynomials and auxiliary space to the pinned Bellman proving queries has been established.",
       "parameter_to_circuit_binding": "Unverified. Parser and point serialization equality does not bind the pinned Spend parameter points to either local QAP or prove ceremony provenance.",
       "ceremony_validity": "Unverified. The phase1radix2m17 Phase-1 artifact and exact ceremony-era Spend setup implementation remain unavailable.",
@@ -1260,7 +1260,7 @@
         "complete_query_transformation": "Unresolved"
       },
       "global_coordinate_transformation": {
-        "status": "Fixed forward A/B/C factor operator and exact kernel/quotient certificates established; complete H and query transformation unresolved",
+        "status": "Fixed forward A/B/C factor operator, exact kernel/quotient certificates, and restricted inverse on the production coefficient-family span established; H and query transformation unresolved",
         "variable_map": {
           "direction": "x_local = M x_upstream",
           "helper_equation": "P = T + sum(2^i*d_i, i=0..31) - A",
@@ -1325,6 +1325,80 @@
             "induced_augmented_map": "F^(394977)/ker([R S]) -> im([R S]) is a well-defined bijection, not a surjection onto the full codomain.",
             "nonzero_S_mod_im_R": "Two independent helper-row shifts, ONE and public anchor, account for rank([R S])-rank(R)=2; shifts in the unit-B rows lie in im(R)."
           },
+          "restricted_left_inverse": {
+            "coefficient_family_span": {
+              "description": "Joint local A/B/C row-factor coefficient matrix Q_L, stacked row-major over 98,777 constraints; right multiplication by invertible M preserves the span.",
+              "shape": [296331, 98646],
+              "dimension": 98646,
+              "local_matrix_nnz": 564245,
+              "rank_Q_L": 98646,
+              "transformed_matrix_nnz": 564324,
+              "rank_R_Q_L": 98646,
+              "Q_L_sha256": "28f61fae36f26c92e5bdd0be365db771a232ca9e6a32d0a9aac90e5dfd168d7c",
+              "R_Q_L_sha256": "5f0d1f2527be2ec5423093d5ee46569f72fa28a513aaffa6616f3cb4e7c63b4e",
+              "rank_certificate": {
+                "Q_L_first_pivot_minor_determinant": "1",
+                "Q_L_pivot_basis_sha256": "d1967354a50fe6bc430f5126d8adb88e64508be91073b05e2265ba7710969860",
+                "R_Q_L_pivot_basis_sha256": "4a072fe14c03d1abdc7651852fc08fa6332e86ff76194189fd59f91cf5448d0f",
+                "R_Q_L_column_elimination_reductions": 1,
+                "R_Q_L_first_reduction": {
+                  "column": 32621,
+                  "pivot_factor_coordinate": 230679,
+                  "prior_pivot_column": 5,
+                  "scale": "1"
+                }
+              }
+            },
+            "intersection": {
+              "ker_R_intersection_col_Q_L_dimension": 0,
+              "basis_sha256": "5ca8a26614342463c1a25680db98966b1fb6e8a70fcef19cbeb485e2865a0318",
+              "rank_identity": "dim(ker(R) intersect col(Q_L)) = rank(Q_L)-rank(R Q_L) = 0"
+            },
+            "factorized_operator": {
+              "equation": "K = Q_L U Pi T^-1 P",
+              "dimensions": [296331, 296331],
+              "U": {
+                "equation": "U = I - E_(5,32621)",
+                "inverse": "U^-1 = I + E_(5,32621)",
+                "nnz": 98647,
+                "sha256": "a38c44d96d24a3677f57310bfe5f412cf13d5a6ca03e49955a414c08a9b332a7"
+              },
+              "Pi": "Permute columns by ascending pivot factor-coordinate.",
+              "P": "Select the 98,646 pivot factor coordinates in ascending order.",
+              "T": {
+                "shape": [98646, 98646],
+                "triangular": "lower",
+                "nnz": 241795,
+                "determinant": "1",
+                "sha256": "d06444c75adac3c8a0ce47134e9e32ad00421e53dd48598e4a87a4ef77b9da75"
+              },
+              "pivot_rows_sha256": "116bc7e9c3b72161c0524b308bfdee4735b97b3eb03d372e7402880a2abdc19c",
+              "column_permutation_sha256": "b03871a688dd72efaef50f8a8dfce150ef23f819a5ee61f151a830c63f17c295",
+              "factorized_operator_sha256": "105b77e87dc07bccdbbd0ccfbf36fc4e094957d4ddc712a1f3e6f3718d9be87e"
+            },
+            "direct_verification": {
+              "identity": "K R Q_L = Q_L",
+              "P_RQL_U_Pi_equals_T_all_columns": true,
+              "T_lower_triangular_nonzero_diagonal": true,
+              "coefficient_family_vectors_verified": 98646,
+              "U_and_Pi_invertible": true
+            },
+            "affine_offset": {
+              "source_identity": "Q_U = R Q_L M + S",
+              "inverse_identity": "K (Q_U - S) = Q_L M",
+              "subtract_before_inverse": true,
+              "helper_shifts": "The public-anchor and ONE helper shifts are subtracted as coefficient-matrix columns; the public-anchor A/C and ONE B shifts are not silently absorbed into R."
+            },
+            "source_artifacts": {
+              "local_matrix_file_sha256": "2f0b0fda40d408d275001e091be7b7b4372db823e051ad03d0ede03141d21536",
+              "local_matrix_fingerprint": "f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9",
+              "row_map_file_sha256": "44a14939955a9a82a24f4013bb0b9144a1810b648d6e4d9d3643117330b58ecc",
+              "row_mapping_fingerprint": "f502b0f22dece3829d6e2e1e198ca8d98d82e233e9eb1a4dcded3a399f6ae17d",
+              "factor_certificate_file_sha256": "6c0b1b5bc3455bad216b8e8630dbb6789b4c13b8541602a2ba75efcded767b0b",
+              "factor_certificate_sha256": "be5f65ef3c902b9f2cc707856c0cba4b910efa724680a6989d8abf692cd6b3f8"
+            },
+            "generator": "tests/sapling_spend_factor_span.py"
+          },
           "block_counts": {
             "invertible_factor_matched_rows": 98442,
             "pkd_affine_swap_rows_rank_3": 251,
@@ -1351,7 +1425,9 @@
           "padding_rows": 32287,
           "coefficient_operator": "P_upstream,t = W^-1 * (E * (sum_s R_ts * Q_local,s * M + S_t) + D_upstream,t), for t in {A,B,C}",
           "evaluation_operator": "For x_upstream, factor evaluations on constraint rows are (R * Q_local * M + S) * x_upstream; append the same eight input dummy rows and zero padding before interpolation.",
-          "invertibility": "The forward A/B/C map is well-defined and fixed but non-invertible on the ambient factor space. R has cokernel dimension 151; [R S] has cokernel dimension 149. W is invertible, so interpolation preserves these image and rank dimensions."
+          "invertibility": "The forward A/B/C map is non-invertible on the ambient factor space: R has cokernel dimension 151 and [R S] has cokernel dimension 149. On the retained local coefficient-family column span, rank(Q_L)=rank(R Q_L)=98,646, so the restriction is bijective onto its image. W is invertible and preserves this restricted rank.",
+          "restricted_family_inverse": "Apply the inverse FFT, remove unchanged input dummy/padding coordinates, subtract S, then apply K=Q_L U Pi T^-1 P to the stacked factor coefficients. This recovers Q_L M on the retained coefficient-family span.",
+          "restricted_inverse_scope": "Established for the retained production coefficient family and the corresponding fixed A/B/C polynomial coefficient-family mapping; not a full-space inverse or a proving-query transformation."
         },
         "helper_residual_pair": {
           "equation": "[g_root,g_position]^T = [[1,-V],[0,-1]] * [f_root,f_anchor]^T",

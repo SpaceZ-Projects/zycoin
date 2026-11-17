@@ -615,7 +615,7 @@ compatibility and Bellman-to-Python interoperability were established. Phase
 parameter-to-circuit/ceremony binding and production readiness remain
 **Unverified**.
 
-**Current Spend status (Phase 9.21.50):** the v7 test-only semantic mapping
+**Current Spend status (Phase 9.21.51):** the v7 test-only semantic mapping
 covers all 8 public/ONE variables and 98,637 of 98,638 auxiliaries. The
 test-only row correspondence pairs 98,775 of 98,777 rows (69,840 native,
 251 A/B swaps, 28,351 valid factor normalizations, 333 expanded-relation
@@ -693,6 +693,24 @@ kernel test took **3.21 s**. Compile, JSON, targeted Ruff E4/E7/E9/F, and
 diff checks passed. No Spend synthesis was performed.
 The kernel and compatibility-manifest rerun after final report edits passed
 **20 tests and 5 subtests in 3.24 s**.
+
+Phase 9.21.51 establishes a fixed restricted inverse for the retained
+production A/B/C coefficient-family span: `rank(Q_L)=rank(R Q_L)=98,646`,
+with zero intersection between `ker(R)` and `col(Q_L)`. Its exact sparse
+factorization directly verifies `K R Q_L=Q_L` for all 98,646 coefficient
+columns. The affine mapped family requires subtracting `S` first:
+`K(Q_U-S)=Q_L M`. This does not produce a group-valued query-coordinate map
+or establish an H-coordinate map. IC, H, L, A, B_G1, and B_G2 compatibility
+and preservation of the combined Groth16 verification equation remain
+**Unresolved**; official parameter binding and ceremony validity remain
+**Unverified**. See
+[Phase 9.21.51 of the authoritative Spend report](sapling-spend-authoritative-reference.md#phase-92151--restricted-inverse-on-the-spend-qap-factor-family-span).
+Focused regressions passed: factor-kernel/restricted-inverse **2 tests in
+2.991 s**, QAP transformations **7 tests in 0.005 s**, and compatibility
+manifest **19 tests in 0.127 s** (28 total). The retained-input certificate
+reproduction completed in **8.093 s**. Python compileall, Pylance syntax
+checks, manifest JSON parsing, targeted Ruff, and `git diff --check` passed.
+No Spend synthesis was run.
 
 **Current parameter status (Phase 9.21.24):** every authentic Spend and
 Output query point passed canonical decoding, curve validation, and an exact

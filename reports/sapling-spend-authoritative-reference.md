@@ -1922,3 +1922,122 @@ change, setup/parameter change, proving-gate change, or synthetic setup
 regression was performed. After the final report/manifest edits, the kernel
 and compatibility-manifest rerun passed **20 tests and 5 subtests in
 3.24 s**.
+
+### Phase 9.21.51 — Restricted inverse on the Spend QAP factor-family span
+
+This phase uses only the retained production matrix, row correspondence,
+factor-identity certificate, and variable map. No Spend synthesis or
+production circuit change was performed. All linear algebra is exact over
+the BLS12-381 scalar field.
+
+Let `Q_L` be the stacked local A/B/C factor-coefficient matrix, with
+row-major `(constraint,A/B/C)` factor coordinates and one column per
+production variable. It has shape `296,331 × 98,646`, 564,245 nonzeros,
+rank 98,646, and fingerprint
+`28f61fae36f26c92e5bdd0be365db771a232ca9e6a32d0a9aac90e5dfd168d7c`.
+The fixed factor operator gives `R Q_L`, shape `296,331 × 98,646`, with
+564,324 nonzeros, rank 98,646, and fingerprint
+`5f0d1f2527be2ec5423093d5ee46569f72fa28a513aaffa6616f3cb4e7c63b4e`.
+Consequently,
+
+```text
+dim(ker(R) ∩ col(Q_L))
+  = rank(Q_L) - rank(R Q_L)
+  = 98,646 - 98,646
+  = 0.
+```
+
+The empty intersection basis has canonical fingerprint
+`5ca8a26614342463c1a25680db98966b1fb6e8a70fcef19cbeb485e2865a0318`.
+This proves injectivity of `R` on the actual retained coefficient-family
+span, not on the ambient 296,331-dimensional factor space. It does not
+contradict the ambient 151-dimensional kernel characterized in Phase
+9.21.50.
+
+The exact restricted left inverse is provided in sparse factorized form:
+
+```text
+K = Q_L U Pi T^-1 P
+U = I - E_(5,32621),   U^-1 = I + E_(5,32621)
+T = P (R Q_L) U Pi
+```
+
+`Pi` orders the 98,646 columns by ascending pivot factor-coordinate; `P`
+selects those pivot rows. `T` is lower triangular, has 241,795 nonzeros,
+determinant 1, and fingerprint
+`d06444c75adac3c8a0ce47134e9e32ad00421e53dd48598e4a87a4ef77b9da75`.
+The `U` fingerprint is
+`a38c44d96d24a3677f57310bfe5f412cf13d5a6ca03e49955a414c08a9b332a7`;
+the pivot-row and column-permutation fingerprints are
+`116bc7e9c3b72161c0524b308bfdee4735b97b3eb03d372e7402880a2abdc19c`
+and `b03871a688dd72efaef50f8a8dfce150ef23f819a5ee61f151a830c63f17c295`.
+The complete factorized-operator fingerprint is
+`105b77e87dc07bccdbbd0ccfbf36fc4e094957d4ddc712a1f3e6f3718d9be87e`.
+
+The rank certificates use a first-pivot minor of determinant 1 for `Q_L`
+and a single exact column reduction for `R Q_L` (column 32,621 reduces
+against column 5 at pivot coordinate 230,679 with scale 1). The triangular
+identity `P (R Q_L) U Pi = T` was directly verified over all 98,646
+coefficient-family columns. Since `T` has nonzero diagonal and `U`, `Pi`
+are invertible, this establishes `K R Q_L = Q_L`; the construction
+therefore recovers every vector in `col(Q_L)` from its image under `R`.
+It is a factorized inverse certificate, not a materialized dense 296,331
+square matrix and not a left inverse on arbitrary factor vectors.
+
+The affine identity from Phase 9.21.49 is
+`Q_U = R Q_L M + S`, where `M` is the established variable bijection and
+`S` contains helper shifts. The inverse must be applied after subtracting
+the offsets:
+
+```text
+K (Q_U - S) = K R Q_L M = Q_L M.
+```
+
+The public-anchor and `ONE` helper shifts are retained in `S` and must not
+be dropped or absorbed into `R`. This exact affine application follows from
+the retained all-row factor identities and the directly verified
+restricted-left-inverse identity. The reusable computation is
+[sapling_spend_factor_span.py](../tests/sapling_spend_factor_span.py);
+input artifact hashes, component fingerprints, and checks are recorded in
+the [compatibility manifest](sapling-circuit-compatibility-manifest.json).
+
+For QAP coefficient families, apply the inverse interpolation transform,
+remove the agreed dummy/padding coordinates, subtract `S`, then apply `K`.
+This yields a fixed, witness-independent inverse on the retained A/B/C
+family span. The ambient factor map remains singular, and this result does
+not identify the canonical production and Bellman matrix rows or assert
+equality of their eight previously compared witness-specific canonical QAP
+vectors. It also does not give a fixed linear map from `H_L` to `H_U`:
+the quotient still must be constructed from the transformed A/B/C
+polynomials and assignment, and divisibility is guaranteed only for
+satisfying assignments.
+
+No map has been established for the official `IC`, `H`, `L`, `A`,
+`B_G1`, or `B_G2` query vectors. In particular, a restricted scalar
+coefficient-family inverse does not provide missing group-query
+coordinates, establish query-vector transformations, or demonstrate
+preservation of the Groth16 verification equation. Parameter-to-circuit
+binding and ceremony validity remain **Unverified**.
+
+**Conclusion:** the restricted A/B/C coefficient-family inverse is
+**Established** for the retained production span, with zero kernel
+intersection and a directly checked exact sparse factorization. Complete
+polynomial H and six-section Groth16 query compatibility remain
+**Unresolved**; full matrix/QAP identity is not claimed.
+
+**Smallest justified next step:** derive exact induced coordinate
+transformations for the official query vectors from this restricted
+coefficient map, including the affine/helper offsets and all six sections,
+and verify preservation of the combined Groth16 verification equation.
+If group-query coordinates cannot be derived from the retained setup
+material, exact Bellman matrix reproduction or a production-bound trusted
+setup remains necessary.
+
+Verification: the retained-input certificate generator reproduced the
+rank, intersection, sparse inverse, and fingerprints, directly checking the
+triangular identity across all 98,646 columns in **8.093 s**. Focused
+regressions passed: factor-kernel/restricted-inverse **2 tests in 2.991 s**,
+QAP transformations **7 tests in 0.005 s**, and compatibility manifest
+**19 tests in 0.127 s** (28 tests total). Python compileall, Pylance syntax
+checks for both changed Python files, manifest JSON parsing, targeted Ruff,
+and `git diff --check` passed. No Spend synthesis was run.

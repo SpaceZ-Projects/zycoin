@@ -79,7 +79,7 @@ mutations all changed the result. This establishes accumulation equivalence
 only; proof generation, query-to-circuit binding, ceremony validity, and
 production readiness remain Unverified.
 
-**Current Spend correspondence status (Phase 9.21.50):** the v7 test-only
+**Current Spend correspondence status (Phase 9.21.51):** the v7 test-only
 semantic mapping covers 8 public/ONE variables and 98,637 of 98,638
 auxiliaries. The row artifact still pairs 98,775 of 98,777 constraints with
 zero ambiguity. An independent algebraic audit establishes that the two
@@ -132,14 +132,35 @@ linear-to-C blocks (two right and two left null directions each) and a
 rank-three helper block. The two added augmented-rank directions are the
 helper public-anchor and ONE shifts. `R` induces a bijection from its
 factor-space quotient to `im(R)`; this does not prove a restricted left
-inverse for the actual QAP coefficient-family span. The forward A/B/C map
-remains established, while H and all six query mappings remain unresolved.
+inverse for the actual QAP coefficient-family span. The forward A/B/C map remains established, while H and all six query
+mappings remain unresolved.
 The Phase 9.21.50 focused factor-kernel/QAP/query suite passed **40 tests
 and 346 subtests** (1 Output-only case deselected) in **5.02 s**; the kernel
 test took **3.21 s**. Compile, JSON, targeted Ruff E4/E7/E9/F, and diff
 checks passed. No Spend synthesis was run.
 The kernel and compatibility-manifest rerun after final report edits passed
 **20 tests and 5 subtests in 3.24 s**.
+
+Phase 9.21.51 establishes a restricted inverse on the retained local
+coefficient-family span. The stacked `Q_L` and `R Q_L` matrices both have
+rank 98,646, so `ker(R) ∩ col(Q_L)` has dimension zero. A sparse
+factorization `K=Q_L U Pi T^-1 P` directly verifies `K R Q_L=Q_L` across all
+98,646 columns; `T` is 98,646-square, lower triangular, has 241,795
+nonzeros, and determinant 1. For the affine mapped family, subtract helper
+offsets `S` before applying `K`, yielding `K(Q_U-S)=Q_L M`. This is a fixed
+A/B/C coefficient-family inverse, not an ambient factor-space inverse or a
+group-query map. H, all six official query sections, matrix identity, and
+Groth16 verification-equation preservation remain **Unresolved**; parameter
+binding and ceremony validity remain **Unverified**. The report and
+compatibility manifest record dimensions, exact fingerprints, source hashes,
+and the sparse certificate. The retained-input generator
+[sapling_spend_factor_span.py](../tests/sapling_spend_factor_span.py)
+reproduced the certificate successfully in **8.093 s**. Final focused
+regressions passed: factor-kernel/restricted-inverse **2 tests in 2.991 s**,
+QAP transformations **7 tests in 0.005 s**, and compatibility manifest
+**19 tests in 0.127 s** (28 total). Python compileall, Pylance syntax checks,
+manifest JSON parsing, targeted Ruff, and `git diff --check` passed. No Spend
+synthesis was run.
 
 ### Phase 9.21.42 — Production Spend audit against the source reference
 
