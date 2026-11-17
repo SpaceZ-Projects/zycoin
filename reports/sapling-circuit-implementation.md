@@ -6674,6 +6674,26 @@ Focused tests passed (**7 passed, 53 subtests**); targeted Ruff,
 `compileall`, Pylance diagnostics, and `git diff --check` passed. No Output,
 parameter, proving-gate, or source-faithful Spend implementation changed.
 
+### Phase 9.21.64 — Zero-IVK / identity-key admission
+
+Production Spend preflight now rejects a derived zero IVK and identity
+transmission key using the already-derived IVK and `g_d * ivk` point, before
+R1CS mutation. This matches the address API's nonzero-IVK and
+nonidentity-key rules. It does not add constraints or change the assembly
+matrix.
+
+A focused negative test forces the zero digest only for the rare case and
+confirms the full R1CS snapshot is unchanged. The same R1CS then assembles a
+valid witness with the original production fingerprint and a satisfied
+system. Preflight also accepted all 10 pinned Spend witness iterations, and
+the pinned IVK vector passed. The conditional zero-value anchor rule remains
+unchanged; transaction-boundary Merkle-root membership is a separate policy
+requirement.
+
+Validation passed (**9 tests, 63 subtests**); targeted Ruff, `compileall`,
+Pylance, and `git diff --check` passed. No Output code, independent verifier,
+parameters, proving gates, or circuit constraints changed.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

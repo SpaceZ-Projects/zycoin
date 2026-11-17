@@ -15,7 +15,7 @@ from .blake2s_gadget import (
     constrain_sapling_nullifier_hash,
 )
 from .bls12_381 import SCALAR_MODULUS as CIRCUIT_FIELD_MODULUS
-from .jubjub import SCALAR_MODULUS, Point, group_hash
+from .jubjub import IDENTITY, SCALAR_MODULUS, Point, group_hash
 from .r1cs import R1CS, LinearCombination, R1CSError, Variable
 from .sapling_gadgets import (
     CircuitPoint,
@@ -208,7 +208,11 @@ def _prepare_witness(witness: SaplingSpendWitness) -> _PreparedSpendWitness:
     expected_g_d = group_hash(b"Zcash_gd", witness.diversifier)
     if expected_g_d is None or witness.diversifier_base != expected_g_d:
         raise R1CSError("Sapling Spend diversifier base does not match diversifier")
-    expected_pk_d = expected_g_d.multiply(witness.ivk)
+    expected_pk_d = expected_g_d.multiply(expected_ivk)
+    if expected_ivk == 0:
+        raise R1CSError("Sapling Spend ivk must be a non-zero 251-bit value")
+    if expected_pk_d == IDENTITY:
+        raise R1CSError("Sapling Spend transmission key cannot be the identity")
     if witness.transmission_key != expected_pk_d:
         raise R1CSError("Sapling Spend transmission key does not match g_d and ivk")
 

@@ -28,6 +28,7 @@ from src.r1cs import R1CS, R1CSError, Variable
 from src.sapling_spend_circuit import (
     SPEND_PUBLIC_INPUT_ORDER,
     SaplingSpendWitness,
+    _prepare_witness,
     constrain_sapling_spend,
 )
 from src.sapling_spend_reference import generate_pinned_test_witness
@@ -659,7 +660,7 @@ class SaplingSpendCircuitTests(unittest.TestCase):
             with self.subTest(invalid_field=index), self.assertRaises(R1CSError):
                 constrain_sapling_spend(R1CS(), invalid)
 
-    def test_nullifier_mismatch_is_rejected_before_mutation_and_system_reused(self):
+    def test_invalid_witnesses_are_rejected_before_mutation_and_system_reused(self):
         witness = _circuit_witness(generate_pinned_test_witness(0))
         invalid_nullifier = bytes((witness.nullifier[0] ^ 1,)) + witness.nullifier[1:]
         invalid_integer = int.from_bytes(invalid_nullifier, "little")
@@ -695,6 +696,22 @@ class SaplingSpendCircuitTests(unittest.TestCase):
             constrain_sapling_spend(system, invalid)
         self.assertEqual(snapshot(), before)
 
+        zero_ivk = replace(witness, ivk=0, transmission_key=IDENTITY)
+
+        class ZeroDigest:
+            def digest(self):
+                return bytes(32)
+
+        with patch(
+            "src.sapling_spend_circuit.blake2s",
+            return_value=ZeroDigest(),
+        ), self.assertRaisesRegex(
+            R1CSError,
+            "Sapling Spend ivk must be a non-zero 251-bit value",
+        ):
+            constrain_sapling_spend(system, zero_ivk)
+        self.assertEqual(snapshot(), before)
+
         assembly = constrain_sapling_spend(system, witness)
         self.assertEqual(assembly.constraint_count, 98_777)
         self.assertEqual(len(system.variables), 98_646)
@@ -705,6 +722,14 @@ class SaplingSpendCircuitTests(unittest.TestCase):
             "f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9",
         )
         self.assertTrue(system.is_satisfied())
+
+    def test_preflight_accepts_all_pinned_spend_witnesses(self):
+        for iteration in range(10):
+            with self.subTest(iteration=iteration):
+                witness = _circuit_witness(
+                    generate_pinned_test_witness(iteration)
+                )
+                _prepare_witness(witness)
 
     def test_spend_admission_rejects_invalid_upstream_host_preconditions(self):
         reference = generate_pinned_test_witness(0)

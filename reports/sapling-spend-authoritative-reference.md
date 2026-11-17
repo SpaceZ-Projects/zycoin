@@ -3058,3 +3058,40 @@ Spend verifier. Targeted Ruff, `compileall`, Pylance diagnostics for the
 changed Python files, and `git diff --check` passed. No circuit equations,
 Output code, parameters, proving gates, or independent verifier behavior
 changed.
+
+### Phase 9.21.64 — Reject zero-IVK identity transmission keys
+
+`_prepare_witness` now rejects `expected_ivk == 0` and an identity
+`expected_pk_d` before comparing or accepting the supplied transmission key.
+It reuses the already-derived `expected_ivk` and
+`expected_pk_d = expected_g_d.multiply(expected_ivk)`; no key/hash derivation
+is duplicated. The predicate matches the existing Sapling address boundary:
+`derive_payment_address` requires `0 < ivk < 2^251`, and
+`SaplingPaymentAddress` rejects the identity transmission key. The check runs
+inside `_prepare_witness`, before the first R1CS mutation (`alloc_public`),
+and does not change witness fields, serialized assignments, or circuit
+constraints.
+
+The regression forces the otherwise rare derived-zero case by substituting a
+zero BLAKE2s digest only during that negative preflight call; it supplies
+`ivk=0` and the identity transmission key. The error is deterministic and
+the before/after R1CS snapshot remains equal for serialization (rows, labels,
+ordered expressions, and allocation names), variables, assignments, public
+inputs, private-allocation state, and freshness. A valid witness then
+assembles successfully on that same system, is satisfied, and retains the
+production fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`
+(98,777 rows, 98,646 variables, seven public inputs). All **10 pinned Spend
+witness iterations** passed `_prepare_witness`; the pinned IVK vector also
+passed.
+
+Zero-value anchor semantics are unchanged: production still follows the
+pinned conditional anchor relation, and the independent verifier was not
+modified. Whether a transaction must separately prove that an anchor is a
+recognized Merkle root remains a transaction-boundary requirement, not a
+new R1CS constraint in this change.
+
+Focused validation passed: **9 tests and 63 subtests** in 161.05 seconds.
+Targeted Ruff, `compileall`, Pylance diagnostics for both changed Python
+files, and `git diff --check` passed. No Output code, independent verifier,
+official parameters, proving gates, or circuit equations changed.
