@@ -1,0 +1,18 @@
+{
+  "description": "Literal protobuf wire vectors derived from the pinned schemas; these are not endpoint responses.",
+  "references": {
+    "bitcoinz": "z-bitcoinz/lightwalletd-bitcoinz@5e3fd6f1f59917fd2e517098857070f689657285",
+    "zcash_lwp": "zcash/lightwallet-protocol@299805c19011a027d2c48c5e912dd05041f76156"
+  },
+  "vectors": {
+    "lightd_info_field_18_protocol_version": "920105302e362e30",
+    "block_range_field_3_sapling_pool_type": "1a0102",
+    "compact_block_field_1_proto_version": "0801",
+    "compact_tx_field_2_hash_or_txid": "1202aabb",
+    "sapling_spend_field_1_nf": "0a02aabb",
+    "sapling_output_field_1_cmu": "0a02aabb",
+    "sapling_output_field_2_ephemeral_key": "1202ccdd",
+    "sapling_output_field_3_ciphertext": "1a02eeff",
+    "tree_state_field_7_ironwood_tree": "3a03616263"
+  }
+}

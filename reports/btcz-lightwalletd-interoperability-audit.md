@@ -129,22 +129,19 @@ The final focused spent-status and coin-registry run passed **65 tests** and
 **103 subtests**. This does not certify endpoint completeness or consensus
 authenticity.
 
-## Coin-specific service namespace routing
+## Coin-specific service namespace routing (previous milestone)
 
 ZyCoin now configures BitcoinZ mainnet with `proto_package: "cash.bitcoinz"`.
-The client binds all 21 methods in its existing `CompactTxStreamer` descriptor
-to `/cash.bitcoinz.wallet.sdk.rpc.CompactTxStreamer/<Method>` while retaining
-the checked-in protobuf message definitions. Local tests also assert Zcash's
-`cash.z` path, reject missing, malformed, unsupported, or coin-mismatched
-configuration, and preserve explicit namespace selection for custom coin
-definitions. This verifies ZyCoin's local routing only; it does not establish
-that the live BTCZ endpoint implements the checked-in message schema or LWP
-v0.6.0.
+The earlier namespace-only client bound 21 methods from one descriptor to
+`/cash.bitcoinz.wallet.sdk.rpc.CompactTxStreamer/<Method>`. That routing-only
+implementation has since been replaced by per-coin descriptors; its test
+count below is historical and is superseded by the schema-aware results at
+the end of this report.
 
-The final focused run across routing, coin registry, and spent-status tests
-passed **70 tests and 113 subtests**. BTCZ spent status remains fail-closed
-when the endpoint does not report a supported protocol version. No live
-endpoint check was performed for this routing change.
+At that routing-only milestone, the focused run passed 70 tests and 113
+subtests. BTCZ spent status remained fail-closed when the endpoint did not
+report a supported protocol version. No endpoint check was performed for that
+routing change.
 
 ## Follow-up — root-cause trace and refreshed endpoint probe (2026-11-17)
 
@@ -254,3 +251,57 @@ or long-running monitoring were used.
 - [BitcoinZ Core `blockchain.cpp`](https://github.com/btcz/bitcoinz/blob/a25305eec6cd18d4f5b61f67c655743503093b1f/src/rpc/blockchain.cpp) — pinned `blockToJSON()` output.
 - [Official pinned LWP v0.6.0 service schema](https://github.com/zcash/lightwallet-protocol/blob/299805c19011a027d2c48c5e912dd05041f76156/walletrpc/service.proto) and [compact schema](https://github.com/zcash/lightwallet-protocol/blob/299805c19011a027d2c48c5e912dd05041f76156/walletrpc/compact_formats.proto).
 - [Upstream Lightwalletd `common/common.go`](https://github.com/zcash/lightwalletd/blob/master/common/common.go) — reference implementation reports `LightwalletProtocolVersion` and copies Core tree sizes; this link is current source, not a pinned BTCZ deployment artifact.
+
+## Schema-aware client implementation and verification (2026-11-17)
+
+The client now uses separate checked-in descriptors generated from the pinned
+BTCZ and Zcash LWP definitions. The full field-number, wire-type, default and
+presence, RPC-signature, and cardinality comparison is in the
+[Lightwalletd compatibility matrix](lightwalletd-client-compatibility.md#pinned-lwp-schema-compatibility-matrix).
+Source versions are BTCZ Lightwalletd
+`5e3fd6f1f59917fd2e517098857070f689657285` and Zcash LWP v0.6.0
+`299805c19011a027d2c48c5e912dd05041f76156`.
+
+The local descriptor comparison establishes 20 BTCZ RPCs versus 21 Zcash
+RPCs; BTCZ has no `GetStandardFee`. BTCZ `LightdInfo` ends at field 15
+(versus Zcash fields 16–18), and BTCZ `BlockRange` has only `start` and `end`
+(versus Zcash's repeated `poolTypes` at field 3). The compact schemas share
+Sapling spend/output fields, but BTCZ `CompactBlock.protoVersion` is field 1
+where Zcash reserves that tag; BTCZ `CompactTx.hash` and Zcash `txid` are both
+field-2 bytes. Zcash adds transparent `vin`/`vout`, Ironwood compact metadata,
+and Ironwood tree-state fields. These differences are represented by distinct
+descriptors rather than inferred from the package name.
+
+For BTCZ, the client parses responses with the BTCZ descriptor before
+discarding unknown fields and converting shared wire-compatible content to
+the public message classes. Thus a field-18 byte sequence cannot manufacture
+a Lightwalletd protocol version. Requests with unsupported pool selectors or
+Ironwood subtree selection fail explicitly. A Sapling-only `GetBlockRange`
+request is translated to BTCZ's default shielded range; no other selector is
+silently dropped. Missing tree metadata remains missing, and the known BTCZ
+zero tree sizes are not repaired or accepted by the scanner.
+
+Focused local validation:
+
+```text
+.venv\Scripts\python.exe -m pytest -q tests\test_lightwalletd_routing.py tests\test_coin_registry.py tests\test_sapling_spent_status.py
+76 passed, 135 subtests passed
+```
+
+These are schema/adapter and fail-closed regression results, not endpoint
+interoperability evidence. No request was made to
+`lightd.btcz.rocks:443` through the newly selected `cash.bitcoinz` namespace
+for this task. Earlier live observations used the then-configured service
+path and cannot establish that the endpoint implements this descriptor or
+LWP v0.6.0. BTCZ spent status therefore remains `UNKNOWN`, its sampled tree
+metadata still blocks full-tree scanning, and endpoint data is not
+consensus-authenticated.
+
+| Capability | Current status | Evidence boundary |
+|---|---|---|
+| Pinned BTCZ/Zcash field and RPC schema comparison | **Verified locally** | Descriptor tests and the pinned-source matrix establish declared field tags, wire types, defaults/presence, and service signatures. This does not verify a deployed server. |
+| `cash.bitcoinz` / `cash.z` client routing | **Verified locally** | Routing tests cover every method in each descriptor. The BTCZ endpoint was not queried through `cash.bitcoinz` during this task. |
+| BTCZ endpoint interoperability with this schema / LWP v0.6.0 | **Unverified** | The endpoint has not been tested through the new BTCZ namespace and its reported protocol version was blank in prior probes. |
+| BTCZ tree-size metadata / full-tree scan support | **Unsupported for reliable size checks** | Earlier endpoint samples reported zero sizes despite Sapling activity; local validation deliberately rejects inconsistent metadata. |
+| BTCZ spent status | **Unknown / fail-closed** | No verified protocol version or complete trusted coverage; the client must not report `UNSPENT`. |
+| Consensus authentication from Lightwalletd data | **Unsupported** | Protobuf or endpoint responses do not independently authenticate roots, blocks, or scan completeness. |

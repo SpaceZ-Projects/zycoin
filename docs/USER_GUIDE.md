@@ -54,9 +54,18 @@ and capabilities vary by definition. Read each network's `transparent`,
 before using it. Missing or unverified values are not inferred by the library.
 Configured Lightwalletd networks must declare a `lightwalletd.proto_package`:
 BitcoinZ uses `cash.bitcoinz`, and Zcash uses `cash.z`. This selects the gRPC
-service path only; ZyCoin continues to use its checked-in protobuf message
-definitions, and namespace selection does not establish protocol-version or
-wire-schema compatibility.
+service path and the corresponding checked-in protobuf schema. Supported
+wire-compatible fields are adapted explicitly; this does not establish that a
+live endpoint implements LWP v0.6.0 or that its responses are consensus
+authenticated.
+
+The BTCZ schema does not define `LightdInfo.lightwalletProtocolVersion` or
+`BlockRange.poolTypes`. ZyCoin will not infer protocol support from an unknown
+field, and only adapts a Sapling-only range request to BTCZ's default
+shielded-only range. Other unsupported pool selectors and Ironwood subtree
+requests fail with `LightwalletdCapabilityError`. BTCZ tree-size metadata is
+still subject to the scanner's existing validation; missing or inconsistent
+sizes do not establish Sapling positions or full-tree scanning support.
 
 ## BIP-39 key derivation and addresses
 

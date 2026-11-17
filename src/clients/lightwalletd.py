@@ -11,11 +11,13 @@ from google.protobuf.message import Message
 
 from .errors import (
     LightwalletdBlockHashMismatchError,
+    LightwalletdCapabilityError,
     LightwalletdConnectionError,
     LightwalletdError,
     LightwalletdRpcError,
     LightwalletdTimeoutError,
 )
+from .protocol import btcz_service_pb2 as btcz_pb2
 from .protocol import compact_formats_pb2 as compact_pb2
 from .protocol import service_pb2 as pb2
 
@@ -24,14 +26,34 @@ _SUPPORTED_PROTO_PACKAGES = frozenset({"cash.bitcoinz", "cash.z"})
 
 class _NamespacedCompactTxStreamerStub:
     def __init__(self, channel, proto_package: str) -> None:
-        service = pb2.DESCRIPTOR.services_by_name["CompactTxStreamer"]
-        service_name = f"{proto_package}.wallet.sdk.rpc.{service.name}"
+        is_btcz = proto_package == "cash.bitcoinz"
+        schema = btcz_pb2 if is_btcz else pb2
+        service = schema.DESCRIPTOR.services_by_name["CompactTxStreamer"]
         symbols = symbol_database.Default()
         self._methods = {}
 
         for method in service.methods:
             request_type = symbols.GetSymbol(method.input_type.full_name)
             response_type = symbols.GetSymbol(method.output_type.full_name)
+            if is_btcz:
+                request_serializer = self._btcz_request_serializer(
+                    method.name,
+                    request_type,
+                )
+                public_response_type = symbols.GetSymbol(
+                    method.output_type.full_name.replace(
+                        "cash.bitcoinz.wallet.sdk.rpc.",
+                        "cash.z.wallet.sdk.rpc.",
+                        1,
+                    )
+                )
+                response_deserializer = self._btcz_response_deserializer(
+                    response_type,
+                    public_response_type,
+                )
+            else:
+                request_serializer = request_type.SerializeToString
+                response_deserializer = response_type.FromString
             rpc = (
                 "stream_stream"
                 if method.client_streaming and method.server_streaming
@@ -42,10 +64,70 @@ class _NamespacedCompactTxStreamerStub:
                 else "unary_unary"
             )
             self._methods[method.name] = getattr(channel, rpc)(
-                f"/{service_name}/{method.name}",
-                request_serializer=request_type.SerializeToString,
-                response_deserializer=response_type.FromString,
+                f"/{service.full_name}/{method.name}",
+                request_serializer=request_serializer,
+                response_deserializer=response_deserializer,
             )
+
+    @staticmethod
+    def _btcz_request_serializer(method: str, request_type):
+        def serialize(request: Message) -> bytes:
+            if method in {"GetBlockRange", "GetBlockRangeNullifiers"}:
+                if getattr(request, "poolTypes", ()):
+                    raise LightwalletdCapabilityError(
+                        "BitcoinZ Lightwalletd does not support "
+                        "BlockRange.poolTypes"
+                    )
+            elif method in {"GetTaddressTxids", "GetTaddressTransactions"}:
+                block_range = getattr(request, "range", None)
+                if block_range is not None and getattr(
+                    block_range,
+                    "poolTypes",
+                    (),
+                ):
+                    raise LightwalletdCapabilityError(
+                        "BitcoinZ Lightwalletd does not support poolTypes in "
+                        "transparent address range requests"
+                    )
+            elif method == "GetMempoolTx" and getattr(
+                request,
+                "poolTypes",
+                (),
+            ):
+                raise LightwalletdCapabilityError(
+                    "BitcoinZ Lightwalletd does not support "
+                    "GetMempoolTx.poolTypes"
+                )
+            elif method == "GetSubtreeRoots" and getattr(
+                request,
+                "shieldedProtocol",
+                0,
+            ) not in {0, 1}:
+                raise LightwalletdCapabilityError(
+                    "BitcoinZ Lightwalletd does not support the requested "
+                    "shielded protocol"
+                )
+
+            schema_request = request_type.FromString(
+                request.SerializeToString()
+            )
+            schema_request.DiscardUnknownFields()
+            return schema_request.SerializeToString()
+
+        return serialize
+
+    @staticmethod
+    def _btcz_response_deserializer(schema_type, public_type):
+        def deserialize(response: bytes) -> Message:
+            schema_response = schema_type.FromString(response)
+            schema_response.DiscardUnknownFields()
+            public_response = public_type.FromString(
+                schema_response.SerializeToString()
+            )
+            public_response.DiscardUnknownFields()
+            return public_response
+
+        return deserialize
 
     def __getattr__(self, method: str) -> Callable[..., Any]:
         try:
@@ -285,6 +367,18 @@ class LightwalletdClient:
         *,
         timeout: Optional[float] = None,
     ) -> AsyncIterator[compact_pb2.CompactBlock]:
+        if self.proto_package == "cash.bitcoinz" and block_range.poolTypes:
+            if list(block_range.poolTypes) != [pb2.SAPLING]:
+                raise LightwalletdCapabilityError(
+                    "BitcoinZ Lightwalletd cannot select the requested "
+                    "BlockRange.poolTypes"
+                )
+            # BTCZ compact blocks are shielded-only, so the default range is
+            # a safe superset of a Sapling-only request.
+            block_range = pb2.BlockRange(
+                start=block_range.start,
+                end=block_range.end,
+            )
         return self._stream("GetBlockRange", block_range, timeout)
 
     async def get_transaction(
@@ -315,6 +409,7 @@ class LightwalletdClient:
         timeout: Optional[float] = None,
     ) -> AsyncIterator[pb2.RawTransaction]:
         """Call the legacy GetTaddressTxids RPC (which streams full transactions)."""
+        self._validate_btcz_address_filter(address_filter)
         return self._stream("GetTaddressTxids", address_filter, timeout)
 
     def get_address_transactions(
@@ -324,4 +419,18 @@ class LightwalletdClient:
         timeout: Optional[float] = None,
     ) -> AsyncIterator[pb2.RawTransaction]:
         """Stream transactions for a transparent address using the current RPC."""
+        self._validate_btcz_address_filter(address_filter)
         return self._stream("GetTaddressTransactions", address_filter, timeout)
+
+    def _validate_btcz_address_filter(
+        self,
+        address_filter: pb2.TransparentAddressBlockFilter,
+    ) -> None:
+        if (
+            self.proto_package == "cash.bitcoinz"
+            and address_filter.range.poolTypes
+        ):
+            raise LightwalletdCapabilityError(
+                "BitcoinZ Lightwalletd does not support poolTypes in "
+                "transparent address range requests"
+            )

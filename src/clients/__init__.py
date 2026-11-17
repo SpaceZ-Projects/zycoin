@@ -9,6 +9,7 @@ def __getattr__(name):
 
     if name in {
         "LightwalletdBlockHashMismatchError",
+        "LightwalletdCapabilityError",
         "LightwalletdConnectionError",
         "LightwalletdError",
         "LightwalletdRpcError",

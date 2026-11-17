@@ -62,6 +62,10 @@ class LightwalletdRpcError(LightwalletdError):
         super().__init__(f"{method} failed ({code}): {details}")
 
 
+class LightwalletdCapabilityError(LightwalletdError):
+    """The selected Lightwalletd schema does not support a requested capability."""
+
+
 class LightwalletdBlockHashMismatchError(LightwalletdError):
     """A height fallback returned a block other than the requested hash."""
 
