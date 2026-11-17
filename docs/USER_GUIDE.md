@@ -262,18 +262,28 @@ and `max_outputs`. These boundary and reorg checks improve endpoint
 consistency, but do not independently verify positions or anchors against
 consensus.
 
-`SaplingTreeScanResult.validate_spend_anchor(anchor)` is a fail-closed
-preflight for a selected Spend anchor. It rejects malformed field encodings
-and anchors absent from that scan's retained root history; the current root
-and any retained historical root are accepted. The tree keeps every prefix
-root and defines no expiry or root-history window, so an old retained root is
-not classified as stale by this API. This is local membership only, not
-consensus authentication. Sapling transaction construction, serialization,
-proving, and broadcast are not implemented, so there is not yet a transaction
-boundary that calls this preflight. Any future transaction builder must call
-it before producing transaction bytes or starting proving. This check is
-separate from the circuit's conditional anchor equation: it does not change
-the circuit's zero-value semantics.
+`SaplingTreeScanResult.validate_spend_anchor(anchor)` rejects malformed
+field encodings and anchors absent from that scan's retained root history.
+The reusable `validate_sapling_spend_witness(witness, tree_state)` API,
+exported by `src.sapling`, also validates the Spend witness against an
+explicit complete tree-scan result. It reuses the existing host preflight for
+key derivations, note/value commitments, path structure, public inputs, and
+nullifier consistency; it checks the note's tree position, the computed path
+root, and the declared anchor against the supplied tree. The API returns
+nothing on success and raises `SaplingSpendValidationError` on invalid
+witness or tree context. It does not allocate or mutate an R1CS or produce
+transaction bytes.
+
+The tree keeps every prefix root and defines no expiry or root-history window,
+so any retained historical root passes local membership validation. For a
+zero-value witness, the computed path root and declared anchor may differ as
+allowed by the circuit's conditional equation, but each must be present in
+the supplied tree history. This is local membership only, not consensus
+authentication. The scan is endpoint-consistency checked and cannot
+independently authenticate roots against consensus. Sapling transaction
+construction, serialization, proving, signing, and broadcast are not
+implemented; a future builder must call this API before producing transaction
+bytes or starting proving.
 
 ### Independent Sapling tree reference verification
 
@@ -624,6 +634,16 @@ expiry height, network, and epoch-specific consensus branch ID. Construction
 must reject inconsistent anchors, invalid paths, value imbalance, unsupported
 ZIP-212 eras, or unverified network rules. This is a design contract only, not
 a current callable API.
+
+The transaction-independent Spend validation boundary is callable today:
+`validate_sapling_spend_witness` requires a `SaplingSpendWitness` and a
+`SaplingTreeScanResult` whose scan begins at Sapling activation and whose
+retained outputs/tree agree for the selected note. It covers the host
+admission checks already used by production assembly and adds local anchor
+and tree-membership checks. It does not establish consensus authenticity,
+anchor expiry, note non-spent status, transaction balance, proof validity, or
+signing authorization. It is not a transaction builder or a replacement for
+the separate consensus and proving gates.
 
 ## Offline transparent transaction signing
 

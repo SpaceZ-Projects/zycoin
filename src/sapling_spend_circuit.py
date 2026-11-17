@@ -48,6 +48,13 @@ from .sapling_gadgets import (
     make_sapling_value_commitment_witness,
     sapling_fixed_base_generator,
 )
+from .sapling_tree import SaplingCommitmentTree, SaplingTreeError
+from .scanning import (
+    SaplingCompactOutput,
+    SaplingPositionedOutput,
+    SaplingTreeScanResult,
+    ScanError,
+)
 
 SPEND_PUBLIC_INPUT_ORDER = (
     "rk.u",
@@ -60,6 +67,10 @@ SPEND_PUBLIC_INPUT_ORDER = (
 )
 _SPEND_INPUT_COUNT = len(SPEND_PUBLIC_INPUT_ORDER)
 _SCALAR_BITS = SCALAR_MODULUS.bit_length()
+
+
+class SaplingSpendValidationError(ValueError):
+    """Raised when a Spend witness fails host or supplied-tree validation."""
 
 
 @dataclass(frozen=True)
@@ -273,6 +284,97 @@ def _prepare_witness(witness: SaplingSpendWitness) -> _PreparedSpendWitness:
         rho,
         nullifier_packing,
     )
+
+
+def validate_sapling_spend_witness(
+    witness: SaplingSpendWitness,
+    tree_state: SaplingTreeScanResult | None,
+) -> None:
+    """Validate Spend witness invariants and membership in an explicit full scan.
+
+    The circuit's conditional anchor rule is preserved: a zero-value witness
+    may declare a different anchor from its computed path root, but both roots
+    must occur in the supplied tree's retained history.
+    """
+    if not isinstance(witness, SaplingSpendWitness):
+        raise TypeError("witness must be a SaplingSpendWitness")
+    if tree_state is None:
+        raise SaplingSpendValidationError("Sapling tree scan context is required")
+    if not isinstance(tree_state, SaplingTreeScanResult):
+        raise TypeError("tree_state must be a SaplingTreeScanResult")
+
+    try:
+        prepared = _prepare_witness(witness)
+    except R1CSError as exc:
+        raise SaplingSpendValidationError(
+            f"invalid Sapling Spend witness: {exc}"
+        ) from exc
+
+    tree = tree_state.tree
+    if not isinstance(tree, SaplingCommitmentTree):
+        raise SaplingSpendValidationError(
+            "Sapling commitment-tree state is unavailable"
+        )
+    activation_height = tree.network.sapling.get("activation_height")
+    if (
+        type(activation_height) is not int
+        or type(tree_state.start_height) is not int
+        or type(tree_state.end_height) is not int
+        or tree_state.start_height != activation_height
+        or tree_state.end_height < tree_state.start_height
+    ):
+        raise SaplingSpendValidationError(
+            "Sapling tree scan does not cover a valid range from activation"
+        )
+    if not isinstance(tree_state.outputs, tuple) or len(
+        tree_state.outputs
+    ) != tree.size:
+        raise SaplingSpendValidationError(
+            "Sapling tree scan outputs do not match the retained tree size"
+        )
+    try:
+        current_root = tree.root_at(tree.size)
+        leaf = tree.commitment_at(witness.position)
+    except (IndexError, SaplingTreeError) as exc:
+        raise SaplingSpendValidationError(
+            "Sapling commitment-tree state is inconsistent"
+        ) from exc
+    if current_root != tree.root:
+        raise SaplingSpendValidationError(
+            "Sapling current root does not match its retained tree state"
+        )
+    if not 0 <= witness.position < len(tree_state.outputs):
+        raise SaplingSpendValidationError(
+            "Spend position is outside the complete Sapling tree scan"
+        )
+    positioned_output = tree_state.outputs[witness.position]
+    if (
+        not isinstance(positioned_output, SaplingPositionedOutput)
+        or not isinstance(positioned_output.compact_output, SaplingCompactOutput)
+        or positioned_output.position != witness.position
+        or (positioned_output.coin_id, positioned_output.network_id)
+        != (tree.network.coin_id, tree.network.network_id)
+        or positioned_output.compact_output.cmu != leaf
+        or prepared.note_commitment.commitment.u
+        != int.from_bytes(leaf, "little")
+    ):
+        raise SaplingSpendValidationError(
+            "Spend note commitment and position do not match the supplied tree"
+        )
+
+    path_root = prepared.merkle_path.pedersen_hashes[-1].result.u
+    try:
+        tree.require_root_in_history(path_root.to_bytes(32, "little"))
+    except SaplingTreeError as exc:
+        raise SaplingSpendValidationError(
+            f"Sapling authentication path does not reach a retained root: {exc}"
+        ) from exc
+    try:
+        tree_state.validate_spend_anchor(witness.anchor.to_bytes(32, "little"))
+    except ScanError as exc:
+        raise SaplingSpendValidationError(
+            f"Sapling Spend anchor is not accepted by the supplied tree: {exc}"
+        ) from exc
 
 
 def _pack_point_repr(point: Point) -> bytes:
@@ -520,6 +622,8 @@ def constrain_sapling_spend(
 __all__ = [
     "SPEND_PUBLIC_INPUT_ORDER",
     "SaplingSpendAssembly",
+    "SaplingSpendValidationError",
     "SaplingSpendWitness",
     "constrain_sapling_spend",
+    "validate_sapling_spend_witness",
 ]

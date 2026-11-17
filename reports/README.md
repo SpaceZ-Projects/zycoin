@@ -122,6 +122,12 @@ and provenance; it is the source record for the focused reports below.
   expiry policy exists. This is not consensus authentication, and no
   transaction builder exists to invoke the guard before serialization or
   proving.
+- [Phase 9.21.66](sapling-spend-authoritative-reference.md#phase-92166--transaction-independent-spend-witness-validation)
+  adds a reusable, read-only Spend witness validator that reuses production
+  host preflight and binds the note, path root, and anchor to explicit scan
+  context. Its focused validation/tree/scanner/Spend regressions passed
+  15 tests. It preserves zero-value conditional-anchor semantics and does
+  not claim consensus authentication or transaction construction.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.

@@ -6724,6 +6724,31 @@ unchanged. `compileall` and `git diff --check` passed. Pylance reported no
 diagnostics in the changed production source files; existing unused-parameter
 warnings remain in the test module.
 
+### Phase 9.21.66 — Transaction-independent Spend witness validation
+
+Added `validate_sapling_spend_witness(witness, tree_state)` to the Spend
+module and exported it through `src.sapling`. It delegates all witness
+preflight and derived-key/hash checks to `_prepare_witness`, then binds the
+selected note and position to an explicit complete activation scan. It
+checks the current root against retained history, output-count/tree-size
+consistency, the selected scan output, and independent membership of the
+computed path root and declared anchor. It does not mutate R1CS state or
+produce transaction bytes.
+
+The API preserves conditional anchor semantics: nonzero value still requires
+the path root to equal the anchor; for zero value they may differ if both
+roots are in local history. Root membership is not consensus authentication,
+there is no expiry policy, and no transaction builder exists to invoke this
+preflight before serialization/proving. Tests cover missing and inconsistent
+context, malformed and unknown roots, nullifier/IVK/key failures, invalid
+path structure, and zero-value behavior.
+
+The focused validation, tree, scanner, conditional-anchor, and production
+Spend regressions passed **15 tests**. Targeted Ruff, `compileall`,
+`git diff --check`, and Pylance diagnostics for the changed source, facade,
+and test files passed. This does not establish consensus authentication or
+wire the validator into a transaction-construction API.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

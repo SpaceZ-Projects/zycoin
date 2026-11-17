@@ -16,6 +16,10 @@ ending-block stability. `SaplingCommitmentTree.require_root_in_history()` and
 `SaplingTreeScanResult.validate_spend_anchor()` reject malformed roots and
 anchors absent from the locally retained root history. The scan result also
 checks each generated witness anchor before returning it.
+`validate_sapling_spend_witness(witness, tree_state)` additionally consumes a
+Spend witness and explicit full-scan context, checking witness host
+preconditions, selected note/position consistency, the computed authentication
+path root, and the declared anchor without changing R1CS state.
 
 ## Verification and compatibility status
 
@@ -61,12 +65,22 @@ scanner's witness-selection path also validates its generated anchor. These
 checks have no transaction serialization or proving side effects because
 those Sapling transaction APIs are not implemented.
 
-Focused validation passed (**10 tests**) for current and historical roots,
+The Spend validator reuses the production `_prepare_witness` checks for
+scalar/point encodings, IVK and identity transmission key, value and note
+commitments, path structure and conditional anchor semantics, public inputs,
+and nullifier consistency. It additionally requires a scan result beginning
+at activation, a current root consistent with the tree, output count matching
+tree size, and the selected note commitment at the requested position. It
+checks the path-computed root and declared anchor independently against the
+retained history. For zero value they may differ, preserving the circuit's
+conditional relation, while both still need local root membership.
+
+Focused validation and regression passed (**15 tests**) for current and
+historical roots,
 unknown and malformed encodings, unavailable tree state, and the existing
 zero-value conditional-anchor and production Spend satisfaction regressions.
-Ruff `--select F`, `compileall`, `git diff --check`, and Pylance diagnostics
-for the changed production files passed. The default targeted Ruff check
-reported 21 existing findings, which were not changed.
+Targeted Ruff, `compileall`, `git diff --check`, and Pylance diagnostics for
+the changed source, facade, and test files passed with no diagnostics.
 
 ## References and provenance
 

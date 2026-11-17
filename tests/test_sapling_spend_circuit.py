@@ -12,6 +12,7 @@ from src.bls12_381 import (
     G2_INFINITY,
     SCALAR_MODULUS,
 )
+from src.coin_loader import load_coin_configs
 from src.groth16_proof import (
     Groth16ProvingQueries,
     assemble_proof_elements,
@@ -25,6 +26,16 @@ from src.groth16_queries import (
 )
 from src.jubjub import IDENTITY, Point, group_hash
 from src.r1cs import R1CS, R1CSError, Variable
+from src.sapling import (
+    SaplingSpendValidationError,
+    validate_sapling_spend_witness,
+)
+from src.sapling_gadgets import (
+    make_note_commitment_witness,
+    make_sapling_nullifier_multipacking_witness,
+    make_sapling_nullifier_rho_witness,
+    make_sapling_value_commitment_witness,
+)
 from src.sapling_spend_circuit import (
     SPEND_PUBLIC_INPUT_ORDER,
     SaplingSpendWitness,
@@ -32,6 +43,12 @@ from src.sapling_spend_circuit import (
     constrain_sapling_spend,
 )
 from src.sapling_spend_reference import generate_pinned_test_witness
+from src.sapling_tree import SaplingCommitmentTree
+from src.scanning import (
+    SaplingCompactOutput,
+    SaplingPositionedOutput,
+    SaplingTreeScanResult,
+)
 from tests.bellman_blake2s_reference import (
     _Negated as BellmanNegatedBit,
 )
@@ -78,7 +95,266 @@ def _circuit_witness(reference) -> SaplingSpendWitness:
     )
 
 
+def _tree_scan_for_spend(witness):
+    network = load_coin_configs()["zec"].get_network("mainnet")
+    activation = network.sapling["activation_height"]
+    tree = SaplingCommitmentTree(network)
+    first_leaf = witness.note_commitment.u.to_bytes(32, "little")
+    tree.append(first_leaf)
+    historical_path = tree.witness(0)
+    second_leaf = bytes(32)
+    if second_leaf == first_leaf:
+        second_leaf = (1).to_bytes(32, "little")
+    tree.append(second_leaf)
+    current_path = tree.witness(0)
+    outputs = tuple(
+        SaplingPositionedOutput(
+            SaplingCompactOutput(
+                txid=f"{position + 1:064x}",
+                height=activation,
+                transaction_index=0,
+                output_index=position,
+                cmu=tree.commitment_at(position),
+                ephemeral_key=bytes(32),
+                ciphertext_prefix=bytes(52),
+            ),
+            position,
+            network.coin_id,
+            network.network_id,
+        )
+        for position in range(tree.size)
+    )
+    return (
+        SaplingTreeScanResult(outputs, tree, activation, activation),
+        historical_path,
+        current_path,
+    )
+
+
+def _witness_at_tree_path(witness, tree_witness, *, anchor=None):
+    path = tuple(
+        (
+            int.from_bytes(sibling, "little"),
+            bool((tree_witness.position >> level) & 1),
+        )
+        for level, sibling in enumerate(tree_witness.authentication_path)
+    )
+    anchor_bytes = tree_witness.anchor if anchor is None else anchor
+    anchor_value = int.from_bytes(anchor_bytes, "little")
+    packed_nullifier = make_sapling_nullifier_multipacking_witness(
+        witness.nullifier
+    )
+    public_inputs = (
+        witness.randomized_key.u,
+        witness.randomized_key.v,
+        witness.value_commitment.u,
+        witness.value_commitment.v,
+        anchor_value,
+        *packed_nullifier.packed_values,
+    )
+    return replace(
+        witness,
+        authentication_path=path,
+        position=tree_witness.position,
+        anchor=anchor_value,
+        public_inputs=public_inputs,
+    )
+
+
+def _zero_value_spend_fields(witness):
+    value_commitment = make_sapling_value_commitment_witness(
+        0, witness.rcv
+    ).commitment
+    note_commitment = make_note_commitment_witness(
+        0,
+        witness.diversifier_base,
+        witness.transmission_key,
+        witness.rcm,
+    ).commitment
+    rho = make_sapling_nullifier_rho_witness(note_commitment, 0)
+    nullifier = hashlib.blake2s(
+        witness.nk.encode() + rho.rho.encode(),
+        digest_size=32,
+        person=b"Zcash_nf",
+    ).digest()
+    zero_witness = replace(
+        witness,
+        value=0,
+        value_commitment=value_commitment,
+        note_commitment=note_commitment,
+        nullifier=nullifier,
+    )
+    return zero_witness
+
+
 class SaplingSpendCircuitTests(unittest.TestCase):
+    def test_public_spend_validator_accepts_current_and_retained_roots(self):
+        witness = _circuit_witness(generate_pinned_test_witness(0))
+        tree_state, historical_path, current_path = _tree_scan_for_spend(witness)
+        historical = _witness_at_tree_path(witness, historical_path)
+        current = _witness_at_tree_path(witness, current_path)
+
+        self.assertNotEqual(historical.anchor, current.anchor)
+        self.assertIsNone(
+            validate_sapling_spend_witness(historical, tree_state)
+        )
+        self.assertIsNone(validate_sapling_spend_witness(current, tree_state))
+
+    def test_public_spend_validator_checks_anchor_and_tree_state(self):
+        source = _circuit_witness(generate_pinned_test_witness(0))
+        zero_source = _zero_value_spend_fields(source)
+        tree_state, historical_path, current_path = _tree_scan_for_spend(
+            zero_source
+        )
+        zero_witness = _witness_at_tree_path(
+            zero_source,
+            historical_path,
+            anchor=current_path.anchor,
+        )
+        unknown_anchor = _witness_at_tree_path(
+            zero_witness,
+            historical_path,
+            anchor=bytes(32),
+        )
+        malformed_anchor = replace(
+            zero_witness,
+            anchor=SCALAR_MODULUS,
+            public_inputs=(
+                *zero_witness.public_inputs[:4],
+                SCALAR_MODULUS,
+                *zero_witness.public_inputs[5:],
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "not accepted by the supplied tree",
+        ):
+            validate_sapling_spend_witness(unknown_anchor, tree_state)
+        with self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "canonical field element",
+        ):
+            validate_sapling_spend_witness(malformed_anchor, tree_state)
+        with self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "tree scan context is required",
+        ):
+            validate_sapling_spend_witness(zero_witness, None)
+
+        inconsistent_tree = replace(tree_state, outputs=tree_state.outputs[:-1])
+        with self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "outputs do not match",
+        ):
+            validate_sapling_spend_witness(zero_witness, inconsistent_tree)
+        unavailable_tree = replace(tree_state, tree=None)
+        with self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "tree state is unavailable",
+        ):
+            validate_sapling_spend_witness(zero_witness, unavailable_tree)
+
+        self.assertEqual(tree_state.validate_spend_anchor(current_path.anchor), current_path.anchor)
+
+    def test_public_spend_validator_reuses_witness_preflight_checks(self):
+        witness = _circuit_witness(generate_pinned_test_witness(0))
+        tree_state, historical_path, _ = _tree_scan_for_spend(witness)
+        valid = _witness_at_tree_path(witness, historical_path)
+        malformed_path = replace(
+            valid,
+            authentication_path=(
+                (valid.authentication_path[0][0], 1),
+                *valid.authentication_path[1:],
+            ),
+        )
+        mismatched_nullifier = bytes((valid.nullifier[0] ^ 1,)) + valid.nullifier[1:]
+        invalid_nullifier = replace(valid, nullifier=mismatched_nullifier)
+
+        with self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "path direction must be a Boolean",
+        ):
+            validate_sapling_spend_witness(malformed_path, tree_state)
+
+        system = R1CS()
+        system.alloc_public("preexisting input", 7)
+        before = (
+            system.serialize(),
+            system.variables,
+            tuple(system.witness_value(variable) for variable in system.variables),
+            system.constraints,
+            system.public_input_count,
+            system.public_inputs(),
+            system.is_fresh,
+        )
+        with self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "nullifier does not match constrained PRF",
+        ):
+            validate_sapling_spend_witness(invalid_nullifier, tree_state)
+        after = (
+            system.serialize(),
+            system.variables,
+            tuple(system.witness_value(variable) for variable in system.variables),
+            system.constraints,
+            system.public_input_count,
+            system.public_inputs(),
+            system.is_fresh,
+        )
+        self.assertEqual(after, before)
+
+        class ZeroDigest:
+            def digest(self):
+                return bytes(32)
+
+        zero_ivk = replace(valid, ivk=0, transmission_key=IDENTITY)
+        with patch(
+            "src.sapling_spend_circuit.blake2s",
+            return_value=ZeroDigest(),
+        ), self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "ivk must be a non-zero",
+        ):
+            validate_sapling_spend_witness(zero_ivk, tree_state)
+
+        identity_key = replace(
+            valid,
+            diversifier_base=IDENTITY,
+            transmission_key=IDENTITY,
+        )
+        with patch(
+            "src.sapling_spend_circuit.group_hash",
+            return_value=IDENTITY,
+        ), self.assertRaisesRegex(
+            SaplingSpendValidationError,
+            "transmission key cannot be the identity",
+        ):
+            validate_sapling_spend_witness(identity_key, tree_state)
+
+    def test_public_spend_validator_preserves_zero_value_conditional_anchor(self):
+        source = _circuit_witness(generate_pinned_test_witness(0))
+        zero_source = _zero_value_spend_fields(source)
+        tree_state, historical_path, current_path = _tree_scan_for_spend(
+            zero_source
+        )
+        conditional = _witness_at_tree_path(
+            zero_source,
+            historical_path,
+            anchor=current_path.anchor,
+        )
+        self.assertNotEqual(
+            conditional.anchor,
+            int.from_bytes(historical_path.anchor, "little"),
+        )
+        self.assertEqual(
+            conditional.anchor,
+            int.from_bytes(current_path.anchor, "little"),
+        )
+        self.assertIsNone(
+            validate_sapling_spend_witness(conditional, tree_state)
+        )
+
     def test_spend_witness_builds_and_divides_its_qap_without_parameters(self):
         witness = _circuit_witness(generate_pinned_test_witness(0))
         system = R1CS()

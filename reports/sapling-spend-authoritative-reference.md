@@ -3132,3 +3132,38 @@ they were left unchanged. `compileall` and `git diff --check` passed.
 Pylance reported no diagnostics in the changed production source files; the
 test module retains its existing unused-parameter warnings. No circuit,
 transaction serialization, network, or storage layer was added.
+
+### Phase 9.21.66 — Transaction-independent Spend witness validation
+
+Added `validate_sapling_spend_witness(witness, tree_state)` to the existing
+Spend circuit module and re-exported it from `src.sapling`. The function
+requires an explicit `SaplingTreeScanResult`; missing context fails closed.
+It calls the existing `_prepare_witness` once, reusing its scalar and point
+validation, key derivation checks, note/value commitment derivation,
+conditional anchor handling, public-input checks, and BLAKE2s nullifier
+comparison. No second IVK or nullifier derivation implementation was added.
+
+The API also checks that the scan starts at activation, its retained output
+count agrees with tree size, the current tree root agrees with root history,
+and the selected output/position/commitment agree with the tree. It requires
+both the path-computed root and declared anchor to occur in retained history.
+For nonzero value, `_prepare_witness` continues to require path-root equality
+with the anchor. For zero value, the two roots may differ but each must be in
+the supplied local history; no circuit equation changed. The validator is
+read-only and returns no transaction bytes.
+
+This boundary does not authenticate endpoint-provided roots against
+consensus, define expiry, establish note non-spent status, or validate
+transaction balance/proof/signature. The repository still has no Sapling
+transaction construction, serialization, proving, signing, or broadcast API.
+The function is a reusable preflight for a future builder, not a transaction
+builder or proving gate.
+
+Focused validation covers current and retained roots, unknown and malformed
+anchors, absent/inconsistent tree context, invalid path structure, nullifier
+mismatch, zero-IVK and identity-key rejection, zero-value conditional-anchor
+semantics, and no R1CS mutation (**4 new tests**, in addition to the prior
+tree/scanner and production Spend regressions). The combined focused suite
+passed **15 tests** in 116.6 seconds. Targeted Ruff, `compileall`,
+`git diff --check`, and Pylance diagnostics for all three changed Python
+files passed with no diagnostics.
