@@ -6606,6 +6606,43 @@ Production replacement, official parameter binding, ceremony validity, and
 Spend proving readiness remain **Unverified / Blocked**. Output circuit code
 was not changed.
 
+### Phase 9.21.62 — Production Spend migration readiness audit
+
+**Decision: Not ready for production replacement.** Phase 9.21.61 established
+full source-faithful Bellman matrix parity for three witnesses
+(`cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`,
+98,777 × 98,646), but the current production circuit still has fingerprint
+`f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+The source composer, temporal bridge, and generic QAP adapter remain under
+`tests/`; they do not implement the production `SaplingSpendWitness` /
+`SaplingSpendAssembly` API. `src.sapling_blake2s` is production-safe, but the
+production Spend circuit still uses the generic BLAKE2s gadget.
+
+The official parameter file's SHA-256 was freshly verified as
+`8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13`
+(47,958,396 bytes). Retained parser evidence establishes Bellman 0.15
+serialization and section-count compatibility, not source-circuit binding or
+ceremony validity. The retained sparse query map has no production column
+for source identity `Aux(76805)`; it maps to canonical source column 76,813,
+but no production query expander or source-specific official-query
+comparison exists. The missing Phase-1/complete ceremony evidence remains a
+hard blocker.
+
+Confirmed integration issue: an invalid same-length nullifier is compared
+with the constrained PRF output after the production R1CS has already been
+substantially mutated. A production adapter must preflight that value or
+assemble atomically. The independent verifier also applies stricter IVK and
+anchor policy than production assembly; do not make it the shared admission
+gate without resolving that behavior.
+
+Migration gates, exact blockers, required evidence, and the recommended
+sequence are recorded in Phase 9.21.62 of the
+[authoritative Spend report](./sapling-spend-authoritative-reference.md).
+Bounded validation passed (**58 passed, 1 skipped, 89 subtests**); targeted
+Ruff, `compileall`, and `git diff --check` passed. No full synthesis or
+official-query export was repeated, and no production circuit, parameter,
+or proving gate changed.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

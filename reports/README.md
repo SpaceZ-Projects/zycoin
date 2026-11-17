@@ -109,6 +109,13 @@ and provenance; it is the source record for the focused reports below.
   retained baseline and two fresh pinned variant exports, including the
   generic QAP adapter on the baseline. Production parameter binding,
   ceremony validity, and Spend proving readiness remain unverified.
+- [Phase 9.21.62](sapling-spend-authoritative-reference.md#phase-92162--formal-production-spend-migration-readiness-audit)
+  records the formal production migration audit and its **Not ready**
+  decision. Source-faithful parity is verified, but production uses a
+  different matrix; the API/dependency boundary, source-specific official
+  query binding, and ceremony evidence remain blockers. Bounded API/QAP/
+  parser regressions passed; no full synthesis or official-query export was
+  repeated.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.

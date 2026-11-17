@@ -2803,6 +2803,55 @@ parameter set. Official parameter-to-circuit binding, ceremony validity,
 production migration, and proving readiness remain **Unverified / Blocked**.
 No Output circuit code was changed.
 
+### Phase 9.21.62 — Formal Spend proving and migration readiness gate
+
+**Decision: Not ready for production Spend migration or proving.** Full
+source-faithful matrix parity is verified for three witnesses, but the
+production circuit differs (`f3451e63…e983e5b9` versus
+`cdb472ea…c929a127`), and the verified source composer and baseline QAP
+adapter remain test-only.
+
+#### Gate table
+
+| Gate | Status | Evidence | Required evidence/action |
+|---|---|---|---|
+| Pinned circuit relation | **Verified, scoped** | Exact ordered matrix, allocations, assignments, annotations, public inputs, and satisfaction match pinned Sapling/Bellman for three source-faithful witnesses; baseline QAP adapter passes. | Preserve these exact regressions through extraction and production API adaptation. |
+| Production circuit/API migration | **Blocked** | Production matrix differs; source witness/assembly and temporal bridge are test-only; production still uses generic BLAKE2s. | Implement a production-safe adapter preserving existing witness, assembly, ownership, and public-input contracts; keep old implementation until differential gates pass. |
+| QAP and query vectors | **Partially Verified** | Test-only baseline QAP conversion/evaluation works. Official parameter parser verifies Bellman section format/counts; current production direct H accumulation previously differed. No source-specific official query comparison exists. | Expand sparse queries with exact source identities (including `Aux(76805)` → canonical column 76,813), and compare all source-specific query sections. |
+| Parameter bytes and provenance | **Partially Verified / Blocked** | File SHA-256 and serialization compatibility are verified; no circuit ID is encoded. The Phase-1 artifact and complete ceremony transcript are unavailable. | Independently validate authenticated provenance, ceremony chain, exact circuit binding, and final parameter points before any Spend use. |
+| Proof and verification integration | **Blocked** | Generic proof assembly requires dense queries and caller-supplied randomizers; no Spend parameter loader/query expander/proving wrapper authenticates inputs. No Spend proof was generated. | Separately establish authenticated query loading, secure randomizer generation, proof/verification compatibility, and key lifecycle. Keep Spend proving disabled. |
+
+The official file was freshly checked at 47,958,396 bytes with SHA-256
+`8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13`.
+This is a byte-integrity pin, not parameter-to-circuit evidence. Retained
+query counts are IC=8, H=131,071, L=98,638, A=85,390, B_G1=61,300, and
+B_G2=61,300. The current-production mapping artifact leaves `Aux(76805)`
+without a production column in L and A; the source-canonical index is
+derivable, but production query expansion and exact official-query
+compatibility are unverified.
+
+The implementation audit also identified a mutation-order issue: production
+checks the constrained nullifier output against the supplied 32-byte value
+only after R1CS mutation. A production migration must reject this before
+mutation or stage assembly atomically. `verify_spend_reference_witness`
+also applies stricter IVK and anchor checks than production; this is a
+confirmed API-policy difference, not a demonstrated exploit.
+
+Recommended order: (1) preserve the existing production circuit and proving
+gate; (2) extract only source-faithful runtime helpers, leaving exporters and
+fixtures test-only; (3) adapt and fully prevalidate the current production
+witness/API; (4) provide a stable canonical allocator and source-specific
+query expander; (5) rerun exact three-witness matrix/QAP, Output, Spend, and
+compatibility regressions; (6) establish ceremony and parameter binding
+independently; and (7) evaluate proof randomness and secret-handling only as
+a separate proving-readiness gate. The full gate table and evidence are in
+the [authoritative Spend report](./sapling-spend-authoritative-reference.md).
+
+Bounded audit regressions passed (**58 passed, 1 skipped, 89 subtests**);
+targeted Ruff, `compileall`, and `git diff --check` passed. Full Spend
+synthesis and the long official-query export were not repeated. No setup or
+proof was generated, and no production proving gate changed.
+
 ### Phase 9.21.54 — Spend H-map exact-method status
 
 The retained Spend exports verify the quotient's shifted cross-correlation

@@ -2830,3 +2830,168 @@ reference for three valid witnesses, not production Spend replacement,
 official parameter-to-circuit binding, ceremony provenance, or proving
 readiness. Those remain **Unverified**. No production Spend or Output circuit
 implementation was changed.
+
+### Phase 9.21.62 — Formal production Spend migration readiness audit
+
+**Decision: Not ready to replace production Spend or use the official Spend
+parameters for proving.** The isolated source-faithful circuit has strong,
+fresh full-matrix parity evidence, but it is still test-only; the current
+production circuit has a different matrix, the production adapter and
+parameter/query binding are incomplete, and ceremony validity is not
+established. This was a read-only audit. It did not rerun full Spend
+synthesis, regenerate an official query export, create setup data, or produce
+a proof.
+
+#### Evidence and current boundary
+
+- The retained Phase 9.21.61 comparisons verify the source-faithful composer
+  against pinned Sapling `88a7946b4a3066787776e11f0a502654167e022d` and
+  Bellman `b726862a4ece8a627e7fea486d77b502a6edbb0b` for three valid
+  witnesses. They compare allocation identities/order, assignments, public
+  inputs, labels, ordered A/B/C expressions, satisfaction, and the canonical
+  matrix fingerprint
+  `cdb472ea319b5a01e36df62560d6a0dd8bc6121991d815ad21514940c929a127`
+  (**98,777 rows × 98,646 columns**). Only the baseline also exercised the
+  test-only generic QAP adapter.
+- The current production circuit fingerprint remains
+  `f3451e632d46150e20e9ca2e6279266aba9555adb9192728816928e4e983e5b9`.
+  The source-faithful fingerprint difference is affirmative evidence that
+  the current production circuit is not the exact pinned ordered matrix; it
+  is not evidence that either circuit is unsatisfied or that the official
+  parameters match the source-faithful one.
+- Production exposes `SaplingSpendWitness`,
+  `SaplingSpendAssembly`, and `constrain_sapling_spend` from
+  `src/sapling_spend_circuit.py`. The source-faithful composer,
+  `SpendReferenceWitness`/`SpendReferenceAssembly`, temporal allocation
+  bridge, and Groth16 adapter are in `tests/`. The source witness is not a
+  drop-in replacement for the production witness: production accepts and
+  cross-checks additional derived values and public inputs. The bridge and
+  adapter also rely on concrete/private R1CS state, so they are not yet a
+  production-safe API boundary.
+- `src/sapling_blake2s.py` is pure Python and production-safe as a module, but
+  production Spend still imports the generic `src.blake2s_gadget`; it does
+  not use the source-ordered gadget. Moving the test composer into `src`
+  without separating the reference harness and stabilizing these helper
+  boundaries would therefore not complete the migration.
+- The designated `sapling-spend.params` file was present at audit time;
+  its size is **47,958,396 bytes** and its SHA-256 was freshly checked as
+  `8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13`.
+  Retained parameter-compatibility evidence verifies Bellman 0.15 parser and
+  point-encoding compatibility, file integrity, and section counts
+  (IC=8, H=131,071, L=98,638, A=85,390, B_G1=61,300, B_G2=61,300). This
+  establishes byte/format evidence only, not a circuit identifier or
+  ceremony-to-matrix binding.
+- The retained query-index artifact
+  `tests/fixtures/sapling_spend_parameter_query_index_mapping.json`
+  fingerprints the structural mapping as
+  `183a399a8c7e749e011d690ffa216541ce1268e869723b4a0d4cb54d0cc54a08`.
+  Its production-correspondence columns leave upstream `Aux(76805)`
+  unresolved in both L and A. In the source-faithful canonical layout that
+  identity maps to column 76,813 (`ONE` + seven public inputs + `Aux(76805)`),
+  but no production sparse-query expander or source-specific official-query
+  comparison has been verified. Historical full-vector accumulation results
+  on the current production QAP include an H mismatch; they cannot be
+  transferred to the source-faithful matrix.
+
+#### Migration gates
+
+| Gate | Status | Evidence | Required to pass |
+|---|---|---|---|
+| Pinned source and source-faithful circuit relation | **Verified, scoped** | Three full-matrix comparisons match the pinned source; the baseline also passes the test-only canonical QAP adapter. | Preserve the pinned source, full ordered-matrix comparisons, and witness coverage in the production migration regression suite. |
+| Current production circuit equivalence | **Blocked** | Production fingerprint `f3451e63…e983e5b9` differs from the verified source-faithful fingerprint `cdb472ea…c929a127`. | Integrate the source-faithful relation behind the existing production API, then prove exact parity before switching the implementation. |
+| Production module/API and dependency boundary | **Blocked** | Composer, temporal bridge, and adapter are test-only; witness/assembly structures differ; bridge uses concrete/private R1CS state. Production still uses the generic BLAKE2s gadget. | Extract only circuit/runtime code to `src`, retain exporters/fixtures as test-only, normalize the existing public witness, and preserve the existing function and assembly contracts without new runtime dependencies. |
+| Witness validation and failure lifecycle | **Partially Verified** | Production preflights scalar/point/path/public-input consistency. A same-length nullifier is compared to the constrained PRF only after substantial R1CS mutation. The independent verifier also requires nonzero IVK and unconditional anchor equality, unlike production's `ivk >= 0` and conditional nonzero-value anchor check. | Move nullifier consistency into preflight or make failed assembly atomic; decide and test the verifier policy differences before sharing it as an admission validator. |
+| Canonical allocation and generic QAP adapter | **Partially Verified** | Temporal-to-canonical mapping and baseline QAP assignment/evaluation pass in tests. No production adapter exists; the two alternate witnesses did not rebuild the QAP adapter. | Promote a stable canonical bridge/adapter and test complete variable identities, assignments, public-input order, satisfaction, and QAP evaluation for all retained witnesses. |
+| Official parameter bytes and serialization | **Verified, format only** | Current file SHA-256 and size checked; retained Bellman 0.15 parser comparisons and query-section counts pass. | Keep the digest pin and strict point/section validation; do not treat parsing or matching dimensions as circuit binding. |
+| Official query mapping to the source-faithful circuit | **Unverified** | Query identities/counts are retained, but the current-production mapping leaves `Aux(76805)` without a local column; no source-specific sparse expansion or complete official-query accumulation was demonstrated. | Establish a source-canonical sparse-index map, expand compact queries with exact identity positions, and independently compare every required query section against the exact source circuit. |
+| Parameter-to-circuit binding and ceremony validity | **Blocked** | The file hash pins bytes only. The Phase-1 artifact and complete authenticated ceremony transcript/exact ceremony-era circuit binding are unavailable in the retained evidence. | Obtain and independently validate the complete provenance/transcript and evidence that the final query sections were generated for this exact matrix, or keep these parameters unusable for Spend. |
+| Proving/verification integration and secret handling | **Blocked for production Spend proving** | Generic QAP/proof/verification APIs exist, but proof assembly needs dense queries and caller-supplied `r,s`; Spend has no authenticated parameter loader/query expander/proving wrapper. No Spend proof was generated. Python constant-time behavior and reliable zeroization are not established. | Separately establish authenticated parameters and query expansion, secure randomness and key lifecycle, proof/verification compatibility, and side-channel/secret-handling policy. Keep Spend proving disabled until then. |
+
+#### Confirmed findings and assurance gaps
+
+1. **Confirmed relation/API gap:** the current production matrix and the
+   source-faithful matrix have different fingerprints. The exact source
+   relation is verified only in the isolated path; production replacement
+   has not occurred.
+2. **Confirmed failure-lifecycle gap:** `_prepare_witness` validates nullifier
+   type/length and public packing before allocation, but
+   `constrain_sapling_spend` compares the supplied bytes with the constrained
+   nullifier output after circuit construction has already mutated the
+   caller's R1CS. A caller must discard that R1CS on failure. This audit
+   identified the ordering from code and did not rerun a full synthesis for
+   this failure case.
+3. **Confirmed verifier-policy difference:** `verify_spend_reference_witness`
+   requires `0 < ivk < 2^251` and always checks anchor equality; production
+   `_prepare_witness` permits zero IVK and only requires anchor equality for
+   nonzero value. This is an API consistency issue to resolve, not evidence
+   of a demonstrated exploit or a reason to alter circuit equations.
+4. **Assurance gaps:** file integrity, Bellman-compatible serialization,
+   matrix parity, and a passing test-only QAP adapter do not prove official
+   parameter binding or ceremony validity. Generic proof assembly does not
+   generate randomness or authenticate query provenance, and Python does not
+   provide a constant-time/zeroization guarantee.
+
+#### Proposed production boundaries
+
+- Keep `src/sapling_spend_circuit.py` as the compatibility boundary: retain
+  `SaplingSpendWitness`, `SaplingSpendAssembly`, and
+  `constrain_sapling_spend`; perform all witness normalization and
+  cross-checks before mutating the caller's R1CS.
+- Put the source-ordered Spend composition in a private production module
+  (for example, `src/sapling_spend_source.py`) that consumes only validated
+  production witness data and production-safe Python gadgets, including
+  `src.sapling_blake2s`. It must not import `tests`, reference exporters, or
+  fixture helpers.
+- Keep allocation/QAP conversion on a stable production API. Prefer
+  canonical allocation that preserves source auxiliary order and inserts
+  public-input enforcement rows at their original source points; do not copy
+  the test bridge's direct access to private R1CS internals. Any alternative
+  temporal bridge must expose a supported mapping contract and independently
+  pass the same ordered-matrix tests.
+- Keep parameter parsing separate from circuit synthesis. The existing
+  generic parser may continue validating Bellman serialization, but a
+  source-specific query expander/authenticated parameter wrapper must not be
+  treated as available until the sparse map and ceremony evidence pass their
+  gates. Reference exporters and retained artifacts remain test-only.
+
+#### Recommended implementation sequence
+
+1. Keep the existing production Spend and proving gate unchanged. Freeze the
+   source-faithful matrix, witness, and allocation evidence as migration
+   baselines.
+2. Extract the source-faithful runtime composer and required pure-Python
+   helpers into a production module. Keep pinned Bellman exporters,
+   comparison code, fixtures, and reference-only adapters under `tests/`.
+3. Adapt the existing `SaplingSpendWitness` into the source composer only
+   after all current redundant-field checks pass. Preflight the derived
+   nullifier before backend mutation (or provide atomic assembly), and
+   preserve `SaplingSpendAssembly`, public-input order, labels, and failure
+   behavior.
+4. Use a production-safe canonical allocator/adapter that preserves the
+   source auxiliary order and inserts public-input equality rows at their
+   source enforcement points. Resolve `Aux(76805)` against the
+   source-canonical layout; do not silently reuse the incomplete
+   production-correspondence columns.
+5. Run exact full-matrix regressions for all three witnesses, including
+   allocations, assignments, labels, ordered A/B/C expressions, satisfaction,
+   and QAP behavior. Also rerun the unchanged Output and Spend compatibility
+   regressions; retain rollback to the current implementation until all pass.
+6. Treat official parameter/query use as a separate gate: validate complete
+   provenance and ceremony evidence, then verify every source-specific
+   query section and its sparse index mapping. If that evidence cannot be
+   obtained, do not use the existing official parameters for the migrated
+   Spend circuit.
+7. Keep proving disabled until parameter authentication, secure randomizer
+   generation, proof/verification integration, and secret-handling assurance
+   pass independently.
+
+Bounded verification during this audit passed: **58 passed, 1 skipped, 89
+subtests** in 76.31 seconds across temporal mapping, adapter boundaries,
+Spend witness verification/preflight, QAP, proof, verification, and
+parameter-stream parser tests. The official parameter compatibility export
+and complete Spend synthesis were not repeated. Targeted Ruff,
+`compileall`, and `git diff --check` passed. Pylance reported no diagnostics
+in the production Spend, BLAKE2s, temporal-mapping, or adapter files; the
+source-reference composer retained one existing unused-local warning.
+No production code, circuit, parameter, or proving gate changed in this
+audit.
