@@ -105,13 +105,26 @@ class SaplingPositionedOutput:
 @dataclass(frozen=True)
 class SaplingTreeScanResult:
     outputs: Tuple[SaplingPositionedOutput, ...]
-    tree: SaplingCommitmentTree
+    tree: SaplingCommitmentTree | None
     start_height: int
     end_height: int
+
+    def validate_spend_anchor(self, anchor: bytes) -> bytes:
+        """Require a Spend anchor to occur in this scan's retained tree history."""
+        if not isinstance(self.tree, SaplingCommitmentTree):
+            raise ScanError("Sapling commitment-tree state is unavailable")
+        try:
+            return self.tree.require_root_in_history(anchor)
+        except SaplingTreeError as exc:
+            raise ScanError(
+                f"Sapling Spend anchor is invalid or unavailable: {exc}"
+            ) from exc
 
     def witness_for(self, output):
         if not isinstance(output, SaplingPositionedOutput):
             raise TypeError("output must be a SaplingPositionedOutput")
+        if not isinstance(self.tree, SaplingCommitmentTree):
+            raise ScanError("Sapling commitment-tree state is unavailable")
         if (output.coin_id, output.network_id) != (
             self.tree.network.coin_id,
             self.tree.network.network_id,
@@ -120,9 +133,11 @@ class SaplingTreeScanResult:
         if output not in self.outputs:
             raise ScanError("output is not part of this complete tree scan")
         try:
-            return self.tree.witness(output.position)
+            witness = self.tree.witness(output.position)
         except SaplingTreeError as exc:
             raise ScanError("could not construct Sapling output witness") from exc
+        self.validate_spend_anchor(witness.anchor)
+        return witness
 
 
 def _validate_network(client, network):

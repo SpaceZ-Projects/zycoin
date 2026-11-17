@@ -3095,3 +3095,40 @@ Focused validation passed: **9 tests and 63 subtests** in 161.05 seconds.
 Targeted Ruff, `compileall`, Pylance diagnostics for both changed Python
 files, and `git diff --check` passed. No Output code, independent verifier,
 official parameters, proving gates, or circuit equations changed.
+
+### Phase 9.21.65 — Sapling Spend anchor membership preflight
+
+Added `SaplingCommitmentTree.require_root_in_history()` and
+`SaplingTreeScanResult.validate_spend_anchor(anchor)`. The guard rejects
+non-32-byte and noncanonical Sapling field encodings, rejects roots absent
+from the available tree history, and returns a current or retained
+historical root unchanged. The scan-result method fails explicitly when its
+tree state is unavailable. `witness_for()` validates the generated current
+anchor before returning its witness. These APIs do not take note value and
+do not alter Spend circuit constraints or conditional zero-value anchor
+semantics.
+
+The existing tree retains every prefix root and defines no expiration or
+stale-root window. A retained historical root therefore passes local
+membership validation; an absent root is rejected as unknown/not retained.
+The scanner's endpoint-provided block data and tree sizes are only
+consistency-checked, not independently authenticated against consensus.
+Consequently this is a local tree-state preflight, not a consensus acceptance
+proof.
+
+Repository audit confirmed that Sapling transaction construction,
+serialization, proving, signing, and broadcast are not implemented. The
+preflight is exposed at the closest existing tree-aware Spend-witness
+boundary, but no transaction builder currently calls it; end-to-end
+transaction-output rejection before serialization/proving/broadcast cannot
+be verified until such a builder exists. No transaction output or external
+side effect is produced by this validator.
+
+The focused tree/scanner, existing zero-value conditional-anchor, and
+production Spend satisfaction regressions passed (**10 tests**). Ruff's
+targeted `--select F` check passed. The default targeted Ruff check still
+reports 21 existing findings in these files; none are in the added logic and
+they were left unchanged. `compileall` and `git diff --check` passed.
+Pylance reported no diagnostics in the changed production source files; the
+test module retains its existing unused-parameter warnings. No circuit,
+transaction serialization, network, or storage layer was added.

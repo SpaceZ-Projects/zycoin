@@ -116,6 +116,12 @@ and provenance; it is the source record for the focused reports below.
   query binding, and ceremony evidence remain blockers. Bounded API/QAP/
   parser regressions passed; no full synthesis or official-query export was
   repeated.
+- [Phase 9.21.65](sapling-spend-authoritative-reference.md#phase-92165--sapling-spend-anchor-membership-preflight)
+  adds a fail-closed local root-history guard for Spend anchors and validates
+  scanner-produced witnesses. Historical roots remain accepted because no
+  expiry policy exists. This is not consensus authentication, and no
+  transaction builder exists to invoke the guard before serialization or
+  proving.
 - [Sapling Spend Bellman export and alignment status](sapling-circuit-implementation.md) —
   pinned Spend allocation provenance and partial row correspondence;
   98,637 of 98,638 auxiliary identities and 98,775 of 98,777 rows are mapped.
@@ -795,7 +801,8 @@ and provenance; it is the source record for the focused reports below.
 - [Sapling nullifier derivation](sapling-nullifier-derivation.md) —
   key components, note-position inputs, and upstream vector results.
 - [Sapling commitment trees and witnesses](sapling-commitment-trees-and-witnesses.md) —
-  local tree, position, path, and scanner integration behavior.
+  local tree, position, path, scanner integration, and Spend anchor
+  membership preflight behavior.
 - [Sapling Merkle reference verification](sapling-merkle-reference-verification.md) —
   independent upstream implementation, fixture provenance, and comparisons.
 - [Phase 9.21.01 Output allocation-order and reference-evidence audit](sapling-circuit-implementation.md#phase-92101--output-allocation-order-effects-and-reference-evidence) —

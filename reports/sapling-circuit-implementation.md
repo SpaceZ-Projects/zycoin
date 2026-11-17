@@ -6694,6 +6694,36 @@ Validation passed (**9 tests, 63 subtests**); targeted Ruff, `compileall`,
 Pylance, and `git diff --check` passed. No Output code, independent verifier,
 parameters, proving gates, or circuit constraints changed.
 
+### Phase 9.21.65 — Tree-aware Spend anchor membership preflight
+
+`SaplingCommitmentTree.require_root_in_history()` rejects malformed or
+unretained roots, while `SaplingTreeScanResult.validate_spend_anchor()` is
+the tree-aware preflight for a selected Spend anchor and explicitly rejects
+unavailable tree state. Current and retained historical prefix roots pass.
+The scanner's `witness_for()` path also checks the generated anchor before
+returning a witness. This validation is independent of the Spend value and
+does not modify the circuit's conditional-anchor relation or zero-value
+semantics.
+
+No root expiration/window policy exists: all prefix roots remain in the
+local tree history. Thus this guard establishes membership only in that
+available local history, not consensus acceptance; scanner responses are
+endpoint-consistency checked rather than independently consensus-authenticated.
+The repository has no Sapling transaction builder, serializer, prover, signer,
+or broadcaster. The guard is available at the closest existing tree-aware
+witness boundary, but no transaction API invokes it yet, so transaction-byte
+or proving side-effect rejection cannot be tested. No transaction, storage,
+or networking layer was added.
+
+Focused validation passed (**10 tests**), including current and historical
+roots, unknown and malformed anchors, unavailable tree state, the existing
+zero-value conditional-anchor relation, and production Spend satisfaction.
+Ruff's targeted `--select F` check passed; the default targeted Ruff check
+reported 21 existing findings, none in the added logic, and they were left
+unchanged. `compileall` and `git diff --check` passed. Pylance reported no
+diagnostics in the changed production source files; existing unused-parameter
+warnings remain in the test module.
+
 ### Phase 9.21.44 — Fresh production Spend synthesis
 
 The focused regression freshly synthesized a pinned baseline witness and the

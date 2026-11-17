@@ -265,6 +265,15 @@ class SaplingCommitmentTree:
             raise SaplingTreeError("tree size is outside the available history")
         return self._roots[size]
 
+    def require_root_in_history(self, root):
+        """Return a canonical root only if this tree has retained it."""
+        root = _validate_node(root, "Sapling anchor")
+        if root not in self._roots:
+            raise SaplingTreeError(
+                "Sapling anchor is not present in this tree's retained root history"
+            )
+        return root
+
     def append(self, note_commitment):
         """Append one canonical Sapling commitment and return its global position."""
         node = _validate_node(note_commitment, "note commitment")

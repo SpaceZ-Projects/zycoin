@@ -262,6 +262,19 @@ and `max_outputs`. These boundary and reorg checks improve endpoint
 consistency, but do not independently verify positions or anchors against
 consensus.
 
+`SaplingTreeScanResult.validate_spend_anchor(anchor)` is a fail-closed
+preflight for a selected Spend anchor. It rejects malformed field encodings
+and anchors absent from that scan's retained root history; the current root
+and any retained historical root are accepted. The tree keeps every prefix
+root and defines no expiry or root-history window, so an old retained root is
+not classified as stale by this API. This is local membership only, not
+consensus authentication. Sapling transaction construction, serialization,
+proving, and broadcast are not implemented, so there is not yet a transaction
+boundary that calls this preflight. Any future transaction builder must call
+it before producing transaction bytes or starting proving. This check is
+separate from the circuit's conditional anchor equation: it does not change
+the circuit's zero-value semantics.
+
 ### Independent Sapling tree reference verification
 
 The local commitment-tree roots and witness paths are compared byte-for-byte

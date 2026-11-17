@@ -1716,6 +1716,25 @@ class SaplingCommitmentTreeTests(unittest.TestCase):
         self.assertEqual(tuple(positions), tuple(range(len(self.fixture["commitments"]))))
         self.assertEqual(tree.root.hex(), self.fixture["final_root"])
 
+    def test_root_membership_accepts_current_and_retained_historical_roots(self):
+        tree = SaplingCommitmentTree(self.network)
+        roots = [tree.root]
+        for commitment in self.fixture["commitments"]:
+            tree.append(bytes.fromhex(commitment))
+            roots.append(tree.root)
+
+        for root in roots:
+            with self.subTest(root=root.hex()):
+                self.assertEqual(tree.require_root_in_history(root), root)
+
+        self.assertNotIn(bytes(32), roots)
+        with self.assertRaisesRegex(SaplingTreeError, "not present"):
+            tree.require_root_in_history(bytes(32))
+        with self.assertRaisesRegex(SaplingTreeError, "exactly 32 bytes"):
+            tree.require_root_in_history(bytes(31))
+        with self.assertRaisesRegex(SaplingTreeError, "canonical"):
+            tree.require_root_in_history(b"\xff" * 32)
+
     def test_reference_detects_reordered_missing_and_boundary_cases(self):
         baseline = SaplingCommitmentTree(self.network)
         for commitment in self.fixture["commitments"]:
@@ -1999,6 +2018,43 @@ class SaplingTreeScannerTests(unittest.IsolatedAsyncioTestCase):
             witness = result.witness_for(entry)
             self.assertEqual(witness.note_commitment, entry.compact_output.cmu)
             self.assertTrue(witness.verify())
+
+    async def test_spend_anchor_preflight_uses_only_available_tree_history(self):
+        activation = self.network.sapling["activation_height"]
+        block = self._block(
+            activation,
+            b"\x11" * 32,
+            b"\x01" * 32,
+            3,
+            ((0, tuple(self.fixture["commitments"][:3])),),
+        )
+        result = await self._scan((block,), activation, activation)
+        current_anchor = result.tree.root
+        historical_anchor = result.tree.root_at(1)
+        tree_before = (result.tree.size, result.tree.root, tuple(result.tree._roots))
+
+        self.assertEqual(
+            result.validate_spend_anchor(current_anchor),
+            current_anchor,
+        )
+        self.assertEqual(
+            result.validate_spend_anchor(historical_anchor),
+            historical_anchor,
+        )
+        with self.assertRaisesRegex(ScanError, "not present"):
+            result.validate_spend_anchor(bytes(32))
+        with self.assertRaisesRegex(ScanError, "exactly 32 bytes"):
+            result.validate_spend_anchor(bytes(31))
+        with self.assertRaisesRegex(ScanError, "canonical"):
+            result.validate_spend_anchor(b"\xff" * 32)
+
+        unavailable = type(result)((), None, activation, activation)
+        with self.assertRaisesRegex(ScanError, "state is unavailable"):
+            unavailable.validate_spend_anchor(current_anchor)
+        self.assertEqual(
+            (result.tree.size, result.tree.root, tuple(result.tree._roots)),
+            tree_before,
+        )
 
     async def test_scan_rejects_incomplete_or_inconsistent_commitment_streams(self):
         activation = self.network.sapling["activation_height"]
